@@ -1,5 +1,7 @@
 """Pretty-printing visitor for AST nodes."""
 
+from codegen.ast.ast_node import AstNode
+
 from .. import ast
 from .visitor import Visitor
 
@@ -207,7 +209,20 @@ class PrettyPrinter(Visitor):
     def visit_statement(self, node: ast.Statement):
         return node.accept(self._child_indent())
 
-    def visit_for(self, node: ast.For):
+    def visit_for_loop_range(self, node: ast.ForLoopRange):
+        indent = self._indent_str()
+        type_str = node.loop_var_type.accept(self) if node.loop_var_type else "u32"
+        init_str = f": {node.init_expr.accept(self)}" if node.init_expr else ""
+        body_lines = "\n".join(s.accept(self._child_indent()) for s in node.body_stmts)
+        return (
+            f"{indent}for ({type_str} {node.loop_var_name}{init_str}) {{\n"
+            f"{body_lines}\n"
+            f"{indent}}}"
+        )
+
+    def visit_for_loop_with_condition_and_increment(
+        self, node: ast.ForLoopWithConditionAndIncrement
+    ):
         indent = self._indent_str()
         cond_str = node.condition.accept(self) if node.condition else "None"
         body_lines = "\n".join(s.accept(self._child_indent()) for s in node.body_stmts)
@@ -278,3 +293,10 @@ class PrettyPrinter(Visitor):
             f"  workgroups:\n{wg_lines}\n"
             f"{indent}}}"
         )
+
+
+
+def prettyprint(x: AstNode) -> str:
+    printer = PrettyPrinter()
+    s = x.accept(printer)
+    return s

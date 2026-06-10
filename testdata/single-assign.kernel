@@ -3,8 +3,8 @@ PROGRAM("vecmath.cc:40")
 OFFLOAD_PARFOR_1D_PARAM(i, limit<16384>(length), (dst, value))
 
 PARAMETERS
-        fixed_size_vector<int, int>& dst,
-        const int value,
+        fixed_size_vector<int, 16384>& dst,
+        int value,
         int length
 
 BEGIN

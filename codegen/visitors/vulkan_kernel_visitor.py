@@ -8,7 +8,7 @@ Produces RLLM-style GLSL with:
 """
 
 
-from codegen.compile import prettyprint
+from codegen.visitors.pretty_printer import prettyprint
 
 from .visitor import Visitor
 
@@ -114,58 +114,10 @@ class VulkanKernelVisitor(Visitor):
         return "float"
 
     def _to_str(self, node) -> str:
-        """Convert an AST node to a GLSL string representation."""
+        """Dispatcher: convert an AST node to a GLSL string via visitor dispatch."""
         if node is None:
             return ""
-        if isinstance(node, Number):
-            val = node.value
-            if isinstance(val, float):
-                s = f"{val}"
-                if "." not in s:
-                    s += ".0"
-                return s
-            return str(int(val))
-        if isinstance(node, Identifier):
-            name = node.name
-            if name in self._push_constant_map:
-                return f"{name}"
-            return name or "unknown"
-        if isinstance(node, LimitExpr):
-            max_val = self._to_str(node.max_val) if node.max_val else "?"
-            body = self._to_str(node.body) if node.body else "?"
-            return f"limit<{max_val}>({body})"
-        if isinstance(node, BinaryExpr):
-            left = self._to_str(node.left) if node.left else "?"
-            right = self._to_str(node.right) if node.right else "?"
-            op = node.op or "+"
-            return f"({left} {op} {right})"
-        if isinstance(node, CastExpr):
-            operand = self._to_str(node.operand) if node.operand else "?"
-            return f"int({operand})"
-        if isinstance(node, ArrayAccess):
-            base = node.base.accept(self) if node.base else "?"
-            parts = []
-            for idx in node.indices:
-                idx_str = self._to_str(idx) if idx else "?"
-                parts.append(idx_str)
-            return f"{base}[{', '.join(parts)}]"
-        if isinstance(node, FieldAccess):
-            base = ""
-            if isinstance(node.base, Identifier):
-                base = node.base.name or "unknown"
-            else:
-                base = self._to_str(node.base)
-            assert base != None
-            base += "." + node.field
-            return base
-        if isinstance(node, IncCall):
-            arg = (
-                self._to_str(node.operand)
-                if hasattr(node, "operand") and node.operand
-                else "?"
-            )
-            return f"inc({arg})"
-        return str(node)
+        return node.accept(self)
 
     # ── expression visitors ────────────────────────────────────────────
 
@@ -201,7 +153,13 @@ class VulkanKernelVisitor(Visitor):
         return node.accept(self)
 
     def visit_number(self, node: Number) -> str:
-        return self._to_str(node)
+        val = node.value
+        if isinstance(val, float):
+            s = f"{val}"
+            if "." not in s:
+                s += ".0"
+            return s
+        return str(int(val))
 
     def visit_identifier(self, node: Identifier) -> str:
         name = node.name
@@ -209,36 +167,54 @@ class VulkanKernelVisitor(Visitor):
             return f"rllm_push.{name}"
         return name or "unknown"
 
+    def _visit_expr_child(self, node):
+        """Helper for visiting expression children (returns '?' for None)."""
+        if node is None:
+            return "?"
+        return node.accept(self)
+
     def visit_array_access(self, node: ArrayAccess) -> str:
-        return self._to_str(node)
+        base = node.base.accept(self) if node.base else "?"
+        parts = []
+        for idx in node.indices:
+            idx_str = self._visit_expr_child(idx) if idx else "?"
+            parts.append(idx_str)
+        return f"{base}[{', '.join(parts)}]"
 
     def visit_field_access(self, node: FieldAccess) -> str:
-        return self._to_str(node)
+        base = ""
+        if isinstance(node.base, Identifier):
+            base = node.base.name or "unknown"
+        else:
+            base = self._visit_expr_child(node.base)
+        assert base != None
+        base += "." + node.field
+        return base
 
     def visit_limit_expr(self, node: LimitExpr) -> str:
-        max_val = self._to_str(node.max_val) if node.max_val else "?"
-        body = self._to_str(node.body) if node.body else "?"
+        max_val = self._visit_expr_child(node.max_val)
+        body = self._visit_expr_child(node.body)
         return f"limit<{max_val}>({body})"
 
     def visit_binary_expr(self, node: BinaryExpr) -> str:
-        left = self._to_str(node.left) if node.left else "?"
-        right = self._to_str(node.right) if node.right else "?"
+        left = self._visit_expr_child(node.left)
+        right = self._visit_expr_child(node.right)
         op = node.op or "+"
         return f"({left} {op} {right})"
 
     def visit_cast_expr(self, node: CastExpr) -> str:
-        operand = self._to_str(node.operand) if node.operand else "?"
+        operand = self._visit_expr_child(node.operand)
         return f"int({operand})"
 
     def visit_negation_expr(self, node: NegationExpr) -> str:
-        op = "!" + (self._to_str(node.operand) if node.operand else "?")
-        return op
+        operand = self._visit_expr_child(node.operand)
+        return f"!{operand}"
 
     # ── condition visitor ──────────────────────────────────────────────
 
     def visit_condition(self, node: Condition) -> str:
-        lhs = self._to_str(node.lhs) if node.lhs else "?"
-        rhs = self._to_str(node.rhs) if node.rhs else "?"
+        lhs = self._visit_expr_child(node.lhs)
+        rhs = self._visit_expr_child(node.rhs)
         return f"{lhs} {node.op} {rhs}"
 
     # ── statement visitors (return string, caller emits with indent) ──
@@ -246,25 +222,47 @@ class VulkanKernelVisitor(Visitor):
     def visit_statement(self, node: Statement) -> str:
         return node.accept(self)
 
-    def visit_for(self, node: For) -> str:
-        """Generate a GLSL for loop as a string."""
+    def visit_for_loop_range(self, node: ForLoopRange) -> str:
+        """Generate a GLSL for loop from range-style (for i in range(n))."""
         lines = []
         ind = "    " * (self._indent_level + 1)
 
-        # Determine upper bound
         upper_bound = "?"
-        lower_bound = "0"
-
         if node.init_expr and isinstance(node.init_expr, LimitExpr):
             max_val = (
                 self._to_str(node.init_expr.max_val) if node.init_expr.max_val else "?"
             )
             upper_bound = max_val
-        elif node.condition:
+
+        lines.append(
+            f"{ind}for (int {node.loop_var_name} = 0; "
+            f"{node.loop_var_name} < {upper_bound}; ++{node.loop_var_name}) {{"
+        )
+
+        for stmt in node.body_stmts:
+            if hasattr(stmt, "accept"):
+                result = stmt.accept(self)
+                if isinstance(result, str):
+                    lines.append(f"{ind}{result}")
+
+        lines.append(f"{ind}}}")
+        return "\n".join(lines) + "\n"
+
+    def visit_for_loop_with_condition_and_increment(
+        self, node: ForLoopWithConditionAndIncrement
+    ) -> str:
+        """Generate a GLSL for loop from condition+increment style."""
+        lines = []
+        ind = "    " * (self._indent_level + 1)
+
+        lower_bound = "0"
+        upper_bound = "?"
+
+        if node.condition:
             op = node.condition.op or ">="
             rhs = self._to_str(node.condition.rhs) if node.condition.rhs else "?"
             lower_bound = (
-                self._to_str(node.condition.lhs) if node.condition.lhs else "0"
+                self._to_str(node.init_expr) if node.init_expr else "0"
             )
             upper_bound = rhs
 
@@ -272,7 +270,8 @@ class VulkanKernelVisitor(Visitor):
         inc_op = node.increment_op if node.increment_op else "++"
 
         lines.append(
-            f"{ind}for (int {node.loop_var_name} = {lower_bound}; {node.loop_var_name} < {upper_bound}; {inc_op}{inc_var}) {{"
+            f"{ind}for (int {node.loop_var_name} = {lower_bound}; "
+            f"{node.loop_var_name} < {upper_bound}; {inc_op}{inc_var}) {{"
         )
 
         for stmt in node.body_stmts:
@@ -399,7 +398,9 @@ class VulkanKernelVisitor(Visitor):
             inner = self._glsl_elem_type(vt)
 
             size = _compute_matrix_size(vt)
-            if size > 0:
+            if size >= 2147483648:
+                size_str = f" /* too large for int: {size} */ "
+            elif size > 0:
                 size_str = str(size)
             else:
                 size_str = " /* unknown */ "

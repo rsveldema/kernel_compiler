@@ -5,21 +5,14 @@ import argparse
 import subprocess
 import logging
 
-from codegen.ast.ast_node import AstNode
 from codegen.parser import parser
 from codegen.ast.program import Program
-from codegen.visitors.pretty_printer import PrettyPrinter
 from codegen.transforms import transform
+from codegen.visitors.pretty_printer import prettyprint
 from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
 from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
 
 log = logging.getLogger(__name__)
-
-
-def prettyprint(x: AstNode):
-    printer = PrettyPrinter()
-    s = x.accept(printer)
-    print(s)
 
 
 def read_file(filename: str) -> str:
@@ -128,4 +121,4 @@ if __name__ == "__main__":
         # Default: prettyprint all files
         for path in _sys_mod.argv[1:]:
             program = compile(path)
-            prettyprint(program)
+            print(prettyprint(program))

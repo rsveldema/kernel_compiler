@@ -2,6 +2,7 @@
 
 from codegen.ast.ast_node import AstNode
 from codegen.ast.expression import Expression
+from codegen.ast.type import Type
 
 
 class Condition(AstNode):
@@ -21,16 +22,43 @@ class Statement(AstNode):
         return visitor.visit_statement(self)
 
 
-class For(Statement):
+class ForStatement(Statement):
+    """Base class for for-loop AST nodes."""
+
+    pass
+
+
+class ForLoopRange(ForStatement):
+    """Range-style loop: `for (const int i: expr)` — iterates from 0..expr-1."""
+
     def __init__(
         self,
-        loop_var_type=None,
-        loop_var_name="",
-        condition=None,
-        increment_var="",
-        increment_op="",
-        body_stmts=None,
-        init_expr=None,
+        loop_var_type: Type | None = None,
+        loop_var_name: str = "",
+        init_expr: Expression | None = None,
+        body_stmts: list[Statement] | None = None,
+    ):
+        self.loop_var_type = loop_var_type
+        self.loop_var_name = loop_var_name
+        self.init_expr = init_expr
+        self.body_stmts = body_stmts or []
+
+    def accept(self, visitor):
+        return visitor.visit_for_loop_range(self)
+
+
+class ForLoopWithConditionAndIncrement(ForStatement):
+    """C-style for loop: `for (init; condition; increment)`."""
+
+    def __init__(
+        self,
+        loop_var_type: Type | None = None,
+        loop_var_name: str = "",
+        condition: Expression | None = None,
+        increment_var: str = "",
+        increment_op: str = "",
+        body_stmts: list[Statement] | None = None,
+        init_expr: Expression | None = None,
     ):
         self.loop_var_type = loop_var_type
         self.loop_var_name = loop_var_name
@@ -41,7 +69,11 @@ class For(Statement):
         self.init_expr = init_expr
 
     def accept(self, visitor):
-        return visitor.visit_for(self)
+        return visitor.visit_for_loop_with_condition_and_increment(self)
+
+
+# Backwards compatibility alias — prefer explicit subclass usage
+For = ForLoopWithConditionAndIncrement
 
 
 class If(Statement):
@@ -113,6 +145,9 @@ class SharedDecl(Statement):
 __all__ = [
     "Condition",
     "Statement",
+    "ForStatement",
+    "ForLoopRange",
+    "ForLoopWithConditionAndIncrement",
     "For",
     "If",
     "Declaration",

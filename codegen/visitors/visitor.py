@@ -67,7 +67,12 @@ class Visitor:
     def visit_statement(self, node: ast.Statement):
         raise NotImplementedError
 
-    def visit_for(self, node: ast.For):
+    def visit_for_loop_range(self, node: ast.ForLoopRange):
+        raise NotImplementedError
+
+    def visit_for_loop_with_condition_and_increment(
+        self, node: ast.ForLoopWithConditionAndIncrement
+    ):
         raise NotImplementedError
 
     def visit_if(self, node: ast.If):

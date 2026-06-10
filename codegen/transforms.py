@@ -646,8 +646,13 @@ def transform_statement(stmt_tree):
                     if lhs is not None and rhs is not None:
                         condition = Condition(lhs, op_val, rhs)
 
-                return For(
-                    loop_var_type, loop_var_name, condition, inc_var, inc_op, body_stmts
+                return ForLoopWithConditionAndIncrement(
+                    loop_var_type=loop_var_type,
+                    loop_var_name=loop_var_name,
+                    condition=condition,
+                    increment_var=inc_var,
+                    increment_op=inc_op,
+                    body_stmts=body_stmts,
                 )
 
         # Handle inline type variant: Tree(for_statement, [Tree(int/float), IDENT, expr, body])
@@ -696,14 +701,11 @@ def transform_statement(stmt_tree):
                                 else:
                                     body_stmts.append(s)
 
-                return For(
-                    loop_var_type,
-                    loop_var_name or "",
-                    condition,
-                    inc_var,
-                    inc_op,
-                    body_stmts,
-                    init_expr_for_var,
+                return ForLoopRange(
+                    loop_var_type=loop_var_type,
+                    loop_var_name=loop_var_name or "",
+                    init_expr=init_expr_for_var,
+                    body_stmts=body_stmts,
                 )
 
                 # increment from children[2]
@@ -734,8 +736,13 @@ def transform_statement(stmt_tree):
                         if s is not None:
                             body_stmts.append(s)
 
-                return For(
-                    loop_var_type, loop_var_name, condition, inc_var, inc_op, body_stmts
+                return ForLoopWithConditionAndIncrement(
+                    loop_var_type=loop_var_type,
+                    loop_var_name=loop_var_name,
+                    condition=condition,
+                    increment_var=inc_var,
+                    increment_op=inc_op,
+                    body_stmts=body_stmts,
                 )
 
         # Handle inline for loop variant (from "for" "(" <type> IDENT ":" expr ")" body)
@@ -888,13 +895,13 @@ def transform_statement(stmt_tree):
                     if lhs is not None and rhs is not None:
                         condition = Condition(lhs, op_val, rhs)
 
-                return For(
-                    loop_var_type,
-                    loop_var_name or "",
-                    condition,
-                    inc_var,
-                    inc_op,
-                    body_stmts,
+                return ForLoopWithConditionAndIncrement(
+                    loop_var_type=loop_var_type,
+                    loop_var_name=loop_var_name or "",
+                    condition=condition,
+                    increment_var=inc_var,
+                    increment_op=inc_op,
+                    body_stmts=body_stmts,
                 )
             elif for_lp_data == "for":
                 # Alternative 2: "for" "(" <type> IDENT ":" expression ")" (block | statement)
@@ -1030,8 +1037,11 @@ def transform_statement(stmt_tree):
                                     if lhs_name:
                                         pass  # Use string directly in condition
 
-                return For(
-                    loop_var_type, loop_var_name or "", condition, "", "", body_stmts
+                return ForLoopRange(
+                    loop_var_type=loop_var_type,
+                    loop_var_name=loop_var_name or "",
+                    init_expr=init_expr_for_var if 'init_expr_for_var' in locals() else None,
+                    body_stmts=body_stmts,
                 )
 
     # if_statement

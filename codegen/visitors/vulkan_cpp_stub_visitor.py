@@ -85,37 +85,33 @@ class VulkanCppStubVisitor(Visitor):
     def _to_str(self, node) -> str:
         if node is None:
             return ""
-        if isinstance(node, ast.Number):
-            val = node.value
-            if isinstance(val, float):
-                s = f"{val}"
-                if "." not in s:
-                    s += ".0"
-                return s
-            return str(int(val))
-        if isinstance(node, (ast.Identifier,)):
-            return node.accept(self)
-        if isinstance(node, ast.BinaryExpr):
-            left = self._to_str(node.left) if node.left else "?"
-            right = self._to_str(node.right) if node.right else "?"
-            op = node.op or "+"
-            return f"({left} {op} {right})"
-        if isinstance(node, ast.LimitExpr):
-            max_v = self._to_str(node.max_val) if node.max_val else "?"
-            body_v = self._to_str(node.body) if node.body else "?"
-            return f"limit<{max_v}>({body_v})"
-        if hasattr(node, "value"):
-            return str(node.value)
-        return str(node)
+        return node.accept(self)
+
+    def _visit_expr_child(self, node):
+        """Helper for visiting expression children (returns '?' for None)."""
+        if node is None:
+            return "?"
+        return node.accept(self)
+
+    def visit_binary_expr(self, node: ast.BinaryExpr) -> str:
+        left = self._visit_expr_child(node.left)
+        right = self._visit_expr_child(node.right)
+        op = node.op or "+"
+        return f"({left} {op} {right})"
+
+    def visit_limit_expr(self, node: ast.LimitExpr) -> str:
+        max_v = self._visit_expr_child(node.max_val)
+        body_v = self._visit_expr_child(node.body)
+        return f"limit<{max_v}>({body_v})"
 
     def visit_cast_expr(self, node: ast.CastExpr) -> str:
         cast_type = "int32_t"
-        operand = self._to_str(node.operand) if node.operand else "?"
+        operand = self._visit_expr_child(node.operand)
         return f"static_cast<{cast_type}>({operand})"
 
     def visit_negation_expr(self, node: ast.NegationExpr) -> str:
-        op = "!" + (self._to_str(node.operand) if node.operand else "?")
-        return op
+        operand = self._visit_expr_child(node.operand)
+        return f"!{operand}"
 
     # ── condition visitor ──────────────────────────────────────────────
 
@@ -137,8 +133,13 @@ class VulkanCppStubVisitor(Visitor):
     def visit_statement(self, node: ast.Statement) -> str:
         return node.accept(self)
 
-    def visit_for(self, node: ast.For) -> str:
-        raise NotImplementedError("visit_for")
+    def visit_for_loop_range(self, node: ast.ForLoopRange) -> str:
+        return ""
+
+    def visit_for_loop_with_condition_and_increment(
+        self, node: ast.ForLoopWithConditionAndIncrement
+    ) -> str:
+        return ""
 
     def visit_if(self, node: ast.If) -> str:
         raise NotImplementedError("visit_if")

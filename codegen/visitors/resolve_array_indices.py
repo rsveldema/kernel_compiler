@@ -265,7 +265,25 @@ class ResolveArrayIndicesVisitor(Expression):
             type(node).__bases__[0] if type(node).__bases__ else type(node)
         )
 
-    def visit_for(self, node: For):
+    def visit_for_loop_range(self, node: ForLoopRange):
+        init_expr = node.init_expr.accept(self) if node.init_expr else None
+        body_stmts = []
+        for s in node.body_stmts:
+            if hasattr(s, "accept"):
+                result = s.accept(self)
+                body_stmts.append(result)
+            else:
+                body_stmts.append(s)
+        return ForLoopRange(
+            loop_var_type=node.loop_var_type,
+            loop_var_name=node.loop_var_name,
+            init_expr=init_expr,
+            body_stmts=body_stmts,
+        )
+
+    def visit_for_loop_with_condition_and_increment(
+        self, node: ForLoopWithConditionAndIncrement
+    ):
         condition = node.condition.accept(self) if node.condition else None
         init_expr = node.init_expr.accept(self) if node.init_expr else None
         body_stmts = []
@@ -275,7 +293,7 @@ class ResolveArrayIndicesVisitor(Expression):
                 body_stmts.append(result)
             else:
                 body_stmts.append(s)
-        return For(
+        return ForLoopWithConditionAndIncrement(
             loop_var_type=node.loop_var_type,
             loop_var_name=node.loop_var_name,
             condition=condition,

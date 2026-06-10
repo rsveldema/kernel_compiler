@@ -4,13 +4,13 @@
 #extension GL_KHR_shader_subgroup_clustered : require
 
 layout(std430, set = 0, binding = 0) buffer RllmBuffer_d_scores {
-    float d_scores[2147483648];
+    float d_scores[ /* too large for int: 2147483648 */ ];
 };
 layout(std430, set = 0, binding = 1) buffer RllmBuffer_d_raw {
-    float d_raw[2147483648];
+    float d_raw[ /* too large for int: 2147483648 */ ];
 };
 layout(std430, set = 0, binding = 2) buffer RllmBuffer_attn_w {
-    float attn_w[2147483648];
+    float attn_w[ /* too large for int: 2147483648 */ ];
 };
 
 layout(push_constant) uniform RllmPushConstants {
