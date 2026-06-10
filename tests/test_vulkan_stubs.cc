@@ -24,7 +24,7 @@
 
 TEST_F(VulkanTestBase, single_assign_correctness)
 {
-    skip_if_no_device();
+
 
     const uint32_t N = 64;
     int push_value = 42;
@@ -83,7 +83,7 @@ TEST_F(VulkanTestBase, single_assign_correctness)
 
 TEST_F(VulkanTestBase, multi_arg_correctness)
 {
-    skip_if_no_device();
+
 
     /* multi-arg does: C[i,j] += sum_k( A1[n,k]*B1[k,m] + A2* B2 + A3* B3 ) */
     const uint32_t ROWS = 64;
@@ -170,7 +170,7 @@ TEST_F(VulkanTestBase, multi_arg_correctness)
 
 TEST_F(VulkanTestBase, triangular1_correctness)
 {
-    skip_if_no_device();
+
 
     const uint32_t H   = 8;
     const uint32_t W   = 32;
@@ -248,7 +248,7 @@ TEST_F(VulkanTestBase, triangular1_correctness)
 
 TEST_F(VulkanTestBase, with_wg2_correctness)
 {
-    skip_if_no_device();
+
 
     const uint32_t N = 1024;
 

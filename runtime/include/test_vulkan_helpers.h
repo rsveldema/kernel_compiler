@@ -10,13 +10,16 @@
 
 #pragma once
 
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <cstdio>
 
 #include <vulkan/vulkan_core.h>
+#include <gtest/gtest.h>
 
 // Forward declarations for functions implemented in test_vulkan_helpers.cc
 std::string vk_result_str(VkResult rc);
@@ -214,14 +217,8 @@ private:
 class VulkanTestBase : public ::testing::Test
 {
 protected:
-    void SetUp() override { init_vulkan_instance(); }
-    void TearDown() override { destroy_vulkan(); }
-
-    bool has_device() const { return instance_ != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE; }
-    void skip_if_no_device()
-    {
-        if (!has_device()) GTEST_SKIP() << "Vulkan device unavailable";
-    }
+    void SetUp() override { init_vulkan_instance(); ASSERT_TRUE(has_device()) << "Vulkan device unavailable"; }
+    void TearDown() override { destroy_vulkan(); }    bool has_device() const { return instance_ != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE; }
 
 protected:
     VkInstance        instance_ = VK_NULL_HANDLE;
@@ -254,14 +251,20 @@ private:
         ici.ppEnabledExtensionNames  = exts;
 
         VkResult rc = vkCreateInstance(&ici, nullptr, &instance_);
-        if (rc != VK_SUCCESS) { instance_ = VK_NULL_HANDLE; return; }
+        if (rc != VK_SUCCESS) {
+            fprintf(stderr, "init_vulkan_instance: vkCreateInstance failed: %s\n", vk_result_str(rc).c_str());
+            instance_ = VK_NULL_HANDLE; return;
+        }
 
         /* Enumerate physical devices */
         uint32_t count = 0;
         vkEnumeratePhysicalDevices(instance_, &count, nullptr);
         std::vector<VkPhysicalDevice> devs(count);
         if (count > 0) vkEnumeratePhysicalDevices(instance_, &count, devs.data());
-        if (count == 0) { instance_ = VK_NULL_HANDLE; return; }
+        if (count == 0) {
+            fprintf(stderr, "init_vulkan_instance: no Vulkan physical devices found\n");
+            instance_ = VK_NULL_HANDLE; return;
+        }
         phys_dev_ = devs[0];
 
         /* Get queue family */
@@ -291,7 +294,10 @@ private:
         dci.ppEnabledExtensionNames = exts;
 
         rc = vkCreateDevice(phys_dev_, &dci, nullptr, &device_);
-        if (rc != VK_SUCCESS) { instance_ = static_cast<VkInstance>(VK_NULL_HANDLE); device_ = static_cast<VkDevice>(VK_NULL_HANDLE); return; }
+        if (rc != VK_SUCCESS) {
+            fprintf(stderr, "init_vulkan_instance: vkCreateDevice failed: %s\n", vk_result_str(rc).c_str());
+            instance_ = static_cast<VkInstance>(VK_NULL_HANDLE); device_ = static_cast<VkDevice>(VK_NULL_HANDLE); return;
+        }
 
         vkGetDeviceQueue(device_, queue_fi_, 0, &queue_);
     }
