@@ -1,18 +1,25 @@
-""" Compiler frontend """
+"""Compiler frontend"""
 
 import sys as _sys_mod
 import argparse
+import subprocess
+import logging
+
+from codegen.ast.ast_node import AstNode
 from codegen.parser import parser
 from codegen.ast.program import Program
 from codegen.visitors.pretty_printer import PrettyPrinter
 from codegen.transforms import transform
-import subprocess
+from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
+from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
 
-def prettyprint(program: Program):
+log = logging.getLogger(__name__)
+
+
+def prettyprint(x: AstNode):
     printer = PrettyPrinter()
-    s = program.accept(printer)
+    s = x.accept(printer)
     print(s)
-
 
 
 def read_file(filename: str) -> str:
@@ -30,7 +37,6 @@ def compile(filename: str) -> Program:
 
 def generate_vulkan(filename: str, output: str) -> None:
     """Parse kernel file and generate a Vulkan GLSL compute shader."""
-    from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
 
     program = compile(filename)
     visitor = VulkanKernelVisitor()
@@ -52,21 +58,32 @@ def compile_vulkan(input_file: str, output_spv: str) -> None:
     generate_vulkan(input_file, glsl_path)
 
     # Compile with glslc
+    cmd = [
+        "glslc",
+        "-fshader-stage=compute",
+        "-o",
+        output_spv,
+        "--target-env=vulkan1.2",
+        glsl_path,
+    ]
+
+    print(f"running: {' '.join(cmd)}")
+
     result = subprocess.run(
-        ["glslc", "-fshader-stage=compute", "-o", output_spv,
-         "--target-env=vulkan1.2", glsl_path],
-        capture_output=True, text=True,
+        cmd,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
-        print(f"Compilation failed:")
+        print("Compilation failed:")
         print(result.stderr, file=_sys_mod.stderr)
         _sys_mod.exit(1)
 
     print(f"Compiled SPIR-V -> {output_spv}")
 
+
 def generate_cpp_stub(filename: str, output: str) -> None:
     """Parse kernel file and generate a C++ stub for calling the Vulkan kernel."""
-    from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
 
     program = compile(filename)
     visitor = VulkanCppStubVisitor()
@@ -76,16 +93,24 @@ def generate_cpp_stub(filename: str, output: str) -> None:
     print(f"Generated C++ stub -> {output}")
 
 
-
 if __name__ == "__main__":
     _parser = argparse.ArgumentParser(description="Kernel compiler front-end")
-    _parser.add_argument("file", nargs="?", help="Input .kernel file (required for --vulkan/--compile)")
-    _parser.add_argument("--vulkan", metavar="OUTPUT",
-                         help="Generate Vulkan GLSL shader to OUTPUT")
-    _parser.add_argument("--compile", metavar="OUTPUT_SPV",
-                         help="Generate and compile Vulkan shader to SPIR-V")
-    _parser.add_argument("--cpp-stub", metavar="OUTPUT_HPP",
-                         help="Generate C++ stub header for kernel dispatch")
+    _parser.add_argument(
+        "file", nargs="?", help="Input .kernel file (required for --vulkan/--compile)"
+    )
+    _parser.add_argument(
+        "--vulkan", metavar="OUTPUT", help="Generate Vulkan GLSL shader to OUTPUT"
+    )
+    _parser.add_argument(
+        "--compile",
+        metavar="OUTPUT_SPV",
+        help="Generate and compile Vulkan shader to SPIR-V",
+    )
+    _parser.add_argument(
+        "--cpp-stub",
+        metavar="OUTPUT_HPP",
+        help="Generate C++ stub header for kernel dispatch",
+    )
     args = _parser.parse_args()
 
     if args.vulkan or args.compile:

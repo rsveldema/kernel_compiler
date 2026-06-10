@@ -1,4 +1,4 @@
-""" parse kernel files -> AST."""
+"""parse kernel files -> AST."""
 
 import os
 from lark import Lark
@@ -8,4 +8,3 @@ from lark import Lark
 _GRAMMAR_PATH = os.path.join(os.path.dirname(__file__), "grammar.lark")
 grammar = open(_GRAMMAR_PATH).read()
 parser = Lark(grammar, start="program")
-

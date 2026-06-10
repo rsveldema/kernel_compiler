@@ -1,14 +1,17 @@
 #version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_clustered : require
 
 layout(std430, set = 0, binding = 0) buffer RllmBuffer_d_scores {
-    float d_scores[8*16384*16384];
-} d_scores;
+    float d_scores[2147483648];
+};
 layout(std430, set = 0, binding = 1) buffer RllmBuffer_d_raw {
-    float d_raw[8*16384*16384];
-} d_raw;
+    float d_raw[2147483648];
+};
 layout(std430, set = 0, binding = 2) buffer RllmBuffer_attn_w {
-    float attn_w[8*16384*16384];
-} attn_w;
+    float attn_w[2147483648];
+};
 
 layout(push_constant) uniform RllmPushConstants {
     int seq_len;

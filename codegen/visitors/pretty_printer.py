@@ -43,9 +43,13 @@ class PrettyPrinter(Visitor):
         if node.elem_type is not None:
             inner_lines.append(f"{indent}  elem_type: {node.elem_type.accept(self)}")
         if node.row_size_expr is not None:
-            inner_lines.append(f"{indent}  row_size_expr: {node.row_size_expr.accept(self)}")
+            inner_lines.append(
+                f"{indent}  row_size_expr: {node.row_size_expr.accept(self)}"
+            )
         if node.col_size_expr is not None:
-            inner_lines.append(f"{indent}  col_size_expr: {node.col_size_expr.accept(self)}")
+            inner_lines.append(
+                f"{indent}  col_size_expr: {node.col_size_expr.accept(self)}"
+            )
         inner = "\n".join(inner_lines)
         return f"{indent}flexible_rows_matrix<\n{inner}{indent}>"
 
@@ -55,13 +59,19 @@ class PrettyPrinter(Visitor):
         if node.elem_type is not None:
             inner_lines.append(f"{indent}  elem_type: {node.elem_type.accept(self)}")
         if node.row_size_expr is not None:
-            inner_lines.append(f"{indent}  row_size_expr: {node.row_size_expr.accept(self)}")
+            inner_lines.append(
+                f"{indent}  row_size_expr: {node.row_size_expr.accept(self)}"
+            )
         if node.col_size_expr is not None:
-            inner_lines.append(f"{indent}  col_size_expr: {node.col_size_expr.accept(self)}")
+            inner_lines.append(
+                f"{indent}  col_size_expr: {node.col_size_expr.accept(self)}"
+            )
         inner = "\n".join(inner_lines)
         return f"{indent}fixed_size_matrix<\n{inner}{indent}>"
 
-    def visit_fixed_size_levels_rows_cols_matrix(self, node: ast.FixedSizeLevelsRowsColsMatrix):
+    def visit_fixed_size_levels_rows_cols_matrix(
+        self, node: ast.FixedSizeLevelsRowsColsMatrix
+    ):
         indent = self._indent_str()
         inner_lines = []
         if node.elem_type is not None:
@@ -69,13 +79,19 @@ class PrettyPrinter(Visitor):
         if node.level_expr is not None:
             inner_lines.append(f"{indent}  level_expr: {node.level_expr.accept(self)}")
         if node.row_size_expr is not None:
-            inner_lines.append(f"{indent}  row_size_expr: {node.row_size_expr.accept(self)}")
+            inner_lines.append(
+                f"{indent}  row_size_expr: {node.row_size_expr.accept(self)}"
+            )
         if node.col_size_expr is not None:
-            inner_lines.append(f"{indent}  col_size_expr: {node.col_size_expr.accept(self)}")
+            inner_lines.append(
+                f"{indent}  col_size_expr: {node.col_size_expr.accept(self)}"
+            )
         inner = "\n".join(inner_lines)
         return f"{indent}fixed_size_levels_rows_cols_matrix<\n{inner}{indent}>"
 
-    def visit_flexible_rows_cols_levels_matrix(self, node: ast.FlexibleRowsColsLevelsMatrix):
+    def visit_flexible_rows_cols_levels_matrix(
+        self, node: ast.FlexibleRowsColsLevelsMatrix
+    ):
         indent = self._indent_str()
         inner_lines = []
         if node.elem_type is not None:
@@ -83,9 +99,13 @@ class PrettyPrinter(Visitor):
         if node.level_expr is not None:
             inner_lines.append(f"{indent}  level_expr: {node.level_expr.accept(self)}")
         if node.row_size_expr is not None:
-            inner_lines.append(f"{indent}  row_size_expr: {node.row_size_expr.accept(self)}")
+            inner_lines.append(
+                f"{indent}  row_size_expr: {node.row_size_expr.accept(self)}"
+            )
         if node.col_size_expr is not None:
-            inner_lines.append(f"{indent}  col_size_expr: {node.col_size_expr.accept(self)}")
+            inner_lines.append(
+                f"{indent}  col_size_expr: {node.col_size_expr.accept(self)}"
+            )
         inner = "\n".join(inner_lines)
         return f"{indent}flexible_rows_cols_levels_matrix<\n{inner}{indent}>"
 
@@ -117,7 +137,7 @@ class PrettyPrinter(Visitor):
             return node.name or "?"
         if isinstance(node, ast.Number):
             return str(node.value)
-        if hasattr(node, 'accept'):
+        if hasattr(node, "accept"):
             old_indent = self.indent
             self.indent = 0
             result = str(node.accept(self)).strip()
@@ -131,8 +151,7 @@ class PrettyPrinter(Visitor):
             base_str = node.base.name or "?"
         else:
             base_str = node.base.accept(self)
-        for f in node.fields:
-            base_str += f".{f}"
+        base_str += f".{node.field}"
         return f"{indent}{base_str}"
 
     def _to_string_node(self, node):
@@ -141,7 +160,7 @@ class PrettyPrinter(Visitor):
             return node.name or "?"
         if isinstance(node, ast.Number):
             return str(node.value)
-        if hasattr(node, 'accept'):
+        if hasattr(node, "accept"):
             # Use visitor but collect the result (which includes its own indent)
             return str(node.accept(self)).strip()
         return str(node)
@@ -151,23 +170,29 @@ class PrettyPrinter(Visitor):
         max_part = node.max_val.accept(self) if node.max_val else "None"
         body_part = node.body.accept(self) if node.body else "None"
         inner_indent = " " * (self.indent + 2)
-        return (f"{indent}limit<\n"
-                f"{inner_indent}{max_part}\n"
-                f"{indent}>\n{inner_indent}(\n"
-                f"{inner_indent}  {body_part}\n"
-                f"{indent})")
+        return (
+            f"{indent}limit<\n"
+            f"{inner_indent}{max_part}\n"
+            f"{indent}>\n{inner_indent}(\n"
+            f"{inner_indent}  {body_part}\n"
+            f"{indent})"
+        )
 
     def visit_binary_expr(self, node: ast.BinaryExpr):
         indent = self._indent_str()
-        return (f"{indent}binary<\n"
-                f"{indent}  op: {node.op}\n"
-                f"{indent}  lhs: {node.left.accept(self)}\n"
-                f"{indent}  rhs: {node.right.accept(self)}\n"
-                f"{indent}>")
+        return (
+            f"{indent}binary<\n"
+            f"{indent}  op: {node.op}\n"
+            f"{indent}  lhs: {node.left.accept(self)}\n"
+            f"{indent}  rhs: {node.right.accept(self)}\n"
+            f"{indent}>"
+        )
 
     def visit_cast_expr(self, node: ast.CastExpr):
-        return (f"cast<{node.cast_type.accept(self._child_indent())}>("
-                f"{node.operand.accept(self)})")
+        return (
+            f"cast<{node.cast_type.accept(self._child_indent())}>("
+            f"{node.operand.accept(self)})"
+        )
 
     def visit_negation_expr(self, node: ast.NegationExpr):
         return f"{self._indent_str()}!{node.operand.accept(self)}"
@@ -175,7 +200,7 @@ class PrettyPrinter(Visitor):
     # ── Condition visitors ───────────────────────────────────────────
 
     def visit_condition(self, node: ast.Condition):
-        return (f"{node.lhs.accept(self)} {node.op} {node.rhs.accept(self)}")
+        return f"{node.lhs.accept(self)} {node.op} {node.rhs.accept(self)}"
 
     # ── Statement visitors ───────────────────────────────────────────
 
@@ -186,18 +211,18 @@ class PrettyPrinter(Visitor):
         indent = self._indent_str()
         cond_str = node.condition.accept(self) if node.condition else "None"
         body_lines = "\n".join(s.accept(self._child_indent()) for s in node.body_stmts)
-        return (f"{indent}for ({node.loop_var_type.accept(self) if node.loop_var_type else "u32"} {node.loop_var_name}; "
-                f"{cond_str}; {node.increment_var}{node.increment_op}) {{\n"
-                f"{body_lines}\n"
-                f"{indent}}}")
+        return (
+            f"{indent}for ({node.loop_var_type.accept(self) if node.loop_var_type else 'u32'} {node.loop_var_name}; "
+            f"{cond_str}; {node.increment_var}{node.increment_op}) {{\n"
+            f"{body_lines}\n"
+            f"{indent}}}"
+        )
 
     def visit_if(self, node: ast.If):
         indent = self._indent_str()
         cond_str = node.condition.accept(self) if node.condition else "None"
         body_lines = "\n".join(s.accept(self._child_indent()) for s in node.body_stmts)
-        return (f"{indent}if ({cond_str}) {{\n"
-                f"{body_lines}\n"
-                f"{indent}}}")
+        return f"{indent}if ({cond_str}) {{\n{body_lines}\n{indent}}}"
 
     def visit_declaration(self, node: ast.Declaration):
         indent = self._indent_str()
@@ -211,8 +236,10 @@ class PrettyPrinter(Visitor):
 
     def visit_overflow_check(self, node: ast.OverflowCheck):
         indent = self._indent_str()
-        return (f"{indent}OVERFLOW_CHECK_ADD("
-                f"{node.lvalue.accept(self)}, {node.operand.accept(self)})")
+        return (
+            f"{indent}OVERFLOW_CHECK_ADD("
+            f"{node.lvalue.accept(self)}, {node.operand.accept(self)})"
+        )
 
     def visit_shared_decl(self, node: ast.SharedDecl):
         indent = self._indent_str()
@@ -242,10 +269,12 @@ class PrettyPrinter(Visitor):
         body_lines = "\n".join(s.accept(self._child_indent()) for s in node.body_stmts)
         wg_lines = "\n".join(w.accept(self._child_indent()) for w in node.workgroups)
 
-        return (f"{indent}Program {{\n"
-                f"  header: {node.header}\n"
-                f"  space: {node.loop_vars}\n"
-                f"  params:\n{param_lines}\n"
-                f"  body:\n{body_lines}\n"
-                f"  workgroups:\n{wg_lines}\n"
-                f"{indent}}}")
+        return (
+            f"{indent}Program {{\n"
+            f"  header: {node.header}\n"
+            f"  space: {node.loop_vars}\n"
+            f"  params:\n{param_lines}\n"
+            f"  body:\n{body_lines}\n"
+            f"  workgroups:\n{wg_lines}\n"
+            f"{indent}}}"
+        )

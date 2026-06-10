@@ -73,8 +73,8 @@ class ResolveArrayIndicesVisitor(Expression):
             row = self._extract_size(var_type.row_size_expr)
             lvl = self._extract_size(var_type.level_expr)
             if col is not None and row is not None and lvl is not None:
-                s0 = row * col   # stride for levels dim
-                s1 = col          # stride for rows dim
+                s0 = row * col  # stride for levels dim
+                s1 = col  # stride for rows dim
                 return [s0, s1, 1]  # 3 strides for all dimensions
 
         elif isinstance(var_type, FlexibleRowsColsLevelsMatrix):
@@ -83,8 +83,8 @@ class ResolveArrayIndicesVisitor(Expression):
             lvl = self._extract_size(var_type.level_expr)
             row = self._extract_size(var_type.row_size_expr)
             if col is not None and lvl is not None and row is not None:
-                s0 = col * lvl   # stride for rows dim
-                s1 = lvl          # stride for cols dim
+                s0 = col * lvl  # stride for rows dim
+                s1 = lvl  # stride for cols dim
                 return [s0, s1, 1]  # 3 strides for all dimensions
 
         elif isinstance(var_type, FixedSizeVector):
@@ -115,9 +115,12 @@ class ResolveArrayIndicesVisitor(Expression):
                 b = b.base
             if isinstance(b, Identifier):
                 base_name = b.name
-        
-        var_type = self._param_map.get(base_name).var_type \
-                   if base_name and base_name in self._param_map else None
+
+        var_type = (
+            self._param_map.get(base_name).var_type
+            if base_name and base_name in self._param_map
+            else None
+        )
 
         strides = self._compute_strides(var_type) if var_type is not None else None
         n_dims = len(ident.indices)
@@ -139,11 +142,11 @@ class ResolveArrayIndicesVisitor(Expression):
         if not resolved:
             ident.indices = []
             return ident
-        
+
         linear_idx = resolved[0]
         for part in resolved[1:]:
             linear_idx = BinaryExpr(left=linear_idx, op="+", right=part)
-        
+
         # Store the combined linear index as the only index.
         ident.indices = [linear_idx]
         return ident
@@ -173,7 +176,9 @@ class ResolveArrayIndicesVisitor(Expression):
         elem = node.elem_type.accept(self) if node.elem_type else None
         row_s = node.row_size_expr.accept(self) if node.row_size_expr else None
         col_s = node.col_size_expr.accept(self) if node.col_size_expr else None
-        return FlexibleRowsMatrix(elem_type=elem, row_size_expr=row_s, col_size_expr=col_s)
+        return FlexibleRowsMatrix(
+            elem_type=elem, row_size_expr=row_s, col_size_expr=col_s
+        )
 
     def visit_fixed_size_matrix(self, node):
         elem = node.elem_type.accept(self) if node.elem_type else None
@@ -186,18 +191,24 @@ class ResolveArrayIndicesVisitor(Expression):
         lvl = node.level_expr.accept(self) if node.level_expr else None
         row_s = node.row_size_expr.accept(self) if node.row_size_expr else None
         col_s = node.col_size_expr.accept(self) if node.col_size_expr else None
-        return FixedSizeLevelsRowsColsMatrix(elem_type=elem, level_expr=lvl, row_size_expr=row_s, col_size_expr=col_s)
+        return FixedSizeLevelsRowsColsMatrix(
+            elem_type=elem, level_expr=lvl, row_size_expr=row_s, col_size_expr=col_s
+        )
 
     def visit_flexible_rows_cols_levels_matrix(self, node):
         elem = node.elem_type.accept(self) if node.elem_type else None
         lvl = node.level_expr.accept(self) if node.level_expr else None
         row_s = node.row_size_expr.accept(self) if node.row_size_expr else None
         col_s = node.col_size_expr.accept(self) if node.col_size_expr else None
-        return FlexibleRowsColsLevelsMatrix(elem_type=elem, level_expr=lvl, row_size_expr=row_s, col_size_expr=col_s)
+        return FlexibleRowsColsLevelsMatrix(
+            elem_type=elem, level_expr=lvl, row_size_expr=row_s, col_size_expr=col_s
+        )
 
     # -- Expression visitors --
     def visit_expression(self, node):
-        return node.accept(type(node).__bases__[0] if type(node).__bases__ else type(node))
+        return node.accept(
+            type(node).__bases__[0] if type(node).__bases__ else type(node)
+        )
 
     def visit_number(self, node):
         return Number(value=node.value)
@@ -250,14 +261,16 @@ class ResolveArrayIndicesVisitor(Expression):
 
     # -- Statement visitors --
     def visit_statement(self, node):
-        return node.accept(type(node).__bases__[0] if type(node).__bases__ else type(node))
+        return node.accept(
+            type(node).__bases__[0] if type(node).__bases__ else type(node)
+        )
 
     def visit_for(self, node: For):
         condition = node.condition.accept(self) if node.condition else None
         init_expr = node.init_expr.accept(self) if node.init_expr else None
         body_stmts = []
         for s in node.body_stmts:
-            if hasattr(s, 'accept'):
+            if hasattr(s, "accept"):
                 result = s.accept(self)
                 body_stmts.append(result)
             else:
@@ -276,7 +289,7 @@ class ResolveArrayIndicesVisitor(Expression):
         condition = node.condition.accept(self) if node.condition else None
         body_stmts = []
         for s in node.body_stmts:
-            if hasattr(s, 'accept'):
+            if hasattr(s, "accept"):
                 result = s.accept(self)
                 body_stmts.append(result)
             else:
@@ -321,7 +334,7 @@ class ResolveArrayIndicesVisitor(Expression):
         """Transform an entire Program tree."""
         params = []
         for p in node.params:
-            if hasattr(p, 'accept'):
+            if hasattr(p, "accept"):
                 result = p.accept(self)
                 params.append(result)
             else:
@@ -329,7 +342,7 @@ class ResolveArrayIndicesVisitor(Expression):
 
         body_stmts = []
         for s in node.body_stmts:
-            if hasattr(s, 'accept'):
+            if hasattr(s, "accept"):
                 result = s.accept(self)
                 body_stmts.append(result)
             else:
@@ -337,7 +350,7 @@ class ResolveArrayIndicesVisitor(Expression):
 
         workgroups = []
         for w in node.workgroups:
-            if hasattr(w, 'accept'):
+            if hasattr(w, "accept"):
                 result = w.accept(self)
                 workgroups.append(result)
             else:
@@ -349,10 +362,16 @@ class ResolveArrayIndicesVisitor(Expression):
             space_dim=node.space_dim,
             grid_name=node.grid_name,
             limit_expr=node.limit_expr.accept(self) if node.limit_expr else None,
-            dispatch_size_expr=node.dispatch_size_expr.accept(self) if node.dispatch_size_expr else None,
-            lower_bound_expr=node.lower_bound_expr.accept(self) if getattr(node, 'lower_bound_expr', None) else None,
-            upper_bound_expr=node.upper_bound_expr.accept(self) if getattr(node, 'upper_bound_expr', None) else None,
-            triangular_bounds_raw=getattr(node, 'triangular_bounds_raw', []),
+            dispatch_size_expr=node.dispatch_size_expr.accept(self)
+            if node.dispatch_size_expr
+            else None,
+            lower_bound_expr=node.lower_bound_expr.accept(self)
+            if getattr(node, "lower_bound_expr", None)
+            else None,
+            upper_bound_expr=node.upper_bound_expr.accept(self)
+            if getattr(node, "upper_bound_expr", None)
+            else None,
+            triangular_bounds_raw=getattr(node, "triangular_bounds_raw", []),
             params=params or node.params,
             body_stmts=body_stmts or node.body_stmts,
             workgroups=workgroups or node.workgroups,

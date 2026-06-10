@@ -7,8 +7,8 @@ Produces RLLM-style GLSL with:
 - Triangular guard at start of main() for 3D triangular loops
 """
 
-import re
-from typing import Optional, Tuple
+
+from codegen.compile import prettyprint
 
 from .visitor import Visitor
 
@@ -18,6 +18,64 @@ from ..ast.expression import *
 from ..ast.statement import *
 
 
+def _extract_size_from_expr(expr: Expression) -> int:
+    assert expr is not None
+
+    if isinstance(expr, Number):
+        return int(expr.value)
+
+    if isinstance(expr, BinaryExpr):
+        lv = _extract_size_from_expr(expr.left)
+        rv = _extract_size_from_expr(expr.right)
+        match expr.op:
+            case "+":
+                return lv + rv
+            case "-":
+                return lv - rv
+            case "*":
+                return lv * rv
+            case "/":
+                return lv / rv
+            case _:
+                assert False, f"no binary operator for constant folding: {expr.op}"
+
+    if isinstance(expr, LimitExpr):
+        return _extract_size_from_expr(expr.max_val)
+
+    assert False, f"cannot constant fold: {prettyprint(expr)}"
+    # s = self._to_str(expr)
+    # if s and re.match(r'^\d+$', s):
+    #    return s
+    # return None
+
+
+def _compute_matrix_size(ty: Type) -> int:
+    parts = 1
+    if isinstance(ty, (FixedSizeLevelsRowsColsMatrix, FlexibleRowsColsLevelsMatrix)):
+        for attr in ("level_expr", "row_size_expr", "col_size_expr"):
+            expr = getattr(ty, attr, None)
+            if expr:
+                s = _extract_size_from_expr(expr)
+                if s:
+                    parts *= s
+        return parts
+    elif isinstance(ty, FixedSizeMatrix):
+        for attr in ("row_size_expr", "col_size_expr"):
+            expr = getattr(ty, attr, None)
+            if expr:
+                s = _extract_size_from_expr(expr)
+                if s:
+                    parts *= s
+        return parts
+    elif isinstance(ty, FixedSizeVector):
+        if ty.size_expr:
+            s = _extract_size_from_expr(ty.size_expr)
+            if s:
+                s
+        return -1
+    return -1
+
+
 class VulkanKernelVisitor(Visitor):
     """Transforms the parsed AST into a Vulkan GLSL compute shader string."""
 
@@ -25,7 +83,7 @@ class VulkanKernelVisitor(Visitor):
         self._lines: list[str] = []
         self._indent_level: int = 0
         self._binding_counter: int = 0
-        self._ssbo_map: dict[str, tuple] = {}   # param_name -> (is_3d, type_node)
+        self._ssbo_map: dict[str, tuple] = {}  # param_name -> (is_3d, type_node)
         self._push_constant_fields: list[tuple] = []  # (name, type_str) pairs
         self._push_constant_map: dict[str, bool] = {}
 
@@ -49,46 +107,11 @@ class VulkanKernelVisitor(Visitor):
     # ── type helpers (GLSL) ────────────────────────────────────────────
 
     def _glsl_elem_type(self, ty) -> str:
-        if hasattr(ty, 'elem_type') and ty.elem_type is not None:
+        if hasattr(ty, "elem_type") and ty.elem_type is not None:
             t = ty.elem_type
             if isinstance(t, (Int, Float)):
                 return "float"
         return "float"
-
-    def _extract_size_from_expr(self, expr) -> str:
-        if isinstance(expr, Number):
-            return str(int(expr.value))
-        s = self._to_str(expr)
-        if s and re.match(r'^\d+$', s):
-            return s
-        return None
-
-    def _compute_matrix_size(self, ty) -> str:
-        if isinstance(ty, (FixedSizeLevelsRowsColsMatrix, FlexibleRowsColsLevelsMatrix)):
-            parts = []
-            for attr in ('level_expr', 'row_size_expr', 'col_size_expr'):
-                expr = getattr(ty, attr, None)
-                if expr:
-                    s = self._extract_size_from_expr(expr)
-                    if s:
-                        parts.append(s)
-            return "*".join(parts) if parts else "1"
-        elif isinstance(ty, FixedSizeMatrix):
-            parts = []
-            for attr in ('row_size_expr', 'col_size_expr'):
-                expr = getattr(ty, attr, None)
-                if expr:
-                    s = self._extract_size_from_expr(expr)
-                    if s:
-                        parts.append(s)
-            return "*".join(parts) if parts else "1"
-        elif isinstance(ty, FixedSizeVector):
-            if ty.size_expr:
-                s = self._extract_size_from_expr(ty.size_expr)
-                if s:
-                    return s
-            return "1"
-        return "1"
 
     def _to_str(self, node) -> str:
         """Convert an AST node to a GLSL string representation."""
@@ -105,7 +128,7 @@ class VulkanKernelVisitor(Visitor):
         if isinstance(node, Identifier):
             name = node.name
             if name in self._push_constant_map:
-                return f"rllm_push.{name}"
+                return f"{name}"
             return name or "unknown"
         if isinstance(node, LimitExpr):
             max_val = self._to_str(node.max_val) if node.max_val else "?"
@@ -132,11 +155,15 @@ class VulkanKernelVisitor(Visitor):
                 base = node.base.name or "unknown"
             else:
                 base = self._to_str(node.base)
-            for field in node.fields:
-                base += "." + field
+            assert base != None
+            base += "." + node.field
             return base
         if isinstance(node, IncCall):
-            arg = self._to_str(node.operand) if hasattr(node, 'operand') and node.operand else "?"
+            arg = (
+                self._to_str(node.operand)
+                if hasattr(node, "operand") and node.operand
+                else "?"
+            )
             return f"inc({arg})"
         return str(node)
 
@@ -160,10 +187,14 @@ class VulkanKernelVisitor(Visitor):
     def visit_fixed_size_matrix(self, node: FixedSizeMatrix) -> str:
         return self._glsl_elem_type(node)
 
-    def visit_fixed_size_levels_rows_cols_matrix(self, node: FixedSizeLevelsRowsColsMatrix) -> str:
+    def visit_fixed_size_levels_rows_cols_matrix(
+        self, node: FixedSizeLevelsRowsColsMatrix
+    ) -> str:
         return self._glsl_elem_type(node)
 
-    def visit_flexible_rows_cols_levels_matrix(self, node: FlexibleRowsColsLevelsMatrix) -> str:
+    def visit_flexible_rows_cols_levels_matrix(
+        self, node: FlexibleRowsColsLevelsMatrix
+    ) -> str:
         return self._glsl_elem_type(node)
 
     def visit_expression(self, node: Expression) -> str:
@@ -223,23 +254,29 @@ class VulkanKernelVisitor(Visitor):
         # Determine upper bound
         upper_bound = "?"
         lower_bound = "0"
-        
+
         if node.init_expr and isinstance(node.init_expr, LimitExpr):
-            max_val = self._to_str(node.init_expr.max_val) if node.init_expr.max_val else "?"
+            max_val = (
+                self._to_str(node.init_expr.max_val) if node.init_expr.max_val else "?"
+            )
             upper_bound = max_val
         elif node.condition:
             op = node.condition.op or ">="
             rhs = self._to_str(node.condition.rhs) if node.condition.rhs else "?"
-            lower_bound = self._to_str(node.condition.lhs) if node.condition.lhs else "0"
+            lower_bound = (
+                self._to_str(node.condition.lhs) if node.condition.lhs else "0"
+            )
             upper_bound = rhs
 
         inc_var = node.increment_var if node.increment_var else node.loop_var_name
         inc_op = node.increment_op if node.increment_op else "++"
 
-        lines.append(f"{ind}for (int {node.loop_var_name} = {lower_bound}; {node.loop_var_name} < {upper_bound}; {inc_op}{inc_var}) {{")
-        
+        lines.append(
+            f"{ind}for (int {node.loop_var_name} = {lower_bound}; {node.loop_var_name} < {upper_bound}; {inc_op}{inc_var}) {{"
+        )
+
         for stmt in node.body_stmts:
-            if hasattr(stmt, 'accept'):
+            if hasattr(stmt, "accept"):
                 result = stmt.accept(self)
                 if isinstance(result, str):
                     lines.append(f"{ind}{result}")
@@ -251,9 +288,9 @@ class VulkanKernelVisitor(Visitor):
         cond_str = self.visit_condition(node.condition) if node.condition else "?"
         ind = "    " * (self._indent_level + 1)
         lines = [f"{ind}if ({cond_str}) {{"]
-        
+
         for stmt in node.body_stmts:
-            if hasattr(stmt, 'accept'):
+            if hasattr(stmt, "accept"):
                 result = stmt.accept(self)
                 if isinstance(result, str):
                     lines.append(f"{ind}{result}")
@@ -308,22 +345,36 @@ class VulkanKernelVisitor(Visitor):
         self._push_constant_map = {}
 
         self._emit("#version 450")
+        self._emit("#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require")
+        self._emit("#extension GL_KHR_shader_subgroup_arithmetic : require")
+        self._emit("#extension GL_KHR_shader_subgroup_clustered : require")
         self._emit("")
 
         # ── Classify parameters ──
         all_matrix_params = []
-        triangular_bounds_raw = node.triangular_bounds_raw if getattr(node, 'triangular_bounds_raw', None) else []
+        triangular_bounds_raw = (
+            node.triangular_bounds_raw
+            if getattr(node, "triangular_bounds_raw", None)
+            else []
+        )
         is_triangular = len(triangular_bounds_raw) >= 2
 
         for param in node.params:
             if param is None or not isinstance(param, Declaration):
                 continue
-            
+
             vt = param.var_type
-            is_matrix = isinstance(vt, (FlexibleRowsMatrix, FixedSizeMatrix,
-                                        FlexibleRowsColsLevelsMatrix, FixedSizeLevelsRowsColsMatrix))
+            is_matrix = isinstance(
+                vt,
+                (
+                    FlexibleRowsMatrix,
+                    FixedSizeMatrix,
+                    FlexibleRowsColsLevelsMatrix,
+                    FixedSizeLevelsRowsColsMatrix,
+                ),
+            )
             is_vector = isinstance(vt, FixedSizeVector)
-            
+
             if is_matrix or is_vector:
                 all_matrix_params.append(param)
             else:
@@ -332,26 +383,35 @@ class VulkanKernelVisitor(Visitor):
                     self._push_constant_map[param.name] = True
 
         def _is_literal(s):
-            return s.lstrip('-').isdigit() if s else False
-        
+            return s.lstrip("-").isdigit() if s else False
+
         for tb in triangular_bounds_raw:
-            if not _is_literal(tb) and tb not in {f[0] for f in self._push_constant_fields}:
+            if not _is_literal(tb) and tb not in {
+                f[0] for f in self._push_constant_fields
+            }:
                 self._push_constant_fields.append((tb, "int"))
                 self._push_constant_map[tb] = True
 
         # ── Emit SSBO buffers with compile-time sized arrays ──
         for param in all_matrix_params:
             vt = param.var_type
-            is_3d = hasattr(vt, 'level_expr') and vt.level_expr is not None
+            is_3d = hasattr(vt, "level_expr") and vt.level_expr is not None
             inner = self._glsl_elem_type(vt)
-            size_str = self._compute_matrix_size(vt)
-            
-            self._emit(f"layout(std430, set = 0, binding = {self._binding_counter}) buffer RllmBuffer_{param.name} {{")
+
+            size = _compute_matrix_size(vt)
+            if size > 0:
+                size_str = str(size)
+            else:
+                size_str = " /* unknown */ "
+
+            self._emit(
+                f"layout(std430, set = 0, binding = {self._binding_counter}) buffer RllmBuffer_{param.name} {{"
+            )
             self._push()
             self._emit(f"{inner} {param.name}[{size_str}];")
             self._pop()
-            self._emit(f"}} {param.name};")
-            
+            self._emit("};")
+
             self._ssbo_map[param.name] = (is_3d, vt)
             self._binding_counter += 1
 
@@ -373,7 +433,7 @@ class VulkanKernelVisitor(Visitor):
         # 1. Initialize loop variables from gl_GlobalInvocationID
         if node.space_dim >= 1 and node.loop_vars:
             for idx, var_name in enumerate(node.loop_vars):
-                coord = 'xyz'[idx]
+                coord = "xyz"[idx]
                 self._emit(f"int {var_name} = int(gl_GlobalInvocationID.{coord});")
 
         # 2. Initialize params from push constants
@@ -385,28 +445,28 @@ class VulkanKernelVisitor(Visitor):
         if is_triangular and triangular_bounds_raw and len(triangular_bounds_raw) >= 2:
             lower_name = triangular_bounds_raw[0]
             upper_name = triangular_bounds_raw[1]
-            
+
             parts = []
             for i, var in enumerate(node.loop_vars):
                 if _is_literal(lower_name):
                     parts.append(f"{var} >= {lower_name}")
                 else:
                     parts.append(f"{var} >= rllm_push.{lower_name}")
-            
+
             for var in node.loop_vars[1:]:
                 if _is_literal(upper_name):
                     parts.append(f"{var} >= {upper_name}")
                 else:
                     parts.append(f"{var} >= rllm_push.{upper_name}")
-            
+
             self._emit(f"if ({' || '.join(parts)}) return;")
 
         # 4. Body statements - just emit directly (no double-emission)
         old_indent = self._indent_level
         self._indent_level += 1
-        
+
         for stmt in node.body_stmts:
-            if hasattr(stmt, 'accept'):
+            if hasattr(stmt, "accept"):
                 result = stmt.accept(self)
                 if isinstance(result, str):
                     # Strip trailing newline and emit with current indent

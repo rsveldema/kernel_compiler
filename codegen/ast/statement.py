@@ -1,8 +1,11 @@
 """Statement AST nodes for code generation."""
 
+from codegen.ast.ast_node import AstNode
+from codegen.ast.expression import Expression
 
-class Condition:
-    def __init__(self, lhs=None, op=None, rhs=None):
+
+class Condition(AstNode):
+    def __init__(self, lhs: Expression, op: str, rhs: Expression):
         self.lhs = lhs
         self.op = op
         self.rhs = rhs
@@ -11,16 +14,24 @@ class Condition:
         return visitor.visit_condition(self)
 
 
-class Statement:
+class Statement(AstNode):
     """Base class for statement AST nodes."""
+
     def accept(self, visitor):
         return visitor.visit_statement(self)
 
 
 class For(Statement):
-    def __init__(self, loop_var_type=None, loop_var_name="",
-                 condition=None, increment_var="",
-                 increment_op="", body_stmts=None, init_expr=None):
+    def __init__(
+        self,
+        loop_var_type=None,
+        loop_var_name="",
+        condition=None,
+        increment_var="",
+        increment_op="",
+        body_stmts=None,
+        init_expr=None,
+    ):
         self.loop_var_type = loop_var_type
         self.loop_var_name = loop_var_name
         self.condition = condition
@@ -34,7 +45,7 @@ class For(Statement):
 
 
 class If(Statement):
-    def __init__(self, condition=None, body_stmts=None):
+    def __init__(self, condition: Expression, body_stmts: list[Statement]):
         self.condition = condition
         self.body_stmts = body_stmts or []
 
@@ -43,7 +54,13 @@ class If(Statement):
 
 
 class Declaration(Statement):
-    def __init__(self, is_const=None, var_type=None, name=None, init_expr=None):
+    def __init__(
+        self,
+        is_const: bool,
+        var_type: Type,
+        name: str,
+        init_expr: Expression | None = None,
+    ):
         self.is_const = is_const
         self.var_type = var_type
         self.name = name
@@ -54,7 +71,7 @@ class Declaration(Statement):
 
 
 class Assignment(Statement):
-    def __init__(self, lvalue=None, assign_op=None, rvalue=None):
+    def __init__(self, lvalue: Expression, assign_op: str, rvalue: Expression = None):
         self.lvalue = lvalue
         self.assign_op = assign_op
         self.rvalue = rvalue
@@ -65,7 +82,8 @@ class Assignment(Statement):
 
 class OverflowCheck(Statement):
     """OVERFLOW_CHECK_ADD(lvalue, operand) statement."""
-    def __init__(self, lvalue=None, operand=None):
+
+    def __init__(self, lvalue: Expression, operand: str):
         self.lvalue = lvalue
         self.operand = operand
 
@@ -75,7 +93,14 @@ class OverflowCheck(Statement):
 
 class SharedDecl(Statement):
     """shared declaration in workgroup context (from 'shared' alternative)."""
-    def __init__(self, is_const=None, var_type=None, name=None, init_expr=None):
+
+    def __init__(
+        self,
+        is_const: bool,
+        var_type: Type,
+        name: str,
+        init_expr: Expression | None = None,
+    ):
         self.is_const = is_const
         self.var_type = var_type
         self.name = name
@@ -86,6 +111,12 @@ class SharedDecl(Statement):
 
 
 __all__ = [
-    'Condition', 'Statement', 'For', 'If',
-    'Declaration', 'Assignment', 'OverflowCheck', 'SharedDecl',
+    "Condition",
+    "Statement",
+    "For",
+    "If",
+    "Declaration",
+    "Assignment",
+    "OverflowCheck",
+    "SharedDecl",
 ]

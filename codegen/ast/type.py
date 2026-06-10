@@ -1,27 +1,34 @@
 """Type AST nodes for code generation."""
 
+from codegen.ast.ast_node import AstNode
+from codegen.ast.expression import Expression
 
-class Type:
+
+class Type(AstNode):
     """Base class for type AST nodes."""
+
     def accept(self, visitor):
         return visitor.visit_type(self)
 
 
 class Int(Type):
     """Represents 'int' or 'size_t' types."""
+
     def accept(self, visitor):
         return visitor.visit_int(self)
 
 
 class Float(Type):
     """Represents 'float', 'rlmm_float', or 'rlmm_float_small' types."""
+
     def accept(self, visitor):
         return visitor.visit_float(self)
 
 
 class FixedSizeVector(Type):
     """fixed_size_vector<elem_type, size_expr>&"""
-    def __init__(self, elem_type=None, size_expr=None):
+
+    def __init__(self, elem_type: Type, size_expr: Expression):
         self.elem_type = elem_type
         self.size_expr = size_expr
 
@@ -31,7 +38,10 @@ class FixedSizeVector(Type):
 
 class FlexibleRowsMatrix(Type):
     """flexible_rows_matrix<elem_type, row_size_expr, col_size_expr>&"""
-    def __init__(self, elem_type=None, row_size_expr=None, col_size_expr=None):
+
+    def __init__(
+        self, elem_type: Type, row_size_expr: Expression, col_size_expr: Expression
+    ):
         self.elem_type = elem_type
         self.row_size_expr = row_size_expr
         self.col_size_expr = col_size_expr
@@ -42,7 +52,10 @@ class FlexibleRowsMatrix(Type):
 
 class FixedSizeMatrix(Type):
     """fixed_size_matrix<elem_type, row_size_expr, col_size_expr>&"""
-    def __init__(self, elem_type=None, row_size_expr=None, col_size_expr=None):
+
+    def __init__(
+        self, elem_type: Type, row_size_expr: Expression, col_size_expr: Expression
+    ):
         self.elem_type = elem_type
         self.row_size_expr = row_size_expr
         self.col_size_expr = col_size_expr
@@ -53,7 +66,14 @@ class FixedSizeMatrix(Type):
 
 class FixedSizeLevelsRowsColsMatrix(Type):
     """fixed_size_levels_rows_cols_matrix<elem_type, level_expr, row_size_expr, col_size_expr>&"""
-    def __init__(self, elem_type=None, level_expr=None, row_size_expr=None, col_size_expr=None):
+
+    def __init__(
+        self,
+        elem_type: Type,
+        level_expr: Expression,
+        row_size_expr: Expression,
+        col_size_expr: Expression,
+    ):
         self.elem_type = elem_type
         self.level_expr = level_expr
         self.row_size_expr = row_size_expr
@@ -65,7 +85,14 @@ class FixedSizeLevelsRowsColsMatrix(Type):
 
 class FlexibleRowsColsLevelsMatrix(Type):
     """flexible_rows_cols_levels_matrix<elem_type, level_expr, row_size_expr, col_size_expr>&"""
-    def __init__(self, elem_type=None, level_expr=None, row_size_expr=None, col_size_expr=None):
+
+    def __init__(
+        self,
+        elem_type: Type,
+        level_expr: Expression,
+        row_size_expr: Expression,
+        col_size_expr: Expression,
+    ):
         self.elem_type = elem_type
         self.level_expr = level_expr
         self.row_size_expr = row_size_expr
@@ -76,7 +103,12 @@ class FlexibleRowsColsLevelsMatrix(Type):
 
 
 __all__ = [
-    'Type', 'Int', 'Float',
-    'FixedSizeVector', 'FlexibleRowsMatrix', 'FixedSizeMatrix',
-    'FixedSizeLevelsRowsColsMatrix', 'FlexibleRowsColsLevelsMatrix',
+    "Type",
+    "Int",
+    "Float",
+    "FixedSizeVector",
+    "FlexibleRowsMatrix",
+    "FixedSizeMatrix",
+    "FixedSizeLevelsRowsColsMatrix",
+    "FlexibleRowsColsLevelsMatrix",
 ]

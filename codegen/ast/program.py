@@ -1,12 +1,24 @@
 """Program AST node for code generation."""
 
+from codegen.ast.ast_node import AstNode
 
-class Program:
-    def __init__(self, header="", loop_vars=None, space_dim=0, grid_name="",
-                 limit_expr=None, dispatch_size_expr=None,
-                 lower_bound_expr=None, upper_bound_expr=None,
-                 triangular_bounds_raw=None,  # [raw_lower_str, raw_upper_str] for triangular
-                 params=None, body_stmts=None, workgroups=None):
+
+class Program(AstNode):
+    def __init__(
+        self,
+        header="",
+        loop_vars=None,
+        space_dim=0,
+        grid_name="",
+        limit_expr=None,
+        dispatch_size_expr=None,
+        lower_bound_expr=None,
+        upper_bound_expr=None,
+        triangular_bounds_raw=None,  # [raw_lower_str, raw_upper_str] for triangular
+        params=None,
+        body_stmts=None,
+        workgroups=None,
+    ):
         self.header = header
         # Loop variables from OFFLOAD_PARFOR_x_PARAM (e.g. ['i'] or ['i', 'j'])
         self.loop_vars = loop_vars or []
@@ -36,14 +48,14 @@ class Program:
         """Visit this program and all its children nodes via the given visitor."""
         self.accept(visitor)
         for param in self.params:
-            if hasattr(param, 'accept'):
+            if hasattr(param, "accept"):
                 param.accept(visitor)
         for stmt in self.body_stmts:
-            if hasattr(stmt, 'accept'):
+            if hasattr(stmt, "accept"):
                 stmt.accept(visitor)
         for wg in self.workgroups:
-            if hasattr(wg, 'accept'):
+            if hasattr(wg, "accept"):
                 wg.accept(visitor)
 
 
-__all__ = ['Program']
+__all__ = ["Program"]
