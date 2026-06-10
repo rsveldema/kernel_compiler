@@ -1,11 +1,32 @@
 """ Compiler frontend """
 
-import os
 import sys as _sys_mod
 import argparse
+from codegen.parser import parser
+from codegen.ast.program import Program
+from codegen.visitors.pretty_printer import PrettyPrinter
+from codegen.transforms import transform
 import subprocess
 
-from codegen.parser import prettyprint
+def prettyprint(program: Program):
+    printer = PrettyPrinter()
+    s = program.accept(printer)
+    print(s)
+
+
+
+def read_file(filename: str) -> str:
+    with open(filename) as f:
+        return f.read()
+
+
+def compile(filename: str) -> Program:
+    print(f"--------------- parsing: {filename} -----------------")
+    text = read_file(filename)
+    ret = parser.parse(text)
+    program = transform(ret)
+    return program
+
 
 def generate_vulkan(filename: str, output: str) -> None:
     """Parse kernel file and generate a Vulkan GLSL compute shader."""

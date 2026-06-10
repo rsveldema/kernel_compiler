@@ -10,8 +10,12 @@ Produces RLLM-style GLSL with:
 import re
 from typing import Optional, Tuple
 
-from .. import ast
 from .visitor import Visitor
+
+from ..ast.program import *
+from ..ast.type import *
+from ..ast.expression import *
+from ..ast.statement import *
 
 
 class VulkanKernelVisitor(Visitor):
@@ -47,12 +51,12 @@ class VulkanKernelVisitor(Visitor):
     def _glsl_elem_type(self, ty) -> str:
         if hasattr(ty, 'elem_type') and ty.elem_type is not None:
             t = ty.elem_type
-            if isinstance(t, (ast.Int, ast.Float)):
+            if isinstance(t, (Int, Float)):
                 return "float"
         return "float"
 
     def _extract_size_from_expr(self, expr) -> str:
-        if isinstance(expr, ast.Number):
+        if isinstance(expr, Number):
             return str(int(expr.value))
         s = self._to_str(expr)
         if s and re.match(r'^\d+$', s):
@@ -60,7 +64,7 @@ class VulkanKernelVisitor(Visitor):
         return None
 
     def _compute_matrix_size(self, ty) -> str:
-        if isinstance(ty, (ast.FixedSizeLevelsRowsColsMatrix, ast.FlexibleRowsColsLevelsMatrix)):
+        if isinstance(ty, (FixedSizeLevelsRowsColsMatrix, FlexibleRowsColsLevelsMatrix)):
             parts = []
             for attr in ('level_expr', 'row_size_expr', 'col_size_expr'):
                 expr = getattr(ty, attr, None)
@@ -69,7 +73,7 @@ class VulkanKernelVisitor(Visitor):
                     if s:
                         parts.append(s)
             return "*".join(parts) if parts else "1"
-        elif isinstance(ty, ast.FixedSizeMatrix):
+        elif isinstance(ty, FixedSizeMatrix):
             parts = []
             for attr in ('row_size_expr', 'col_size_expr'):
                 expr = getattr(ty, attr, None)
@@ -78,7 +82,7 @@ class VulkanKernelVisitor(Visitor):
                     if s:
                         parts.append(s)
             return "*".join(parts) if parts else "1"
-        elif isinstance(ty, ast.FixedSizeVector):
+        elif isinstance(ty, FixedSizeVector):
             if ty.size_expr:
                 s = self._extract_size_from_expr(ty.size_expr)
                 if s:
@@ -90,7 +94,7 @@ class VulkanKernelVisitor(Visitor):
         """Convert an AST node to a GLSL string representation."""
         if node is None:
             return ""
-        if isinstance(node, ast.Number):
+        if isinstance(node, Number):
             val = node.value
             if isinstance(val, float):
                 s = f"{val}"
@@ -98,120 +102,120 @@ class VulkanKernelVisitor(Visitor):
                     s += ".0"
                 return s
             return str(int(val))
-        if isinstance(node, ast.Identifier):
+        if isinstance(node, Identifier):
             name = node.name
             if name in self._push_constant_map:
                 return f"rllm_push.{name}"
             return name or "unknown"
-        if isinstance(node, ast.LimitExpr):
+        if isinstance(node, LimitExpr):
             max_val = self._to_str(node.max_val) if node.max_val else "?"
             body = self._to_str(node.body) if node.body else "?"
             return f"limit<{max_val}>({body})"
-        if isinstance(node, ast.BinaryExpr):
+        if isinstance(node, BinaryExpr):
             left = self._to_str(node.left) if node.left else "?"
             right = self._to_str(node.right) if node.right else "?"
             op = node.op or "+"
             return f"({left} {op} {right})"
-        if isinstance(node, ast.CastExpr):
+        if isinstance(node, CastExpr):
             operand = self._to_str(node.operand) if node.operand else "?"
             return f"int({operand})"
-        if isinstance(node, ast.ArrayAccess):
+        if isinstance(node, ArrayAccess):
             base = node.base.accept(self) if node.base else "?"
             parts = []
             for idx in node.indices:
                 idx_str = self._to_str(idx) if idx else "?"
                 parts.append(idx_str)
             return f"{base}[{', '.join(parts)}]"
-        if isinstance(node, ast.FieldAccess):
+        if isinstance(node, FieldAccess):
             base = ""
-            if isinstance(node.base, ast.Identifier):
+            if isinstance(node.base, Identifier):
                 base = node.base.name or "unknown"
             else:
                 base = self._to_str(node.base)
             for field in node.fields:
                 base += "." + field
             return base
-        if isinstance(node, ast.IncCall):
+        if isinstance(node, IncCall):
             arg = self._to_str(node.operand) if hasattr(node, 'operand') and node.operand else "?"
             return f"inc({arg})"
         return str(node)
 
     # ── expression visitors ────────────────────────────────────────────
 
-    def visit_type(self, node: ast.Type) -> str:
+    def visit_type(self, node: Type) -> str:
         return self._glsl_elem_type(node)
 
-    def visit_int(self, node: ast.Int) -> str:
+    def visit_int(self, node: Int) -> str:
         return "int"
 
-    def visit_float(self, node: ast.Float) -> str:
+    def visit_float(self, node: Float) -> str:
         return "float"
 
-    def visit_fixed_size_vector(self, node: ast.FixedSizeVector) -> str:
+    def visit_fixed_size_vector(self, node: FixedSizeVector) -> str:
         return self._glsl_elem_type(node)
 
-    def visit_flexible_rows_matrix(self, node: ast.FlexibleRowsMatrix) -> str:
+    def visit_flexible_rows_matrix(self, node: FlexibleRowsMatrix) -> str:
         return self._glsl_elem_type(node)
 
-    def visit_fixed_size_matrix(self, node: ast.FixedSizeMatrix) -> str:
+    def visit_fixed_size_matrix(self, node: FixedSizeMatrix) -> str:
         return self._glsl_elem_type(node)
 
-    def visit_fixed_size_levels_rows_cols_matrix(self, node: ast.FixedSizeLevelsRowsColsMatrix) -> str:
+    def visit_fixed_size_levels_rows_cols_matrix(self, node: FixedSizeLevelsRowsColsMatrix) -> str:
         return self._glsl_elem_type(node)
 
-    def visit_flexible_rows_cols_levels_matrix(self, node: ast.FlexibleRowsColsLevelsMatrix) -> str:
+    def visit_flexible_rows_cols_levels_matrix(self, node: FlexibleRowsColsLevelsMatrix) -> str:
         return self._glsl_elem_type(node)
 
-    def visit_expression(self, node: ast.Expression) -> str:
+    def visit_expression(self, node: Expression) -> str:
         return node.accept(self)
 
-    def visit_number(self, node: ast.Number) -> str:
+    def visit_number(self, node: Number) -> str:
         return self._to_str(node)
 
-    def visit_identifier(self, node: ast.Identifier) -> str:
+    def visit_identifier(self, node: Identifier) -> str:
         name = node.name
         if name in self._push_constant_map:
             return f"rllm_push.{name}"
         return name or "unknown"
 
-    def visit_array_access(self, node: ast.ArrayAccess) -> str:
+    def visit_array_access(self, node: ArrayAccess) -> str:
         return self._to_str(node)
 
-    def visit_field_access(self, node: ast.FieldAccess) -> str:
+    def visit_field_access(self, node: FieldAccess) -> str:
         return self._to_str(node)
 
-    def visit_limit_expr(self, node: ast.LimitExpr) -> str:
+    def visit_limit_expr(self, node: LimitExpr) -> str:
         max_val = self._to_str(node.max_val) if node.max_val else "?"
         body = self._to_str(node.body) if node.body else "?"
         return f"limit<{max_val}>({body})"
 
-    def visit_binary_expr(self, node: ast.BinaryExpr) -> str:
+    def visit_binary_expr(self, node: BinaryExpr) -> str:
         left = self._to_str(node.left) if node.left else "?"
         right = self._to_str(node.right) if node.right else "?"
         op = node.op or "+"
         return f"({left} {op} {right})"
 
-    def visit_cast_expr(self, node: ast.CastExpr) -> str:
+    def visit_cast_expr(self, node: CastExpr) -> str:
         operand = self._to_str(node.operand) if node.operand else "?"
         return f"int({operand})"
 
-    def visit_negation_expr(self, node: ast.NegationExpr) -> str:
+    def visit_negation_expr(self, node: NegationExpr) -> str:
         op = "!" + (self._to_str(node.operand) if node.operand else "?")
         return op
 
     # ── condition visitor ──────────────────────────────────────────────
 
-    def visit_condition(self, node: ast.Condition) -> str:
+    def visit_condition(self, node: Condition) -> str:
         lhs = self._to_str(node.lhs) if node.lhs else "?"
         rhs = self._to_str(node.rhs) if node.rhs else "?"
         return f"{lhs} {node.op} {rhs}"
 
     # ── statement visitors (return string, caller emits with indent) ──
 
-    def visit_statement(self, node: ast.Statement) -> str:
+    def visit_statement(self, node: Statement) -> str:
         return node.accept(self)
 
-    def visit_for(self, node: ast.For) -> str:
+    def visit_for(self, node: For) -> str:
         """Generate a GLSL for loop as a string."""
         lines = []
         ind = "    " * (self._indent_level + 1)
@@ -220,7 +224,7 @@ class VulkanKernelVisitor(Visitor):
         upper_bound = "?"
         lower_bound = "0"
         
-        if node.init_expr and isinstance(node.init_expr, ast.LimitExpr):
+        if node.init_expr and isinstance(node.init_expr, LimitExpr):
             max_val = self._to_str(node.init_expr.max_val) if node.init_expr.max_val else "?"
             upper_bound = max_val
         elif node.condition:
@@ -243,7 +247,7 @@ class VulkanKernelVisitor(Visitor):
         lines.append(f"{ind}}}")
         return "\n".join(lines) + "\n"
 
-    def visit_if(self, node: ast.If) -> str:
+    def visit_if(self, node: If) -> str:
         cond_str = self.visit_condition(node.condition) if node.condition else "?"
         ind = "    " * (self._indent_level + 1)
         lines = [f"{ind}if ({cond_str}) {{"]
@@ -257,7 +261,7 @@ class VulkanKernelVisitor(Visitor):
         lines.append(f"{ind}}}")
         return "\n".join(lines) + "\n"
 
-    def visit_declaration(self, node: ast.Declaration) -> str:
+    def visit_declaration(self, node: Declaration) -> str:
         prefix = "const " if node.is_const else ""
         var_type = "float"
         init_str = ""
@@ -265,17 +269,17 @@ class VulkanKernelVisitor(Visitor):
             init_str = f" = {self._to_str(node.init_expr)}"
         return f"{prefix}{var_type} {node.name}{init_str};"
 
-    def visit_assignment(self, node: ast.Assignment) -> str:
+    def visit_assignment(self, node: Assignment) -> str:
         lvalue = self._to_str(node.lvalue) if node.lvalue else "?"
         rvalue = self._to_str(node.rvalue) if node.rvalue else "?"
         return f"{lvalue} {node.assign_op} {rvalue};"
 
-    def visit_overflow_check(self, node: ast.OverflowCheck) -> str:
+    def visit_overflow_check(self, node: OverflowCheck) -> str:
         lvalue = self._to_str(node.lvalue) if node.lvalue else "?"
         operand = self._to_str(node.operand) if node.operand else "?"
         return f"OVERFLOW_CHECK_ADD({lvalue}, {operand});"
 
-    def visit_shared_decl(self, node: ast.SharedDecl) -> str:
+    def visit_shared_decl(self, node: SharedDecl) -> str:
         prefix = "const " if node.is_const else ""
         var_type = "float"
         init_str = ""
@@ -283,7 +287,7 @@ class VulkanKernelVisitor(Visitor):
             init_str = f" = {self._to_str(node.init_expr)}"
         return f"shared {prefix}{var_type} {node.name}{init_str};"
 
-    def visit_workgroup_properties(self, node: ast.WorkgroupProperties) -> str:
+    def visit_workgroup_properties(self, node: WorkgroupProperties) -> str:
         parts = []
         if node.x_expr is not None:
             parts.append(f"x: {self._to_str(node.x_expr)}")
@@ -295,7 +299,7 @@ class VulkanKernelVisitor(Visitor):
 
     # ── Program visitor (main entry point) ────────────────────────────
 
-    def visit_program(self, node: ast.Program) -> str:
+    def visit_program(self, node: Program) -> str:
         self._lines = []
         self._indent_level = 0
         self._binding_counter = 0
@@ -312,13 +316,13 @@ class VulkanKernelVisitor(Visitor):
         is_triangular = len(triangular_bounds_raw) >= 2
 
         for param in node.params:
-            if param is None or not isinstance(param, ast.Declaration):
+            if param is None or not isinstance(param, Declaration):
                 continue
             
             vt = param.var_type
-            is_matrix = isinstance(vt, (ast.FlexibleRowsMatrix, ast.FixedSizeMatrix,
-                                        ast.FlexibleRowsColsLevelsMatrix, ast.FixedSizeLevelsRowsColsMatrix))
-            is_vector = isinstance(vt, ast.FixedSizeVector)
+            is_matrix = isinstance(vt, (FlexibleRowsMatrix, FixedSizeMatrix,
+                                        FlexibleRowsColsLevelsMatrix, FixedSizeLevelsRowsColsMatrix))
+            is_vector = isinstance(vt, FixedSizeVector)
             
             if is_matrix or is_vector:
                 all_matrix_params.append(param)

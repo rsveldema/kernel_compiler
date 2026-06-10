@@ -20,6 +20,14 @@ Usage
 -------------
 
 ```bash
+# Create a venv
+uv venv
+source .venv/bin/activate
+
+# install requirements:
+uv pip install -r requirements.txt
+
+# Compile a kernel
 python parser.py testdata/triangular1.kernel --compile output.spirv
 ```
 

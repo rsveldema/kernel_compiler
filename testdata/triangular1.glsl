@@ -1,13 +1,13 @@
 #version 450
 
-layout(set = 0, binding = 0) buffer RllmBuffer_d_scores {
-    float d_scores[2147483648ul];
+layout(std430, set = 0, binding = 0) buffer RllmBuffer_d_scores {
+    float d_scores[8*16384*16384];
 } d_scores;
-layout(set = 0, binding = 1) buffer RllmBuffer_d_raw {
-    float d_raw[2147483648ul];
+layout(std430, set = 0, binding = 1) buffer RllmBuffer_d_raw {
+    float d_raw[8*16384*16384];
 } d_raw;
-layout(set = 0, binding = 2) buffer RllmBuffer_attn_w {
-    float attn_w[2147483648ul];
+layout(std430, set = 0, binding = 2) buffer RllmBuffer_attn_w {
+    float attn_w[8*16384*16384];
 } attn_w;
 
 layout(push_constant) uniform RllmPushConstants {
