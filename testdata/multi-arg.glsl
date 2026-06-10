@@ -31,7 +31,18 @@ void main() {
         float sum1 = 0;
         float sum2 = 0;
         float sum3 = 0;
-                    for (uint64_t l_idx = 0; l_idx < 1024; ++l_idx) {
+        sum1 = 0;
+        sum2 = 0;
+        sum3 = 0;
+        const int block_start = 0;
+        const int block_end = 1024;
+                    for (int k = block_start; k < block_end; ++k) {
+            const float term1 = (A1[((1024 * i) + (1 * k))] * B1[((1024 * k) + (1 * j))]);
+            sum1 += term1;
+            const float term2 = (A2[((1024 * i) + (1 * k))] * B2[((1024 * k) + (1 * j))]);
+            sum2 += term2;
+            const float term3 = (A3[((1024 * i) + (1 * k))] * B3[((1024 * k) + (1 * j))]);
+            sum3 += term3;
             }
         C[((1024 * i) + (1 * j))] += (sum1 + (sum2 + sum3));
 }

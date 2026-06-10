@@ -660,6 +660,32 @@ def transform_statement(stmt_tree):
                     if lhs is not None and rhs is not None:
                         condition = Condition(lhs, op_val, rhs)
 
+                # Extract increment from children[2] if present
+                inc_tree = (
+                    stmt_tree.children[2] if len(stmt_tree.children) > 2 else None
+                )
+                if isinstance(inc_tree, Tree):
+                    for c in inc_tree.children:
+                        if _is_token(c) and c.type == "INC_OP":
+                            inc_op = c.value
+                        elif _is_token(c) and c.type == "IDENT":
+                            inc_var = c.value
+
+                # Extract body from the last child of stmt_tree (after all parsed parts)
+                body_tree = None
+                for bt in reversed(stmt_tree.children):
+                    if isinstance(bt, Tree) and bt.data in ("block", "statement"):
+                        body_tree = bt
+                        break
+
+                if body_tree is not None:
+                    result = transform_statement(body_tree)
+                    if result is not None:
+                        if isinstance(result, list):
+                            body_stmts.extend(result)
+                        else:
+                            body_stmts.append(result)
+
                 return ForLoopWithConditionAndIncrement(
                     loop_var_type=loop_var_type,
                     loop_var_name=loop_var_name,
@@ -668,6 +694,7 @@ def transform_statement(stmt_tree):
                     increment_op=inc_op,
                     body_stmts=body_stmts,
                 )
+
 
         # Handle inline type variant: Tree(for_statement, [Tree(int/float), IDENT, expr, body])
         if loop_var_type is None and len(stmt_tree.children) >= 4:
@@ -1244,8 +1271,5 @@ def transform(t: Tree) -> Program:
                 p.body_stmts.extend(result)
             else:
                 p.body_stmts.append(result)
-
-    # Resolve multi-dimensional array indices to linear addresses
-    p = resolve_array_indices(p)
 
     return p

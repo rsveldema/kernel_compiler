@@ -136,6 +136,8 @@ class VulkanKernelVisitor(Visitor):
         return self._glsl_elem_type(node)
 
     def visit_int(self, node: Int) -> str:
+        if node.name == "size_t":
+            return "uint64_t"
         return "int"
 
     def visit_float(self, node: Float) -> str:
@@ -316,7 +318,7 @@ class VulkanKernelVisitor(Visitor):
 
     def visit_declaration(self, node: Declaration) -> str:
         prefix = "const " if node.is_const else ""
-        var_type = "float"
+        var_type = self._to_str(node.var_type) if node.var_type else "float"
         init_str = ""
         if node.init_expr is not None:
             init_str = f" = {self._to_str(node.init_expr)}"
@@ -334,7 +336,7 @@ class VulkanKernelVisitor(Visitor):
 
     def visit_shared_decl(self, node: SharedDecl) -> str:
         prefix = "const " if node.is_const else ""
-        var_type = "float"
+        var_type = self._to_str(node.var_type) if node.var_type else "float"
         init_str = ""
         if node.init_expr is not None:
             init_str = f" = {self._to_str(node.init_expr)}"
@@ -351,6 +353,36 @@ class VulkanKernelVisitor(Visitor):
         return f"workgroup {{ {', '.join(parts)} }}"
 
     # ── Program visitor (main entry point) ────────────────────────────
+
+
+    def _emit_tile_vars(self, node):
+        """Map each loop variable index to its name (used for gl_GlobalInvocationID init).
+        
+        When tiled, tile indices replace original loop variables as the outer dimensions.
+        Each workgroup handles one tile so loop_var names map directly to 
+        gl_GlobalInvocationID.x/y/z coordinates.
+        """
+        self._tile_var_name = {}
+        for idx, var_name in enumerate(node.loop_vars):
+            self._tile_var_name[idx] = var_name  # use original name (i, j)
+
+    def _flatten_tiled_body(self, stmts):
+        """Recursively flatten tile loops out of body statements.
+        
+        When tiling is applied, tile_i/tile_j loops should not appear in the GLSL body.
+        Instead their content is flattened into the main() function body, and the 
+        tile indices come from gl_GlobalInvocationID.x/y.
+        """
+        result = []
+        for stmt in stmts:
+            if isinstance(stmt, ForLoopWithConditionAndIncrement) and                getattr(stmt, "loop_var_name", "").startswith("tile_"):
+                # Skip this tile loop, flatten its body instead
+                inner_stmts = getattr(stmt, "body_stmts", [])
+                if inner_stmts:
+                    result.extend(self._flatten_tiled_body(inner_stmts))
+            else:
+                result.append(stmt)
+        return result
 
     def visit_program(self, node: Program) -> str:
         self._lines = []
@@ -448,11 +480,19 @@ class VulkanKernelVisitor(Visitor):
         self._emit("void main() {")
         self._push()
 
+        # Tile variable names (when tiling is applied)
+        if getattr(node, "tiled", False):
+            self._emit_tile_vars(node)
+
         # 1. Initialize loop variables from gl_GlobalInvocationID
         if node.space_dim >= 1 and node.loop_vars:
             for idx, var_name in enumerate(node.loop_vars):
                 coord = "xyz"[idx]
-                self._emit(f"int {var_name} = int(gl_GlobalInvocationID.{coord});")
+                if getattr(node, 'tiled', False) and hasattr(self, '_tile_var_name') and self._tile_var_name.get(idx):
+                    tvn = self._tile_var_name[idx]
+                    self._emit(f"int {tvn} = int(gl_GlobalInvocationID.{coord});")
+                else:
+                    self._emit(f"int {var_name} = int(gl_GlobalInvocationID.{coord});")
 
         # 2. Initialize params from push constants
         for name, vtype in self._push_constant_fields:
@@ -483,12 +523,21 @@ class VulkanKernelVisitor(Visitor):
         old_indent = self._indent_level
         self._indent_level += 1
 
-        for stmt in node.body_stmts:
-            if hasattr(stmt, "accept"):
-                result = stmt.accept(self)
-                if isinstance(result, str):
-                    # Strip trailing newline and emit with current indent
-                    self._emit(result.rstrip())
+        if getattr(node, 'tiled', False):
+            # When tiling is applied, tile loops should come from gl_GlobalInvocationID.x/y
+            # Skip explicit tile loop constructs and flatten their content into main() body
+            body_stmts = self._flatten_tiled_body(node.body_stmts)
+            for stmt in body_stmts:
+                if hasattr(stmt, "accept"):
+                    result = stmt.accept(self)
+                    if isinstance(result, str):
+                        self._emit(result.rstrip())
+        else:
+            for stmt in node.body_stmts:
+                if hasattr(stmt, "accept"):
+                    result = stmt.accept(self)
+                    if isinstance(result, str):
+                        self._emit(result.rstrip())
 
         self._indent_level = old_indent
         self._pop()

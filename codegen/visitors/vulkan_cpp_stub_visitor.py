@@ -177,7 +177,10 @@ class VulkanCppStubVisitor(Visitor):
         )
 
     def _compute_matrix_size(self, ty) -> str:
-        """Compute compile-time array size for a matrix/vector type."""
+        """Compute compile-time array size for a matrix/vector type.
+        
+        Uses unsigned 64-bit literals when the total would overflow signed 32-bit int.
+        """
         if isinstance(
             ty, (ast.FixedSizeLevelsRowsColsMatrix, ast.FlexibleRowsColsLevelsMatrix)
         ):
@@ -185,21 +188,40 @@ class VulkanCppStubVisitor(Visitor):
             for attr in ("level_expr", "row_size_expr", "col_size_expr"):
                 expr = getattr(ty, attr, None)
                 if expr and isinstance(expr, ast.Number):
-                    parts.append(str(int(expr.value)))
-            return "*".join(parts) if parts else "1"
+                    val = int(expr.value)
+                    parts.append(str(val))
+            if not parts:
+                return "1"
+            total = 1
+            for p in parts:
+                total *= int(p)
+            suffix = "ULL" if total > 2147483647 else "U"
+            joined_parts = [str(int(p)) + suffix for p in parts]
+            return " * ".join(joined_parts)
         elif isinstance(ty, (ast.FlexibleRowsMatrix, ast.FixedSizeMatrix)):
             parts = []
             for attr in ("row_size_expr", "col_size_expr"):
                 expr = getattr(ty, attr, None)
                 if expr and isinstance(expr, ast.Number):
-                    parts.append(str(int(expr.value)))
-            return "*".join(parts) if parts else "1"
+                    val = int(expr.value)
+                    parts.append(str(val))
+            if not parts:
+                return "1"
+            total = 1
+            for p in parts:
+                total *= int(p)
+            suffix = "ULL" if total > 2147483647 else "U"
+            joined_parts = [str(int(p)) + suffix for p in parts]
+            return " * ".join(joined_parts)
         elif (
             isinstance(ty, ast.FixedSizeVector)
             and ty.size_expr
             and isinstance(ty.size_expr, ast.Number)
         ):
-            return str(int(ty.size_expr.value))
+            val = int(ty.size_expr.value)
+            if val > 2147483647:
+                return f"{val}ULL"
+            return str(val)
         return "1"
 
     def visit_workgroup_properties(self, node: ast.WorkgroupProperties) -> dict:
@@ -221,7 +243,9 @@ class VulkanCppStubVisitor(Visitor):
         if node.header:
             parts = node.header.replace('"', "").split("/")
             basename = parts[-1].rsplit(".", 1)[0] if "." in parts[-1] else parts[-1]
-        self._kernel_name = f"{basename}_dispatch"
+        # Use source filename stem + header basename to ensure unique dispatch names
+        src_stem = getattr(node, "_source_filename", "").rsplit("/", 1)[-1].rsplit(".", 1)[0].replace("-", "_") if hasattr(node, "_source_filename") and node._source_filename else "kernel"
+        self._kernel_name = f"{src_stem}_{basename}" if basename != "kernel" else src_stem
 
         # Classify params
         buffer_params: List[Tuple[ast.Declaration, str]] = []
@@ -311,7 +335,7 @@ class VulkanCppStubVisitor(Visitor):
         hdr_text = node.header.strip('"') if node.header else "unknown"
         self._emit(f"// ── Kernel dispatch stub: {hdr_text} ─────────────")
         self._emit("#include <cstdint>")
-        self._emit("#include <vulkan/vulkan.h>")
+        self._emit("#include <vulkan/vulkan_core.h>")
         self._emit("")
 
         # Buffer structs (matching SSBO layout)
@@ -349,23 +373,33 @@ class VulkanCppStubVisitor(Visitor):
         self._emit(") {")
         self._push()
 
-        # vkCmdDispatch call
-        x_wg = str(wg_x)
-        y_wg = str(wg_y)
-        z_wg = str(wg_z)
+        # Determine tile block size (set by perform_blocking when tiling is active)
+        tile_bs = getattr(node, "tile_block_size", None)
+
+        def _div_ceil(a, b):
+            return "((" + a + ") + (" + str(b) + ") - 1) / (" + str(b) + ")"
 
         if has_2d:
+            x_dim = f"(dispatch_rows + {wg_x} - 1) / {wg_x}"
+            y_dim = f"(dispatch_cols + {wg_y} - 1) / {wg_y}"
+            if tile_bs is not None and tile_bs > 1:
+                # Tiled: each workgroup covers BLOCK_SIZE elements in outer dims
+                x_tiles = _div_ceil("dispatch_rows", str(tile_bs))
+                y_tiles = _div_ceil("dispatch_cols", str(tile_bs))
+                x_dim = _div_ceil(x_tiles, wg_x)
+                y_dim = _div_ceil(y_tiles, wg_y)
             self._emit(
                 f"vkCmdDispatch(command_buffer, "
-                f"(dispatch_rows + {x_wg} - 1) / {x_wg}, "
-                f"(dispatch_cols + {y_wg} - 1) / {y_wg}, "
-                f"{z_wg});"
+                f"{x_dim}, {y_dim}, {wg_z});"
             )
         else:
+            x_dim = f"(dispatch_rows + {wg_x} - 1) / {wg_x}"
+            if tile_bs is not None and tile_bs > 1:
+                x_tiles = _div_ceil("dispatch_rows", str(tile_bs))
+                x_dim = _div_ceil(x_tiles, wg_x)
             self._emit(
                 f"vkCmdDispatch(command_buffer, "
-                f"(dispatch_rows + {x_wg} - 1) / {x_wg}, "
-                f"1, 1);"
+                f"{x_dim}, 1, 1);"
             )
 
         self._pop()

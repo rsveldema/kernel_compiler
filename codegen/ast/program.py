@@ -18,6 +18,9 @@ class Program(AstNode):
         params=None,
         body_stmts=None,
         workgroups=None,
+        tiled=False,
+        tile_block_size=1,
+        _source_filename="",
     ):
         self.header = header
         # Loop variables from OFFLOAD_PARFOR_x_PARAM (e.g. ['i'] or ['i', 'j'])
@@ -35,6 +38,10 @@ class Program(AstNode):
         self.params = params or []
         self.body_stmts = body_stmts or []
         self.workgroups = workgroups or []
+        # Set by perform_blocking() when tiling is applied
+        self.tiled = tiled
+        self.tile_block_size = tile_block_size
+        self._source_filename = _source_filename
 
     @property
     def loop_var(self):

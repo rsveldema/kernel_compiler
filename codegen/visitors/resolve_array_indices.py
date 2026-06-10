@@ -420,6 +420,9 @@ class ResolveArrayIndicesVisitor(Expression):
             params=params or node.params,
             body_stmts=body_stmts or node.body_stmts,
             workgroups=workgroups or node.workgroups,
+            tiled=getattr(node, 'tiled', False),
+            tile_block_size=getattr(node, 'tile_block_size', 1),
+            _source_filename=getattr(node, '_source_filename', ''),
         )
 
 
