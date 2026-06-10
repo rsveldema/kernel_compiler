@@ -1,0 +1,117 @@
+
+
+program: header parfor_space parfor_parameters body
+
+
+parfor_parameters: "PARAMETERS" declaration ("," declaration)*
+
+header: "PROGRAM" "(" string ")" workgroup_properties*
+
+workgroup_properties: "workgroup" "{" "x" ":" expression "," "y" ":" expression "," "z" ":" expression "}"
+| "shared" declaration ";"
+
+parfor_space: "OFFLOAD_PARFOR_1D_PARAM" "(" IDENT "," expression "," parfor_parameters_list ")" 
+| "OFFLOAD_PARFOR_2D_PARAM" "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" 
+| "OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM" "(" IDENT "," IDENT "," IDENT "," expression "," expression "," parfor_parameters_list ")" 
+
+parfor_parameters_list: "(" parameter ("," parameter)* ")"
+parameter: IDENT
+
+body: "BEGIN" statement+ "END_PROGRAM"
+
+statement: for_statement
+| if_statement
+| declaration ";"
+| assignment ";"
+| "OVERFLOW_CHECK_ADD" "(" lhs "," expression ")" ";"
+| block
+
+for_statement: "for" "(" for_loop_var ";" condition ";" increment ")" (block | statement)
+|              "for" "(" "const" type IDENT ":" expression ")" (block | statement)
+
+if_statement: "if" "(" condition ")" statement ("else" statement)?
+
+for_loop_var:  ("const")? type IDENT "=" expression 
+
+// in the AST becomes <expr> <op> <expr>
+condition: IDENT compare_operator expression
+
+compare_operator: LT | GT | LTE | GTE | EQ | NEQ
+LT: "<"
+GT: ">"
+LTE: "<="
+GTE: ">="
+EQ: "=="
+NEQ: "!="
+
+increment: IDENT INC_OP -> inc_postfix | INC_OP IDENT -> inc_prefix
+INC_OP: "++" | "--"
+
+declaration: "const" type IDENT ("=" expression)? -> const_decl
+| type IDENT  ("=" expression)? -> decl
+
+type: FSV "<" type "," expression ">" "&"
+    | FRM "<" type "," expression "," expression ">" "&"
+    | FSM "<" type "," expression "," expression ">" "&"
+    | FSLRMC "<" type "," expression "," expression "," expression ">" "&"
+    | FRCLM "<" type "," expression "," expression "," expression ">" "&"
+    | "int" -> int
+    | "size_t" -> int
+    | "float" -> float
+    | "rlmm_float" -> float
+    | "rlmm_float_small" -> float
+    | "PositionIndex" -> int
+
+
+block: "{" statement* "}"
+
+assignment: lhs assign_operator expression
+
+ASSIGN_OP: "=" | "+=" | "-=" | "*=" | "/="
+assign_operator: ASSIGN_OP
+
+DOT: "."
+field_access: IDENT ( array_index )? ( DOT IDENT)?
+
+array_index:  "[" expression ("," expression)* "]"
+
+lhs: field_access
+
+expression: base_expr (arith_operator expression)?
+
+ARITH_OP: "*" | "/" | "+" | "-"
+arith_operator: ARITH_OP
+
+base_expr: limit_expr | number_term | field_access | type "(" expression ")" | "!" expression | inc_call | "(" expression ")"
+
+inc_call: "inc" "(" expression ")"
+
+limit_expr: "limit" "<" expression ">" "(" expression ")"
+number_term: NUMBER -> number
+
+// Type name terminals (must come before CNAME to prevent it from matching them)
+FSV: "fixed_size_vector"
+FRM: "flexible_rows_matrix"
+FSM: "fixed_size_matrix"
+FSLRMC: "fixed_size_levels_rows_cols_matrix"
+FRCLM: "flexible_rows_cols_levels_matrix"
+
+// Define the Comment Terminals
+COMMENT: "//" /[^\n]/* | "/*" /.*?/ "*/"  
+
+// Instruct the lexer to skip them
+%ignore COMMENT
+%ignore /\s+/ // Ignores whitespace
+
+
+string : ESCAPED_STRING
+
+NUMBER: /([0-9]+\.[0-9]*|\.[0-9]+|[0-9]+)[fF]?/
+
+
+%import common.ESCAPED_STRING
+%import common.CNAME -> IDENT
+%import common.WS_INLINE
+%import common.WS
+%ignore WS_INLINE
+

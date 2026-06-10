@@ -1,0 +1,11 @@
+PROGRAM("test.cc:50")
+workgroup { x: 512, y: 64, z: 1 }
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<1024>(n), (A))
+
+PARAMETERS
+        const int& A,
+        float B
+
+BEGIN
+END_PROGRAM
