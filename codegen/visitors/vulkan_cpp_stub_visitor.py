@@ -67,7 +67,12 @@ class VulkanCppStubVisitor(Visitor):
         return node.accept(self)
 
     def visit_number(self, node: ast.Number) -> str:
-        return str(node.value)
+        s = str(node.value)
+        if getattr(node, "unsigned", False):
+            if abs(node.value) > 4294967295:  # UINT_MAX — need uint64
+                return s + "ULL"
+            return s + "U"
+        return s
 
     def visit_identifier(self, node: ast.Identifier) -> str:
         return node.name or "unknown"

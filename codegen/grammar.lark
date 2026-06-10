@@ -50,17 +50,14 @@ INC_OP: "++" | "--"
 declaration: "const" type IDENT ("=" expression)? -> const_decl
 | type IDENT  ("=" expression)? -> decl
 
+TYPE_LITERAL: "int" | "size_t" | "float" | "rlmm_float" | "rlmm_float_small" | "PositionIndex"
+
 type: FSV "<" type "," expression ">" "&"
     | FRM "<" type "," expression "," expression ">" "&"
     | FSM "<" type "," expression "," expression ">" "&"
     | FSLRMC "<" type "," expression "," expression "," expression ">" "&"
     | FRCLM "<" type "," expression "," expression "," expression ">" "&"
-    | "int" -> int
-    | "size_t" -> int
-    | "float" -> float
-    | "rlmm_float" -> float
-    | "rlmm_float_small" -> float
-    | "PositionIndex" -> int
+    | TYPE_LITERAL
 
 
 block: "{" statement* "}"

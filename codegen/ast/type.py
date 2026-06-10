@@ -12,7 +12,10 @@ class Type(AstNode):
 
 
 class Int(Type):
-    """Represents 'int' or 'size_t' types."""
+    """Represents 'int', 'size_t', or other integer types."""
+
+    def __init__(self, name: str = "int"):
+        self.name = name
 
     def accept(self, visitor):
         return visitor.visit_int(self)

@@ -46,61 +46,88 @@ class ResolveArrayIndicesVisitor(Expression):
                 return int(val)
         return None
 
-    def _compute_strides(self, var_type) -> list[int] | None:
+    _LARGE_ARRAY_THRESHOLD = 65536  # dimensions >= this need unsigned constants
+    _INT_MAX = 2**31 - 1
+    _UINT_MAX = 2**32 - 1
+
+    def _is_large_array_type(self, var_type) -> bool:
+        """Check if a type has dimensions large enough to produce linear indices >= INT_MAX."""
+        size_exprs = []
+        if isinstance(var_type, (FixedSizeMatrix, FlexibleRowsMatrix)):
+            size_exprs.extend([var_type.row_size_expr, var_type.col_size_expr])
+        elif isinstance(var_type, (FixedSizeLevelsRowsColsMatrix, FlexibleRowsColsLevelsMatrix)):
+            size_exprs.extend([
+                var_type.level_expr, var_type.row_size_expr, var_type.col_size_expr
+            ])
+        elif isinstance(var_type, FixedSizeVector):
+            size_exprs.append(var_type.size_expr)
+
+        for expr in size_exprs:
+            s = self._extract_size(expr)
+            if s is not None and s >= self._LARGE_ARRAY_THRESHOLD:
+                return True
+        # Also check product of all dimensions against INT_MAX
+        total = 1
+        for expr in size_exprs:
+            s = self._extract_size(expr)
+            if s is not None and s > 0:
+                total *= s
+        if total >= self._INT_MAX:
+            return True
+        return False
+
+    def _compute_strides(self, var_type):
         """Compute row-major strides for a type's dimensions.
 
-        Returns a list of stride multipliers (one per dimension), outermost-first.
-        For row-major order with shape [d0, d1, ..., dn]:
-            stride[i] = prod(d(i+1) ... dn), with stride[last] = 1
+        Returns a tuple of (strides, is_large) where *is_large* indicates whether
+        any dimension size could produce linear array indices that approach or exceed
+        the max positive signed 32-bit integer (INT_MAX).  When *is_large* is True,
+        stride constants should be emitted as unsigned literals.
         """
         if isinstance(var_type, FlexibleRowsMatrix):
-            # 2-D: [rows, cols] -> strides [cols, 1]
             col = self._extract_size(var_type.col_size_expr)
             row = self._extract_size(var_type.row_size_expr)
             if col is not None and row is not None:
-                return [col, 1]
+                return [col, 1], self._is_large_array_type(var_type)
 
         elif isinstance(var_type, FixedSizeMatrix):
-            # 2-D: [rows, cols] -> strides [cols, 1]
             col = self._extract_size(var_type.col_size_expr)
             row = self._extract_size(var_type.row_size_expr)
             if col is not None and row is not None:
-                return [col, 1]
+                return [col, 1], self._is_large_array_type(var_type)
 
         elif isinstance(var_type, FixedSizeLevelsRowsColsMatrix):
-            # 3-D: [levels, rows, cols] -> strides [rows*cols, cols, 1]
             col = self._extract_size(var_type.col_size_expr)
             row = self._extract_size(var_type.row_size_expr)
             lvl = self._extract_size(var_type.level_expr)
             if col is not None and row is not None and lvl is not None:
-                s0 = row * col  # stride for levels dim
-                s1 = col  # stride for rows dim
-                return [s0, s1, 1]  # 3 strides for all dimensions
+                s0 = row * col
+                s1 = col
+                return [s0, s1, 1], self._is_large_array_type(var_type)
 
         elif isinstance(var_type, FlexibleRowsColsLevelsMatrix):
-            # 3-D: [rows, cols, levels] -> strides [cols*levels, levels, 1]
             col = self._extract_size(var_type.col_size_expr)
             lvl = self._extract_size(var_type.level_expr)
             row = self._extract_size(var_type.row_size_expr)
             if col is not None and lvl is not None and row is not None:
-                s0 = col * lvl  # stride for rows dim
-                s1 = lvl  # stride for cols dim
-                return [s0, s1, 1]  # 3 strides for all dimensions
+                s0 = col * lvl
+                s1 = lvl
+                return [s0, s1, 1], self._is_large_array_type(var_type)
 
         elif isinstance(var_type, FixedSizeVector):
             size = self._extract_size(var_type.size_expr)
             if size is not None:
-                return [1]
-            return []
+                return [1], self._is_large_array_type(var_type)
+            return [], False
 
-        return None
+        return None, False
 
     def _make_linear_index(self, ident: ArrayAccess):
         """Mutate *ident* so that its indices are replaced with linear-address expressions.
 
         The base identifier is preserved so the node remains valid as both an lvalue and rvalue.
-        Returns the same *ident* (mutated in place), or the original *ident* unchanged when
-        strides are unknown or there are too few indices.
+        When array dimensions are large (potentially producing linear indices >= INT_MAX),
+        stride constants are created as unsigned literals to avoid overflow.
         """
         if len(ident.indices) <= 1:
             return ident
@@ -122,7 +149,7 @@ class ResolveArrayIndicesVisitor(Expression):
             else None
         )
 
-        strides = self._compute_strides(var_type) if var_type is not None else None
+        strides, is_large = self._compute_strides(var_type) if var_type is not None else (None, False)
         n_dims = len(ident.indices)
 
         if strides is None or len(strides) < n_dims - 1:
@@ -132,7 +159,7 @@ class ResolveArrayIndicesVisitor(Expression):
         resolved = []
         for idx, stride in zip(ident.indices, strides):
             term = BinaryExpr(
-                left=Number(stride),
+                left=Number(stride, unsigned=is_large),
                 op="*",
                 right=self._wrap_expr(idx),
             )
@@ -211,7 +238,7 @@ class ResolveArrayIndicesVisitor(Expression):
         )
 
     def visit_number(self, node):
-        return Number(value=node.value)
+        return Number(value=node.value, unsigned=getattr(node, "unsigned", False))
 
     def visit_identifier(self, node):
         return Identifier(name=node.name)

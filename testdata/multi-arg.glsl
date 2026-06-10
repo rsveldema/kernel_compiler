@@ -31,7 +31,7 @@ void main() {
         float sum1 = 0;
         float sum2 = 0;
         float sum3 = 0;
-                    for (int l_idx = 0; l_idx < 1024; ++l_idx) {
+                    for (uint64_t l_idx = 0; l_idx < 1024; ++l_idx) {
             }
         C[((1024 * i) + (1 * j))] += (sum1 + (sum2 + sum3));
 }

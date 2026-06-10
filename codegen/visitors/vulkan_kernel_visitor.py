@@ -107,10 +107,21 @@ class VulkanKernelVisitor(Visitor):
     # ── type helpers (GLSL) ────────────────────────────────────────────
 
     def _glsl_elem_type(self, ty) -> str:
+        """Map an AST Type node to a GLSL element type string."""
         if hasattr(ty, "elem_type") and ty.elem_type is not None:
             t = ty.elem_type
             if isinstance(t, (Int, Float)):
-                return "float"
+                return self._glsl_type_name(t)
+        return self._glsl_type_name(ty) if ty else "float"
+
+    def _glsl_type_name(self, ty) -> str:
+        """Map an AST Type node to a GLSL type name."""
+        if isinstance(ty, Int):
+            # size_t → uint64_t, other integers → int
+            return "uint64_t" if ty.name == "size_t" else "int"
+        if isinstance(ty, Float):
+            return "float"
+        # Compound types (vectors/matrices) default to float for element type
         return "float"
 
     def _to_str(self, node) -> str:
@@ -159,7 +170,12 @@ class VulkanKernelVisitor(Visitor):
             if "." not in s:
                 s += ".0"
             return s
-        return str(int(val))
+        s = str(int(val))
+        if getattr(node, "unsigned", False):
+            if abs(val) > 4294967295:  # UINT_MAX — need uint64
+                return s + "UL"
+            return s + "U"
+        return s
 
     def visit_identifier(self, node: Identifier) -> str:
         name = node.name
@@ -269,8 +285,9 @@ class VulkanKernelVisitor(Visitor):
         inc_var = node.increment_var if node.increment_var else node.loop_var_name
         inc_op = node.increment_op if node.increment_op else "++"
 
+        loop_type = self._glsl_type_name(node.loop_var_type) if node.loop_var_type else "int"
         lines.append(
-            f"{ind}for (int {node.loop_var_name} = {lower_bound}; "
+            f"{ind}for ({loop_type} {node.loop_var_name} = {lower_bound}; "
             f"{node.loop_var_name} < {upper_bound}; {inc_op}{inc_var}) {{"
         )
 

@@ -412,20 +412,28 @@ def _parse_field_access_for_lhs(fa_tree):
 # ── type transform ─────────────────────────────────────────────────
 
 
-def _resolve_nested_type(node):
-    """Resolve a nested type from a tree node (int/float/type)."""
+def _resolve_nested_type(node, default_name="int"):
+    """Resolve a nested type from a tree node (TYPE_LITERAL or compound type)."""
     if isinstance(node, Tree):
         data = node.data
-        if data == "int":
-            return Int()
-        elif data == "float":
-            return Float()
-        elif data == "type":
-            return _transform_type(node)
+        # Handle the simple type case: TYPE_LITERAL terminal
+        if data == "type" and len(node.children) == 1 and _is_token(node.children[0]):
+            token = node.children[0]
+            val = token.value
+            if val in ("int", "size_t", "PositionIndex"):
+                return Int(val)
+            elif val in ("float", "rlmm_float", "rlmm_float_small"):
+                return Float()
+        # Handle compound types (multi-param matrix/vector types)
+        if data == "type" and len(node.children) >= 2:
+            first_child = node.children[0]
+            if _is_token(first_child):
+                type_name = first_child.value
+                return _transform_type(node, default_name=type_name)
     return None
 
 
-def _transform_type(type_tree):
+def _transform_type(type_tree, default_name="int"):
     """Transform a 'type' Lark tree into an AST Type node.
 
     After the grammar rewrite with explicit type name terminals (FSV, FRM, FSM,
@@ -491,11 +499,17 @@ def _transform_type(type_tree):
                 )
         return None
 
-    # Simple types (data like 'int' or 'float')
-    if first_child.data in ("int", "float"):
-        return Int() if first_child.data == "int" else Float()
+    # Handle single-child TYPE_LITERAL terminal
+    if len(children) == 1 and _is_token(first_child):
+        name_val = first_child.value
+        return Int(name_val) if name_val in ("int", "size_t", "PositionIndex") else Float()
 
-    if first_child.data == "type":
+    # Simple types (data like 'int' or 'float')
+    if hasattr(first_child, 'data') and first_child.data in ("int", "float"):
+        name_val = _is_token(first_child) and first_child.value or first_child.data
+        return Int(name_val) if first_child.data == "int" else Float()
+
+    if hasattr(first_child, 'data') and first_child.data == "type":
         return _transform_type(first_child)
 
     return None
@@ -658,11 +672,16 @@ def transform_statement(stmt_tree):
         # Handle inline type variant: Tree(for_statement, [Tree(int/float), IDENT, expr, body])
         if loop_var_type is None and len(stmt_tree.children) >= 4:
             first_child = stmt_tree.children[0]
-            if isinstance(first_child, Tree) and first_child.data in ("int", "float"):
+            if isinstance(first_child, Tree) and (first_child.data in ("int", "float") or first_child.data == "type"):
                 # type from children[0]
-                loop_var_type = _resolve_nested_type(first_child) or (
-                    Int() if first_child.data == "int" else Float()
-                )
+                # Extract type name from the TYPE_LITERAL token
+                type_name = "int"  # default
+                if first_child.data == "type":
+                    for c in first_child.children:
+                        if _is_token(c):
+                            type_name = c.value
+                            break
+                loop_var_type = _resolve_nested_type(first_child) or Int(type_name)
 
                 # Variable name from children[1]
                 second_child = stmt_tree.children[1]
@@ -753,7 +772,7 @@ def transform_statement(stmt_tree):
             type_node = None
 
             # Direct inline type at for_statement level
-            if isinstance(first_child, Tree) and first_child.data in ("int", "float"):
+            if isinstance(first_child, Tree) and (first_child.data in ("int", "float") or first_child.data == "type"):
                 is_inline_type = True
                 type_node = first_child
                 loop_var_name = (
@@ -779,7 +798,7 @@ def transform_statement(stmt_tree):
                         )
 
             # Also check: if first_child.data == 'int'/'float', also get name from stmt_tree children
-            if isinstance(first_child, Tree) and first_child.data in ("int", "float"):
+            if isinstance(first_child, Tree) and (first_child.data in ("int", "float") or first_child.data == "type"):
                 is_inline_type = True
                 type_node = first_child
                 if len(stmt_tree.children) > 1:
@@ -789,9 +808,14 @@ def transform_statement(stmt_tree):
 
             if is_inline_type and type_node is not None:
                 is_inline_type = True
-                loop_var_type = _resolve_nested_type(first_child) or (
-                    Int() if first_child.data == "int" else Float()
-                )
+                # Extract type name from the TYPE_LITERAL token
+                type_name = "int"  # default
+                if first_child.data == "type":
+                    for c in first_child.children:
+                        if _is_token(c):
+                            type_name = c.value
+                            break
+                loop_var_type = _resolve_nested_type(first_child) or Int(type_name)
 
                 # Variable name - look at appropriate child
                 var_child = None

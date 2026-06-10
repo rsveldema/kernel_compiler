@@ -33,7 +33,7 @@ void main() {
     if (hi >= 8 || i >= 8 || j >= 8 || i >= rllm_push.seq_len || j >= rllm_push.seq_len) return;
         float row_dot = 0;
                     for (int k = 0; k < 16384; ++k) {
-            row_dot += (d_scores[(((268435456 * hi) + (16384 * i)) + (1 * k))] * attn_w[(((131072 * hi) + (8 * i)) + (1 * k))]);
+            row_dot += (d_scores[(((268435456U * hi) + (16384U * i)) + (1U * k))] * attn_w[(((131072U * hi) + (8U * i)) + (1U * k))]);
             }
-        d_raw[(((268435456 * hi) + (16384 * i)) + (1 * j))] = (attn_w[(((131072 * hi) + (8 * i)) + (1 * j))] * (d_scores[(((268435456 * hi) + (16384 * i)) + (1 * j))] - row_dot));
+        d_raw[(((268435456U * hi) + (16384U * i)) + (1U * j))] = (attn_w[(((131072U * hi) + (8U * i)) + (1U * j))] * (d_scores[(((268435456U * hi) + (16384U * i)) + (1U * j))] - row_dot));
 }

@@ -11,8 +11,9 @@ class Expression(AstNode):
 
 
 class Number(Expression):
-    def __init__(self, value: str):
+    def __init__(self, value: str, unsigned: bool = False):
         self.value = value
+        self.unsigned = unsigned
 
     def accept(self, visitor):
         return visitor.visit_number(self)

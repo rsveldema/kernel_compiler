@@ -4,7 +4,7 @@
 #extension GL_KHR_shader_subgroup_clustered : require
 
 layout(std430, set = 0, binding = 0) buffer RllmBuffer_dst {
-    float dst[ /* unknown */ ];
+    int dst[ /* unknown */ ];
 };
 
 layout(push_constant) uniform RllmPushConstants {
