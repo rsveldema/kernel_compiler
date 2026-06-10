@@ -195,9 +195,7 @@ class VulkanCppStubVisitor(Visitor):
             total = 1
             for p in parts:
                 total *= int(p)
-            suffix = "ULL" if total > 2147483647 else "U"
-            joined_parts = [str(int(p)) + suffix for p in parts]
-            return " * ".join(joined_parts)
+            return str(total)
         elif isinstance(ty, (ast.FlexibleRowsMatrix, ast.FixedSizeMatrix)):
             parts = []
             for attr in ("row_size_expr", "col_size_expr"):
@@ -210,9 +208,7 @@ class VulkanCppStubVisitor(Visitor):
             total = 1
             for p in parts:
                 total *= int(p)
-            suffix = "ULL" if total > 2147483647 else "U"
-            joined_parts = [str(int(p)) + suffix for p in parts]
-            return " * ".join(joined_parts)
+            return str(total)
         elif (
             isinstance(ty, ast.FixedSizeVector)
             and ty.size_expr
@@ -382,25 +378,24 @@ class VulkanCppStubVisitor(Visitor):
         if has_2d:
             x_dim = f"(dispatch_rows + {wg_x} - 1) / {wg_x}"
             y_dim = f"(dispatch_cols + {wg_y} - 1) / {wg_y}"
-            if tile_bs is not None and tile_bs > 1:
-                # Tiled: each workgroup covers BLOCK_SIZE elements in outer dims
-                x_tiles = _div_ceil("dispatch_rows", str(tile_bs))
-                y_tiles = _div_ceil("dispatch_cols", str(tile_bs))
-                x_dim = _div_ceil(x_tiles, wg_x)
-                y_dim = _div_ceil(y_tiles, wg_y)
+        else:
+            x_dim = f"(dispatch_rows + {wg_x} - 1) / {wg_x}"
+            y_dim = "1"
+
+        self._emit(
+            "#ifndef VK_STUB_NOOP"
+        )
+        if has_2d:
             self._emit(
                 f"vkCmdDispatch(command_buffer, "
                 f"{x_dim}, {y_dim}, {wg_z});"
             )
         else:
-            x_dim = f"(dispatch_rows + {wg_x} - 1) / {wg_x}"
-            if tile_bs is not None and tile_bs > 1:
-                x_tiles = _div_ceil("dispatch_rows", str(tile_bs))
-                x_dim = _div_ceil(x_tiles, wg_x)
             self._emit(
                 f"vkCmdDispatch(command_buffer, "
                 f"{x_dim}, 1, 1);"
             )
+        self._emit("#endif // VK_STUB_NOOP")
 
         self._pop()
         self._emit("}")

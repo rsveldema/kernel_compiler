@@ -28,14 +28,21 @@ foreach(kernel_name multi-arg single-assign triangular1 with-wg2)
     add_custom_command(
         OUTPUT "${output_header}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${GENERATED_DIR}"
-        COMMAND env PYTHONPATH="/tmp/pylib:${PYTHONPATH}" ${Python3_EXECUTABLE} -S
+        COMMAND env PYTHONPATH="${CMAKE_SOURCE_DIR}:/tmp/pylib:${PYTHONPATH}"
+            ${Python3_EXECUTABLE}
             "${CMAKE_SOURCE_DIR}/codegen/compile.py"
             --cpp-stub "${output_header}"
             "${kernel_file}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         DEPENDS
             "${CMAKE_SOURCE_DIR}/codegen/compile.py"
             "${CMAKE_SOURCE_DIR}/codegen/parser.py"
+            "${CMAKE_SOURCE_DIR}/codegen/transforms.py"
+            "${CMAKE_SOURCE_DIR}/codegen/optim.py"
             "${CMAKE_SOURCE_DIR}/codegen/visitors/vulkan_cpp_stub_visitor.py"
+            "${CMAKE_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
+            "${CMAKE_SOURCE_DIR}/codegen/visitors/visitor.py"
+            "${CMAKE_SOURCE_DIR}/codegen/visitors/resolve_array_indices.py"
             "${CMAKE_SOURCE_DIR}/codegen/ast/__init__.py"
             "${CMAKE_SOURCE_DIR}/codegen/ast/program.py"
             "${CMAKE_SOURCE_DIR}/codegen/ast/type.py"
@@ -51,10 +58,13 @@ add_custom_target(all_generated_stubs ALL DEPENDS ${STUB_SRCS})
 
 
 # test_vulkan_stubs executable (uses real <vulkan/vulkan_core.h>)
-add_executable(test_vulkan_stubs test_vulkan_stubs.cc)
+add_executable(test_vulkan_stubs
+    test_vulkan_stubs.cc
+)
 add_dependencies(test_vulkan_stubs all_generated_stubs)
-target_link_libraries(test_vulkan_stubs PRIVATE GTest::gtest_main Vulkan::Vulkan)
-target_compile_options(test_vulkan_stubs PRIVATE -march=native -O3)
+target_link_libraries(test_vulkan_stubs PRIVATE GTest::gtest_main Vulkan::Vulkan libvulkanruntime)
+target_compile_options(test_vulkan_stubs PRIVATE )
+target_compile_definitions(test_vulkan_stubs PRIVATE VK_STUB_NOOP TESTDATA_DIR="/projects/kernel_compiler/testdata")
 target_include_directories(test_vulkan_stubs PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/tests

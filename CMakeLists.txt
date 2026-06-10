@@ -9,4 +9,5 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 # Enable testing for the project
 enable_testing()
+add_subdirectory(runtime)
 add_subdirectory(tests)

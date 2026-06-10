@@ -1,6 +1,25 @@
 """Compiler frontend"""
 
 import sys as _sys_mod
+import os
+
+# Ensure project root is on path so 'import codegen' works, and remove the
+# script's own directory so stdlib imports (e.g. ast, logging) don't resolve to
+# our local packages first.  Python adds the script directory to sys.path[0] at
+# startup; we must neutralise it before any standard-library imports run.
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in _sys_mod.path:
+    _sys_mod.path.insert(0, _project_root)
+
+_stdlib_paths = []
+for _sp in _sys_mod.path:
+    norm = os.path.normpath(_sp)
+    if norm == os.path.normpath(os.path.dirname(os.path.abspath(__file__))):
+        continue
+    _stdlib_paths.append(_sp)
+if len(_stdlib_paths) < len(_sys_mod.path):
+    _sys_mod.path[:] = _stdlib_paths
+
 import argparse
 import subprocess
 import logging
