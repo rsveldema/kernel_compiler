@@ -1,7 +1,4 @@
 #version 450
-#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
-#extension GL_KHR_shader_subgroup_arithmetic : require
-#extension GL_KHR_shader_subgroup_clustered : require
 
 layout(std430, set = 0, binding = 0) buffer RllmBuffer_d_scores {
     float d_scores[ /* too large for int: 2147483648 */ ];

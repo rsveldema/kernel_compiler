@@ -64,7 +64,7 @@ add_executable(test_vulkan_stubs
 add_dependencies(test_vulkan_stubs all_generated_stubs)
 target_link_libraries(test_vulkan_stubs PRIVATE GTest::gtest_main Vulkan::Vulkan libvulkanruntime)
 target_compile_options(test_vulkan_stubs PRIVATE )
-target_compile_definitions(test_vulkan_stubs PRIVATE VK_STUB_NOOP TESTDATA_DIR="/projects/kernel_compiler/testdata")
+target_compile_definitions(test_vulkan_stubs PRIVATE VK_STUB_NOOP TESTDATA_DIR="${CMAKE_SOURCE_DIR}/testdata")
 target_include_directories(test_vulkan_stubs PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/tests

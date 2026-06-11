@@ -18,28 +18,23 @@
 #include "with-wg2.h"
 
 // Shared Vulkan test infrastructure
-#include "test_vulkan_helpers.h"
+#include "vulkan_test_helpers.hpp"
 
 // ───────────── Test: single-assign (sets all elements to a value) ──
 
 TEST_F(VulkanTestBase, single_assign_correctness)
 {
-
-
     const uint32_t N = 64;
     int push_value = 42;
     std::vector<int> expected(N, 42);
 
     /* Allocate device buffer for output */
-    VBuffer dst_buf;
-    dst_buf.create(device_, phys_dev_, N * sizeof(int));
+    VBuffer dst_buf(get_session(), N * sizeof(int));
 
     /* Vulkan compute context — owns DSL, descriptors, pipeline layout, command buf */
-    VulkanComputeContext ctx(device_, phys_dev_, queue_, queue_fi_);
-    ctx.init_descriptor_layout(1);          /* 1 SSBO */
-    ctx.init_pipeline_layout(4);            /* push: int32 = 4 bytes */
-    ctx.create_pipeline(TESTDATA_DIR "/single-assign.glsl");
-    ctx.init_command_pool();
+
+    VulkanComputeKernel kernel(get_session(), TESTDATA_DIR "/single-assign.glsl", 4, 1);
+    VulkanComputeContext ctx(get_session());
 
     /* Write buffer to descriptor set */
     VkDescriptorBufferInfo dbi{};
@@ -54,14 +49,11 @@ TEST_F(VulkanTestBase, single_assign_correctness)
     wds.descriptorCount   = 1;
     wds.descriptorType    = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     wds.pBufferInfo       = &dbi;
-    vkUpdateDescriptorSets(device_, 1, &wds, 0, nullptr);
+    vkUpdateDescriptorSets(get_device(), 1, &wds, 0, nullptr);
 
     /* Dispatch */
-    auto cb = ctx.session().begin_command_buffer();
-    vkCmdPushConstants(cb, ctx.session().pipe_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, 4, &push_value);
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, ctx.session().pipe_layout_, 0, 1, &ctx.desc_set(), 0, nullptr);
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, ctx.session().pipeline);
-    vkCmdDispatch(cb, (N + 256 - 1) / 256, 1, 1);
+    auto cb = ctx.begin_command_buffer();
+    kernel.dispatch(cb, &push_value, sizeof(push_value), {(N + 256 - 1) / 256, 1, 1});
 
     ctx.submit_and_wait();
 
@@ -73,18 +65,12 @@ TEST_F(VulkanTestBase, single_assign_correctness)
     for (uint32_t i = 0; i < N; ++i) {
         EXPECT_EQ(actual[i], push_value) << "single-assign dst[" << i << "]";
     }
-
-    /* Cleanup */
-    ctx.session().destroy(device_);
-    dst_buf.destroy(device_);
 }
 
 // ───────────── Test: multi-arg (3 independent matmuls + accumulate) ──
 
 TEST_F(VulkanTestBase, multi_arg_correctness)
 {
-
-
     /* multi-arg does: C[i,j] += sum_k( A1[n,k]*B1[k,m] + A2* B2 + A3* B3 ) */
     const uint32_t ROWS = 64;
     const uint32_t COLS = 1024;
@@ -100,7 +86,7 @@ TEST_F(VulkanTestBase, multi_arg_correctness)
     std::vector<float> b3(COLS * COLS, 6.0f);
 
     /* Device buffers */
-    VBuffer bufs[7];
+    std::vector<VBuffer> bufs;
     VkDeviceSize buf_sizes[7] = {
         static_cast<VkDeviceSize>(ROWS) * COLS * sizeof(float),   /* A1 */
         static_cast<VkDeviceSize>(COLS) * COLS * sizeof(float),   /* B1 */
@@ -110,7 +96,7 @@ TEST_F(VulkanTestBase, multi_arg_correctness)
         static_cast<VkDeviceSize>(COLS) * COLS * sizeof(float),   /* B3 */
         static_cast<VkDeviceSize>(ROWS) * COLS * sizeof(float),   /* C (output) */
     };
-    for (uint32_t i = 0; i < 7; ++i) bufs[i].create(device_, phys_dev_, buf_sizes[i]);
+    for (uint32_t i = 0; i < 7; ++i) bufs.emplace_back(get_session(), buf_sizes[i]);
 
     bufs[0].write(a1.data(), 0, a1.size() * sizeof(float));
     bufs[1].write(b1.data(), 0, b1.size() * sizeof(float));
@@ -120,11 +106,8 @@ TEST_F(VulkanTestBase, multi_arg_correctness)
     bufs[5].write(b3.data(), 0, b3.size() * sizeof(float));
 
     /* Vulkan compute context */
-    VulkanComputeContext ctx(device_, phys_dev_, queue_, queue_fi_);
-    ctx.init_descriptor_layout(7);        /* 7 SSBOs */
-    ctx.init_pipeline_layout(0);           /* no push constants */
-    ctx.create_pipeline(TESTDATA_DIR "/multi-arg.glsl");
-    ctx.init_command_pool();
+    VulkanComputeKernel kernel(get_session(), TESTDATA_DIR "/multi-arg.glsl", 0, bufs.size());
+    VulkanComputeContext ctx(get_session());
 
     /* Write descriptors for all 7 buffers */
     std::vector<VkDescriptorBufferInfo> dbis(7);
@@ -140,16 +123,12 @@ TEST_F(VulkanTestBase, multi_arg_correctness)
         wds.descriptorCount   = 1;
         wds.descriptorType    = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         wds.pBufferInfo       = &dbis[i];
-        vkUpdateDescriptorSets(device_, 1, &wds, 0, nullptr);
+        vkUpdateDescriptorSets(get_device(), 1, &wds, 0, nullptr);
     }
 
     /* Dispatch */
-    auto cb = ctx.session().begin_command_buffer();
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, ctx.session().pipe_layout_, 0, 1, &ctx.desc_set(), 0, nullptr);
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, ctx.session().pipeline);
-    /* multi-arg workgroup: x=256, y=1 */
-    vkCmdDispatch(cb, (ROWS + 256 - 1) / 256, COLS, 1);
-
+    auto cb = ctx.begin_command_buffer();
+    kernel.dispatch(cb, 0, 0, {(ROWS + 256 - 1) / 256, COLS, 1});
     ctx.submit_and_wait();
 
     /* Read back C (buffer index 6) */
@@ -160,18 +139,12 @@ TEST_F(VulkanTestBase, multi_arg_correctness)
     for (uint32_t i = 0; i < ROWS * COLS; ++i) {
         EXPECT_NEAR(actual[i], expected_val, 1.0f) << "multi-arg C[" << i << "]";
     }
-
-    /* Cleanup */
-    ctx.session().destroy(device_);
-    for (uint32_t i = 0; i < 7; ++i) bufs[i].destroy(device_);
 }
 
 // ───────────── Test: triangular1 (triangular attention pattern) ──
 
 TEST_F(VulkanTestBase, triangular1_correctness)
 {
-
-
     const uint32_t H   = 8;
     const uint32_t W   = 32;
     const uint32_t D   = 32;
@@ -181,8 +154,8 @@ TEST_F(VulkanTestBase, triangular1_correctness)
     float expected_val = 1.0f - static_cast<float>(D); /* 1 - 32 = -31 */
 
     VkDeviceSize buf_size = static_cast<VkDeviceSize>(H) * W * D * sizeof(float);
-    VBuffer bufs[3];
-    for (uint32_t i = 0; i < 3; ++i) bufs[i].create(device_, phys_dev_, buf_size);
+    std::vector<VBuffer> bufs;
+    for (uint32_t i = 0; i < 3; ++i) bufs.emplace_back(get_session(), buf_size);
 
     bufs[0].write(d_scores_h.data(), 0, d_scores_h.size() * sizeof(float));
     bufs[1].write(attn_w_h.data(), 0, attn_w_h.size() * sizeof(float));
@@ -191,12 +164,10 @@ TEST_F(VulkanTestBase, triangular1_correctness)
     struct Tri1Push { int32_t seq_len; int32_t ds_rows; int32_t ds_cols; int32_t dr_rows; int32_t dr_cols; };
     Tri1Push pc = { static_cast<int32_t>(W), H, W, H, D };
 
+    VulkanComputeKernel kernel(get_session(), TESTDATA_DIR "/triangular1.glsl", sizeof(pc), 3);
+
     /* Vulkan compute context */
-    VulkanComputeContext ctx(device_, phys_dev_, queue_, queue_fi_);
-    ctx.init_descriptor_layout(3);          /* 3 SSBOs */
-    ctx.init_pipeline_layout(sizeof(pc));   /* 5 × int32 = 20 bytes */
-    ctx.create_pipeline(TESTDATA_DIR "/triangular1.glsl");
-    ctx.init_command_pool();
+    VulkanComputeContext ctx(get_session());
 
     /* Write descriptors */
     std::vector<VkDescriptorBufferInfo> dbis(3);
@@ -212,16 +183,12 @@ TEST_F(VulkanTestBase, triangular1_correctness)
         wds.descriptorCount   = 1;
         wds.descriptorType    = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         wds.pBufferInfo       = &dbis[i];
-        vkUpdateDescriptorSets(device_, 1, &wds, 0, nullptr);
+        vkUpdateDescriptorSets(get_device(), 1, &wds, 0, nullptr);
     }
 
     /* Dispatch — triangular1 workgroup: x=8, y=16, z=16 */
-    auto cb = ctx.session().begin_command_buffer();
-    vkCmdPushConstants(cb, ctx.session().pipe_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, ctx.session().pipe_layout_, 0, 1, &ctx.desc_set(), 0, nullptr);
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, ctx.session().pipeline);
-    vkCmdDispatch(cb, (H + 8 - 1) / 8, (W + 16 - 1) / 16, (D + 16 - 1) / 16);
-
+    auto cb = ctx.begin_command_buffer();
+    kernel.dispatch(cb, &pc, sizeof(pc), {(H + 8 - 1) / 8, (W + 16 - 1) / 16, (D + 16 - 1) / 16});
     ctx.submit_and_wait();
 
     /* Read back d_raw (buffer index 2) */
@@ -238,41 +205,27 @@ TEST_F(VulkanTestBase, triangular1_correctness)
             }
         }
     }
-
-    /* Cleanup */
-    ctx.session().destroy(device_);
-    for (uint32_t i = 0; i < 3; ++i) bufs[i].destroy(device_);
 }
 
 // ───────────── Test: with-wg2 (push-only kernel) ──────
 
 TEST_F(VulkanTestBase, with_wg2_correctness)
 {
-
-
     const uint32_t N = 1024;
 
     /* Vulkan compute context — no descriptor layout needed (no SSBOs) */
-    VulkanComputeContext ctx(device_, phys_dev_, queue_, queue_fi_);
-    ctx.init_pipeline_layout(sizeof(int)); /* only push constants, dsl is VK_NULL_HANDLE by default */
-    ctx.create_pipeline(TESTDATA_DIR "/with-wg2.glsl");
-    ctx.init_command_pool();
+    VulkanComputeKernel kernel(get_session(), TESTDATA_DIR "/with-wg2.glsl", sizeof(int), 0);
+    VulkanComputeContext ctx(get_session());
 
     uint32_t wg_x = 512, wg_y = 64;
     int32_t push_A = 42;
 
-    auto cb = ctx.session().begin_command_buffer();
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, ctx.session().pipeline);
-    vkCmdPushConstants(cb, ctx.session().pipe_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, 4, &push_A);
+    auto cb = ctx.begin_command_buffer();
     /* Dispatch: ceil(1024/512) x ceil(1024/64) = 2 x 16 = 32 total workgroups */
-    vkCmdDispatch(cb, (N + wg_x - 1) / wg_x, (N + wg_y - 1) / wg_y, 1);
-
+    kernel.dispatch(cb, &push_A, sizeof(push_A), { (N + wg_x - 1) / wg_x, (N + wg_y - 1) / wg_y, 1});
     ctx.submit_and_wait();
 
     SUCCEED() << "with-wg2 dispatch completed (grid=" << N << "x" << N
               << ", workgroup=" << wg_x << "x" << wg_y
               << ", push.A=" << push_A << ")";
-
-    /* Cleanup */
-    ctx.session().destroy(device_);
 }
