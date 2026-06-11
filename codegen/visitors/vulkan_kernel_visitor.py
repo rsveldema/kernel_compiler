@@ -86,6 +86,7 @@ class VulkanKernelVisitor(Visitor):
         self._ssbo_map: dict[str, tuple] = {}  # param_name -> (is_3d, type_node)
         self._push_constant_fields: list[tuple] = []  # (name, type_str) pairs
         self._push_constant_map: dict[str, bool] = {}
+        self._triangular_upper_bound_name: str | None = None
 
     # ── helpers ────────────────────────────────────────────────────────
 
@@ -251,6 +252,8 @@ class VulkanKernelVisitor(Visitor):
                 self._to_str(node.init_expr.max_val) if node.init_expr.max_val else "?"
             )
             upper_bound = max_val
+            if self._triangular_upper_bound_name and max_val.lstrip("-").isdigit():
+                upper_bound = f"rllm_push.{self._triangular_upper_bound_name}"
 
         lines.append(
             f"{ind}for (int {node.loop_var_name} = 0; "
@@ -391,6 +394,7 @@ class VulkanKernelVisitor(Visitor):
         self._ssbo_map = {}
         self._push_constant_fields = []
         self._push_constant_map = {}
+        self._triangular_upper_bound_name = None
 
         self._emit("#version 450")
         self._emit("#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require")
@@ -406,6 +410,8 @@ class VulkanKernelVisitor(Visitor):
             else []
         )
         is_triangular = len(triangular_bounds_raw) >= 2
+        if is_triangular and not triangular_bounds_raw[1].lstrip("-").isdigit():
+            self._triangular_upper_bound_name = triangular_bounds_raw[1]
 
         for param in node.params:
             if param is None or not isinstance(param, Declaration):
@@ -505,11 +511,12 @@ class VulkanKernelVisitor(Visitor):
             upper_name = triangular_bounds_raw[1]
 
             parts = []
-            for i, var in enumerate(node.loop_vars):
+            if node.loop_vars:
+                first_var = node.loop_vars[0]
                 if _is_literal(lower_name):
-                    parts.append(f"{var} >= {lower_name}")
+                    parts.append(f"{first_var} >= {lower_name}")
                 else:
-                    parts.append(f"{var} >= rllm_push.{lower_name}")
+                    parts.append(f"{first_var} >= rllm_push.{lower_name}")
 
             for var in node.loop_vars[1:]:
                 if _is_literal(upper_name):

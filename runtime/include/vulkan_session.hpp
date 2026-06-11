@@ -214,6 +214,11 @@ private:
         /* Only create push constant range if size > 0 */
         VkPipelineLayoutCreateInfo plci{};
         plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        if (m_dsl != VK_NULL_HANDLE)
+        {
+            plci.setLayoutCount = 1;
+            plci.pSetLayouts = &m_dsl;
+        }
         
         if (push_size_bytes > 0)
         {
@@ -237,16 +242,22 @@ private:
     /* Create descriptor set layout (n SSBO bindings) */
     void init_descriptor_layout(uint32_t num_ssbo)
     {
-        VkDescriptorSetLayoutBinding lsb{};
-        lsb.binding = 0;
-        lsb.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        lsb.descriptorCount = num_ssbo;
-        lsb.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        if (num_ssbo == 0)
+            return;
+
+        std::vector<VkDescriptorSetLayoutBinding> bindings(num_ssbo);
+        for (uint32_t i = 0; i < num_ssbo; ++i)
+        {
+            bindings[i].binding = i;
+            bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[i].descriptorCount = 1;
+            bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
 
         VkDescriptorSetLayoutCreateInfo dslici{};
         dslici.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dslici.bindingCount = 1;
-        dslici.pBindings = &lsb;
+        dslici.bindingCount = static_cast<uint32_t>(bindings.size());
+        dslici.pBindings = bindings.data();
 
         check_vk(vkCreateDescriptorSetLayout(get_device(), &dslici, nullptr, &m_dsl), "VkComputeSession DSL");
 
@@ -338,6 +349,8 @@ private:
     }
 
 public:
+    VkDescriptorSet desc_set() const { return m_desc_set; }
+
     /* Dispatch the compute kernel. Bind a descriptor set if provided; otherwise push-constants only. */
     void dispatch(VkCommandBuffer cb, void* constants, size_t num_bytes, const VulkanDimension& dims, VkDescriptorSet desc_set = VK_NULL_HANDLE)
     {
@@ -480,7 +493,7 @@ private:
         dslici.bindingCount   = 1;
         dslici.pBindings      = &lsb;
 
-        VkDescriptorSetLayout dsl;
+        VkDescriptorSetLayout dsl = VK_NULL_HANDLE;
         check_vk(vkCreateDescriptorSetLayout(get_device(), &dslici, nullptr, &dsl), "VulkanComputeContext DSL");
 
         VkDescriptorSetAllocateInfo dasai{};

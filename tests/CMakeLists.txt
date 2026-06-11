@@ -15,23 +15,29 @@ find_package(Vulkan REQUIRED)
 enable_testing()
 
 
-# Vulkan stubs: generate headers via compile.py --cpp-stub
-set(STUB_SRCS)
+# Vulkan kernels: generate headers and GLSL via compile.py
+set(GENERATED_KERNEL_SRCS)
 set(GENERATED_DIR ${CMAKE_BINARY_DIR}/generated/vulkanized/kernels)
 file(MAKE_DIRECTORY ${GENERATED_DIR})
 
 foreach(kernel_name multi-arg single-assign triangular1 with-wg2)
     set(kernel_file "${CMAKE_SOURCE_DIR}/testdata/${kernel_name}.kernel")
     set(output_header "${GENERATED_DIR}/${kernel_name}.h")
-    list(APPEND STUB_SRCS ${output_header})
+    set(output_glsl "${GENERATED_DIR}/${kernel_name}.glsl")
+    list(APPEND GENERATED_KERNEL_SRCS ${output_header} ${output_glsl})
 
     add_custom_command(
-        OUTPUT "${output_header}"
+        OUTPUT "${output_header}" "${output_glsl}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${GENERATED_DIR}"
         COMMAND env PYTHONPATH="${CMAKE_SOURCE_DIR}:/tmp/pylib:${PYTHONPATH}"
             ${Python3_EXECUTABLE}
             "${CMAKE_SOURCE_DIR}/codegen/compile.py"
             --cpp-stub "${output_header}"
+            "${kernel_file}"
+        COMMAND env PYTHONPATH="${CMAKE_SOURCE_DIR}:/tmp/pylib:${PYTHONPATH}"
+            ${Python3_EXECUTABLE}
+            "${CMAKE_SOURCE_DIR}/codegen/compile.py"
+            --vulkan "${output_glsl}"
             "${kernel_file}"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         DEPENDS
@@ -50,11 +56,11 @@ foreach(kernel_name multi-arg single-assign triangular1 with-wg2)
             "${CMAKE_SOURCE_DIR}/codegen/ast/statement.py"
             "${CMAKE_SOURCE_DIR}/codegen/ast/ast_node.py"
             "${kernel_file}"
-        COMMENT "Generating C++ stub for ${kernel_name}.kernel"
+        COMMENT "Generating Vulkan artifacts for ${kernel_name}.kernel"
     )
 endforeach()
 
-add_custom_target(all_generated_stubs ALL DEPENDS ${STUB_SRCS})
+add_custom_target(all_generated_stubs ALL DEPENDS ${GENERATED_KERNEL_SRCS})
 
 
 # test_vulkan_stubs executable (uses real <vulkan/vulkan_core.h>)
@@ -64,7 +70,7 @@ add_executable(test_vulkan_stubs
 add_dependencies(test_vulkan_stubs all_generated_stubs)
 target_link_libraries(test_vulkan_stubs PRIVATE GTest::gtest_main Vulkan::Vulkan libvulkanruntime)
 target_compile_options(test_vulkan_stubs PRIVATE )
-target_compile_definitions(test_vulkan_stubs PRIVATE VK_STUB_NOOP TESTDATA_DIR="${CMAKE_SOURCE_DIR}/testdata")
+target_compile_definitions(test_vulkan_stubs PRIVATE VK_STUB_NOOP TESTDATA_DIR="${GENERATED_DIR}")
 target_include_directories(test_vulkan_stubs PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/tests

@@ -122,6 +122,41 @@ class ResolveArrayIndicesVisitor(Expression):
 
         return None, False
 
+    def _compute_dynamic_3d_strides(self, base_name: str | None, var_type):
+        """Return runtime strides for 3-D kernels with dimension push constants.
+
+        Some generated kernels carry compact runtime dimensions as scalar params
+        even though their matrix types describe the production maximum shape.  Use
+        those runtime dimensions for Vulkan test shaders so buffers can be sized
+        to the actual dispatch domain.
+        """
+        if not base_name or not isinstance(
+            var_type, (FixedSizeLevelsRowsColsMatrix, FlexibleRowsColsLevelsMatrix)
+        ):
+            return None
+
+        if "d_scores_cols" in self._param_map and "d_raw_cols" in self._param_map:
+            row_stride = Identifier("d_raw_cols")
+            level_stride = BinaryExpr(
+                left=Identifier("d_scores_cols"),
+                op="*",
+                right=Identifier("d_raw_cols"),
+            )
+            return [level_stride, row_stride, Number(1)]
+
+        cols_name = f"{base_name}_cols"
+        rows_name = f"{base_name}_rows"
+        if rows_name in self._param_map and cols_name in self._param_map:
+            row_stride = Identifier(cols_name)
+            level_stride = BinaryExpr(
+                left=Identifier(rows_name),
+                op="*",
+                right=Identifier(cols_name),
+            )
+            return [level_stride, row_stride, Number(1)]
+
+        return None
+
     def _make_linear_index(self, ident: ArrayAccess):
         """Mutate *ident* so that its indices are replaced with linear-address expressions.
 
@@ -149,7 +184,11 @@ class ResolveArrayIndicesVisitor(Expression):
             else None
         )
 
-        strides, is_large = self._compute_strides(var_type) if var_type is not None else (None, False)
+        dynamic_strides = self._compute_dynamic_3d_strides(base_name, var_type)
+        if dynamic_strides is not None:
+            strides, is_large = dynamic_strides, False
+        else:
+            strides, is_large = self._compute_strides(var_type) if var_type is not None else (None, False)
         n_dims = len(ident.indices)
 
         if strides is None or len(strides) < n_dims - 1:
@@ -158,8 +197,9 @@ class ResolveArrayIndicesVisitor(Expression):
         # Build new indices: each original index is multiplied by its stride.
         resolved = []
         for idx, stride in zip(ident.indices, strides):
+            stride_expr = stride if isinstance(stride, Expression) else Number(stride, unsigned=is_large)
             term = BinaryExpr(
-                left=Number(stride, unsigned=is_large),
+                left=stride_expr,
                 op="*",
                 right=self._wrap_expr(idx),
             )

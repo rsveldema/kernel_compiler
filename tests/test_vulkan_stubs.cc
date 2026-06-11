@@ -44,7 +44,7 @@ TEST_F(VulkanTestBase, single_assign_correctness)
 
     VkWriteDescriptorSet wds{};
     wds.sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    wds.dstSet            = ctx.desc_set();
+    wds.dstSet            = kernel.desc_set();
     wds.dstBinding        = 0;
     wds.descriptorCount   = 1;
     wds.descriptorType    = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -53,7 +53,7 @@ TEST_F(VulkanTestBase, single_assign_correctness)
 
     /* Dispatch */
     auto cb = ctx.begin_command_buffer();
-    kernel.dispatch(cb, &push_value, sizeof(push_value), {(N + 256 - 1) / 256, 1, 1});
+    kernel.dispatch(cb, &push_value, sizeof(push_value), VulkanDimension{N, 1, 1});
 
     ctx.submit_and_wait();
 
@@ -118,7 +118,7 @@ TEST_F(VulkanTestBase, multi_arg_correctness)
 
         VkWriteDescriptorSet wds{};
         wds.sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        wds.dstSet            = ctx.desc_set();
+        wds.dstSet            = kernel.desc_set();
         wds.dstBinding        = i;
         wds.descriptorCount   = 1;
         wds.descriptorType    = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -128,7 +128,7 @@ TEST_F(VulkanTestBase, multi_arg_correctness)
 
     /* Dispatch */
     auto cb = ctx.begin_command_buffer();
-    kernel.dispatch(cb, 0, 0, {(ROWS + 256 - 1) / 256, COLS, 1});
+    kernel.dispatch(cb, nullptr, 0, VulkanDimension{ROWS, COLS, 1});
     ctx.submit_and_wait();
 
     /* Read back C (buffer index 6) */
@@ -158,7 +158,7 @@ TEST_F(VulkanTestBase, triangular1_correctness)
     for (uint32_t i = 0; i < 3; ++i) bufs.emplace_back(get_session(), buf_size);
 
     bufs[0].write(d_scores_h.data(), 0, d_scores_h.size() * sizeof(float));
-    bufs[1].write(attn_w_h.data(), 0, attn_w_h.size() * sizeof(float));
+    bufs[2].write(attn_w_h.data(), 0, attn_w_h.size() * sizeof(float));
 
     /* Push constants */
     struct Tri1Push { int32_t seq_len; int32_t ds_rows; int32_t ds_cols; int32_t dr_rows; int32_t dr_cols; };
@@ -178,7 +178,7 @@ TEST_F(VulkanTestBase, triangular1_correctness)
 
         VkWriteDescriptorSet wds{};
         wds.sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        wds.dstSet            = ctx.desc_set();
+        wds.dstSet            = kernel.desc_set();
         wds.dstBinding        = i;
         wds.descriptorCount   = 1;
         wds.descriptorType    = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -186,13 +186,13 @@ TEST_F(VulkanTestBase, triangular1_correctness)
         vkUpdateDescriptorSets(get_device(), 1, &wds, 0, nullptr);
     }
 
-    /* Dispatch — triangular1 workgroup: x=8, y=16, z=16 */
+    /* Dispatch */
     auto cb = ctx.begin_command_buffer();
-    kernel.dispatch(cb, &pc, sizeof(pc), {(H + 8 - 1) / 8, (W + 16 - 1) / 16, (D + 16 - 1) / 16});
+    kernel.dispatch(cb, &pc, sizeof(pc), VulkanDimension{H, W, D});
     ctx.submit_and_wait();
 
-    /* Read back d_raw (buffer index 2) */
-    auto data = bufs[2].read(0, buf_size);
+    /* Read back d_raw (buffer index 1) */
+    auto data = bufs[1].read(0, buf_size);
     std::vector<float> actual(H * W * D);
     memcpy(actual.data(), data.data(), static_cast<size_t>(buf_size));
 
@@ -222,7 +222,7 @@ TEST_F(VulkanTestBase, with_wg2_correctness)
 
     auto cb = ctx.begin_command_buffer();
     /* Dispatch: ceil(1024/512) x ceil(1024/64) = 2 x 16 = 32 total workgroups */
-    kernel.dispatch(cb, &push_A, sizeof(push_A), { (N + wg_x - 1) / wg_x, (N + wg_y - 1) / wg_y, 1});
+    kernel.dispatch(cb, &push_A, sizeof(push_A), VulkanDimension{(N + wg_x - 1) / wg_x, (N + wg_y - 1) / wg_y, 1});
     ctx.submit_and_wait();
 
     SUCCEED() << "with-wg2 dispatch completed (grid=" << N << "x" << N
