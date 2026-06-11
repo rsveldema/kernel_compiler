@@ -267,11 +267,11 @@ class VulkanCppStubVisitor(Visitor):
         cols_param_name = node.loop_vars[1] if has_2d else None
 
         # Workgroup sizes
-        wg_x, wg_y, wg_z = "8", "8", "1"
+        wg_x, wg_y, wg_z = "1", "1", "1"
         for wg in node.workgroups:
             if isinstance(wg, ast.WorkgroupProperties):
-                x_val = self._to_str(wg.x_expr) if wg.x_expr else "8"
-                y_val = self._to_str(wg.y_expr) if wg.y_expr else "8"
+                x_val = self._to_str(wg.x_expr) if wg.x_expr else "1"
+                y_val = self._to_str(wg.y_expr) if wg.y_expr else "1"
                 z_val = self._to_str(wg.z_expr) if wg.z_expr else "1"
                 if x_val.isdigit():
                     wg_x = x_val
@@ -381,6 +381,7 @@ class VulkanCppStubVisitor(Visitor):
         else:
             x_dim = f"(dispatch_rows + {wg_x} - 1) / {wg_x}"
             y_dim = "1"
+        z_dim = str(getattr(node, "reduction_chunks", 1))
 
         self._emit(
             "#ifndef VK_STUB_NOOP"
@@ -388,12 +389,12 @@ class VulkanCppStubVisitor(Visitor):
         if has_2d:
             self._emit(
                 f"vkCmdDispatch(command_buffer, "
-                f"{x_dim}, {y_dim}, {wg_z});"
+                f"{x_dim}, {y_dim}, {z_dim});"
             )
         else:
             self._emit(
                 f"vkCmdDispatch(command_buffer, "
-                f"{x_dim}, 1, 1);"
+                f"{x_dim}, 1, {z_dim});"
             )
         self._emit("#endif // VK_STUB_NOOP")
 

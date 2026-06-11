@@ -302,6 +302,17 @@ def transform_expression(expr_tree):
 
 def _transform_from_base(base_tree):
     """Transform a base_expr tree into an AST expression."""
+    if (
+        len(base_tree.children) == 2
+        and isinstance(base_tree.children[0], Tree)
+        and base_tree.children[0].data == "type"
+        and isinstance(base_tree.children[1], Tree)
+    ):
+        cast_type = _resolve_nested_type(base_tree.children[0])
+        operand = transform_expression(base_tree.children[1])
+        if operand is not None:
+            return CastExpr(cast_type, operand)
+
     for child in base_tree.children:
         if isinstance(child, Tree):
             data = child.data

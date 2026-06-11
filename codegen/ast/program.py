@@ -20,6 +20,11 @@ class Program(AstNode):
         workgroups=None,
         tiled=False,
         tile_block_size=1,
+        reduction_chunk_size=0,
+        reduction_chunks=1,
+        reduction_chunk_var="",
+        use_shared_memory_tiling=False,
+        shared_memory_chunk_size=1,
         _source_filename="",
     ):
         self.header = header
@@ -41,6 +46,11 @@ class Program(AstNode):
         # Set by perform_blocking() when tiling is applied
         self.tiled = tiled
         self.tile_block_size = tile_block_size
+        self.reduction_chunk_size = reduction_chunk_size
+        self.reduction_chunks = reduction_chunks
+        self.reduction_chunk_var = reduction_chunk_var
+        self.use_shared_memory_tiling = use_shared_memory_tiling
+        self.shared_memory_chunk_size = shared_memory_chunk_size
         self._source_filename = _source_filename
 
     @property

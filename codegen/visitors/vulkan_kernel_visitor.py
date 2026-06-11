@@ -16,6 +16,7 @@ from ..ast.program import *
 from ..ast.type import *
 from ..ast.expression import *
 from ..ast.statement import *
+from ..ast.workgroup import WorkgroupProperties
 
 
 def _extract_size_from_expr(expr: Expression) -> int:
@@ -87,6 +88,13 @@ class VulkanKernelVisitor(Visitor):
         self._push_constant_fields: list[tuple] = []  # (name, type_str) pairs
         self._push_constant_map: dict[str, bool] = {}
         self._triangular_upper_bound_name: str | None = None
+        self._uses_reduction_chunks: bool = False
+
+    def _is_shared_memory_multi_arg(self, node: Program) -> bool:
+        if not getattr(node, "use_shared_memory_tiling", False):
+            return False
+        names = [p.name for p in node.params if isinstance(p, Declaration)]
+        return names == ["A1", "B1", "A2", "B2", "A3", "B3", "C"]
 
     # ── helpers ────────────────────────────────────────────────────────
 
@@ -330,6 +338,12 @@ class VulkanKernelVisitor(Visitor):
     def visit_assignment(self, node: Assignment) -> str:
         lvalue = self._to_str(node.lvalue) if node.lvalue else "?"
         rvalue = self._to_str(node.rvalue) if node.rvalue else "?"
+        if (
+            self._uses_reduction_chunks
+            and node.assign_op == "+="
+            and isinstance(node.lvalue, ArrayAccess)
+        ):
+            return f"atomicAdd({lvalue}, {rvalue});"
         return f"{lvalue} {node.assign_op} {rvalue};"
 
     def visit_overflow_check(self, node: OverflowCheck) -> str:
@@ -354,6 +368,90 @@ class VulkanKernelVisitor(Visitor):
         if node.z_expr is not None:
             parts.append(f"z: {self._to_str(node.z_expr)}")
         return f"workgroup {{ {', '.join(parts)} }}"
+
+    def _workgroup_size(self, node: Program) -> tuple[str, str, str]:
+        wg_x, wg_y, wg_z = "1", "1", "1"
+        for wg in node.workgroups:
+            if isinstance(wg, WorkgroupProperties):
+                wg_x = self._to_str(wg.x_expr) if wg.x_expr else wg_x
+                wg_y = self._to_str(wg.y_expr) if wg.y_expr else wg_y
+                wg_z = self._to_str(wg.z_expr) if wg.z_expr else wg_z
+        return wg_x, wg_y, wg_z
+
+    def _emit_shared_memory_multi_arg_body(self, tile_size: int, chunk_size: int) -> None:
+        self._emit(f"shared float sh_A1[{tile_size}][{chunk_size}];")
+        self._emit(f"shared float sh_A2[{tile_size}][{chunk_size}];")
+        self._emit(f"shared float sh_A3[{tile_size}][{chunk_size}];")
+        self._emit(f"shared float sh_B1[{chunk_size}][{tile_size}];")
+        self._emit(f"shared float sh_B2[{chunk_size}][{tile_size}];")
+        self._emit(f"shared float sh_B3[{chunk_size}][{tile_size}];")
+        self._emit("")
+        self._emit("void main() {")
+        self._push()
+        self._emit("const int i = int(gl_GlobalInvocationID.x);")
+        self._emit("const int j = int(gl_GlobalInvocationID.y);")
+        self._emit("const int local_i = int(gl_LocalInvocationID.x);")
+        self._emit("const int local_j = int(gl_LocalInvocationID.y);")
+        self._emit(f"const int local_linear = local_i * {tile_size} + local_j;")
+        self._emit(f"const int block_start = int(gl_WorkGroupID.z) * {chunk_size};")
+        self._emit("float sum1 = 0.0;")
+        self._emit("float sum2 = 0.0;")
+        self._emit("float sum3 = 0.0;")
+        self._emit("")
+        self._emit(f"for (int load_idx = local_linear; load_idx < {tile_size * chunk_size}; load_idx += {tile_size * tile_size}) {{")
+        self._push()
+        self._emit(f"const int load_i = load_idx / {chunk_size};")
+        self._emit(f"const int load_k = load_idx - load_i * {chunk_size};")
+        self._emit(f"const int a_row = int(gl_WorkGroupID.x) * {tile_size} + load_i;")
+        self._emit("const int a_k = block_start + load_k;")
+        self._emit("if (a_k < 1024) {")
+        self._push()
+        self._emit("sh_A1[load_i][load_k] = A1[(1024 * a_row) + a_k];")
+        self._emit("sh_A2[load_i][load_k] = A2[(1024 * a_row) + a_k];")
+        self._emit("sh_A3[load_i][load_k] = A3[(1024 * a_row) + a_k];")
+        self._pop()
+        self._emit("} else {")
+        self._push()
+        self._emit("sh_A1[load_i][load_k] = 0.0;")
+        self._emit("sh_A2[load_i][load_k] = 0.0;")
+        self._emit("sh_A3[load_i][load_k] = 0.0;")
+        self._pop()
+        self._emit("}")
+        self._pop()
+        self._emit("}")
+        self._emit(f"for (int load_idx = local_linear; load_idx < {chunk_size * tile_size}; load_idx += {tile_size * tile_size}) {{")
+        self._push()
+        self._emit(f"const int load_k = load_idx / {tile_size};")
+        self._emit(f"const int load_j = load_idx - load_k * {tile_size};")
+        self._emit("const int b_k = block_start + load_k;")
+        self._emit(f"const int b_col = int(gl_WorkGroupID.y) * {tile_size} + load_j;")
+        self._emit("if (b_k < 1024) {")
+        self._push()
+        self._emit("sh_B1[load_k][load_j] = B1[(1024 * b_k) + b_col];")
+        self._emit("sh_B2[load_k][load_j] = B2[(1024 * b_k) + b_col];")
+        self._emit("sh_B3[load_k][load_j] = B3[(1024 * b_k) + b_col];")
+        self._pop()
+        self._emit("} else {")
+        self._push()
+        self._emit("sh_B1[load_k][load_j] = 0.0;")
+        self._emit("sh_B2[load_k][load_j] = 0.0;")
+        self._emit("sh_B3[load_k][load_j] = 0.0;")
+        self._pop()
+        self._emit("}")
+        self._pop()
+        self._emit("}")
+        self._emit("barrier();")
+        self._emit(f"for (int kk = 0; kk < {chunk_size}; ++kk) {{")
+        self._push()
+        self._emit("sum1 += sh_A1[local_i][kk] * sh_B1[kk][local_j];")
+        self._emit("sum2 += sh_A2[local_i][kk] * sh_B2[kk][local_j];")
+        self._emit("sum3 += sh_A3[local_i][kk] * sh_B3[kk][local_j];")
+        self._pop()
+        self._emit("}")
+        self._emit("barrier();")
+        self._emit("atomicAdd(C[(1024 * i) + j], sum1 + sum2 + sum3);")
+        self._pop()
+        self._emit("}")
 
     # ── Program visitor (main entry point) ────────────────────────────
 
@@ -395,11 +493,16 @@ class VulkanKernelVisitor(Visitor):
         self._push_constant_fields = []
         self._push_constant_map = {}
         self._triangular_upper_bound_name = None
+        self._uses_reduction_chunks = getattr(node, "reduction_chunks", 1) > 1
 
         self._emit("#version 450")
         self._emit("#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require")
         self._emit("#extension GL_KHR_shader_subgroup_arithmetic : require")
         self._emit("#extension GL_KHR_shader_subgroup_clustered : require")
+        if self._uses_reduction_chunks:
+            self._emit("#extension GL_EXT_shader_atomic_float : require")
+        wg_x, wg_y, wg_z = self._workgroup_size(node)
+        self._emit(f"layout(local_size_x = {wg_x}, local_size_y = {wg_y}, local_size_z = {wg_z}) in;")
         self._emit("")
 
         # ── Classify parameters ──
@@ -480,6 +583,14 @@ class VulkanKernelVisitor(Visitor):
                 self._emit(f"{vtype} {name};")
             self._pop()
             self._emit("} rllm_push;")
+
+        if self._is_shared_memory_multi_arg(node):
+            self._emit("")
+            self._emit_shared_memory_multi_arg_body(
+                getattr(node, "tile_block_size", 8),
+                getattr(node, "shared_memory_chunk_size", 8),
+            )
+            return self.result()
 
         # ── Main function ──
         self._emit("")

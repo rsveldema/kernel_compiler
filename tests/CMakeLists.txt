@@ -60,6 +60,68 @@ foreach(kernel_name multi-arg single-assign triangular1 with-wg2)
     )
 endforeach()
 
+set(MULTI_ARG_NOOPT_GLSL "${GENERATED_DIR}/multi-arg-noopt.glsl")
+list(APPEND GENERATED_KERNEL_SRCS ${MULTI_ARG_NOOPT_GLSL})
+add_custom_command(
+    OUTPUT "${MULTI_ARG_NOOPT_GLSL}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${GENERATED_DIR}"
+    COMMAND env PYTHONPATH="${CMAKE_SOURCE_DIR}:/tmp/pylib:${PYTHONPATH}"
+        ${Python3_EXECUTABLE}
+        "${CMAKE_SOURCE_DIR}/codegen/compile.py"
+        --no-optimize
+        --vulkan "${MULTI_ARG_NOOPT_GLSL}"
+        "${CMAKE_SOURCE_DIR}/testdata/multi-arg.kernel"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    DEPENDS
+        "${CMAKE_SOURCE_DIR}/codegen/compile.py"
+        "${CMAKE_SOURCE_DIR}/codegen/parser.py"
+        "${CMAKE_SOURCE_DIR}/codegen/transforms.py"
+        "${CMAKE_SOURCE_DIR}/codegen/optim.py"
+        "${CMAKE_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
+        "${CMAKE_SOURCE_DIR}/codegen/visitors/visitor.py"
+        "${CMAKE_SOURCE_DIR}/codegen/visitors/resolve_array_indices.py"
+        "${CMAKE_SOURCE_DIR}/codegen/ast/__init__.py"
+        "${CMAKE_SOURCE_DIR}/codegen/ast/program.py"
+        "${CMAKE_SOURCE_DIR}/codegen/ast/type.py"
+        "${CMAKE_SOURCE_DIR}/codegen/ast/expression.py"
+        "${CMAKE_SOURCE_DIR}/codegen/ast/statement.py"
+        "${CMAKE_SOURCE_DIR}/codegen/ast/ast_node.py"
+        "${CMAKE_SOURCE_DIR}/testdata/multi-arg.kernel"
+    COMMENT "Generating unoptimized Vulkan shader for multi-arg.kernel"
+)
+
+foreach(chunk_size 1 2 4 8 16 32 64)
+    set(MULTI_ARG_CHUNK_GLSL "${GENERATED_DIR}/multi-arg-chunk-${chunk_size}.glsl")
+    list(APPEND GENERATED_KERNEL_SRCS ${MULTI_ARG_CHUNK_GLSL})
+    add_custom_command(
+        OUTPUT "${MULTI_ARG_CHUNK_GLSL}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${GENERATED_DIR}"
+        COMMAND env PYTHONPATH="${CMAKE_SOURCE_DIR}:/tmp/pylib:${PYTHONPATH}"
+            ${Python3_EXECUTABLE}
+            "${CMAKE_SOURCE_DIR}/codegen/compile.py"
+            --chunk-size "${chunk_size}"
+            --vulkan "${MULTI_ARG_CHUNK_GLSL}"
+            "${CMAKE_SOURCE_DIR}/testdata/multi-arg.kernel"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS
+            "${CMAKE_SOURCE_DIR}/codegen/compile.py"
+            "${CMAKE_SOURCE_DIR}/codegen/parser.py"
+            "${CMAKE_SOURCE_DIR}/codegen/transforms.py"
+            "${CMAKE_SOURCE_DIR}/codegen/optim.py"
+            "${CMAKE_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
+            "${CMAKE_SOURCE_DIR}/codegen/visitors/visitor.py"
+            "${CMAKE_SOURCE_DIR}/codegen/visitors/resolve_array_indices.py"
+            "${CMAKE_SOURCE_DIR}/codegen/ast/__init__.py"
+            "${CMAKE_SOURCE_DIR}/codegen/ast/program.py"
+            "${CMAKE_SOURCE_DIR}/codegen/ast/type.py"
+            "${CMAKE_SOURCE_DIR}/codegen/ast/expression.py"
+            "${CMAKE_SOURCE_DIR}/codegen/ast/statement.py"
+            "${CMAKE_SOURCE_DIR}/codegen/ast/ast_node.py"
+            "${CMAKE_SOURCE_DIR}/testdata/multi-arg.kernel"
+        COMMENT "Generating Vulkan shader for multi-arg.kernel chunk size ${chunk_size}"
+    )
+endforeach()
+
 add_custom_target(all_generated_stubs ALL DEPENDS ${GENERATED_KERNEL_SRCS})
 
 

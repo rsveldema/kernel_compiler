@@ -40,25 +40,26 @@ def read_file(filename: str) -> str:
         return f.read()
 
 
-def optimize(program: Program) -> Program:
-    program = perform_blocking(program)
+def optimize(program: Program, enable_optimizations: bool = True, chunk_size: int = 8) -> Program:
+    if enable_optimizations:
+        program = perform_blocking(program, chunk_size)
     from codegen.visitors.resolve_array_indices import resolve_array_indices
     program = resolve_array_indices(program)
     return program
 
 
-def compile(filename: str) -> Program:
+def compile(filename: str, enable_optimizations: bool = True, chunk_size: int = 8) -> Program:
     print(f"--------------- parsing: {filename} -----------------")
     text = read_file(filename)
     ret = parser.parse(text)
     program = transform(ret)
     program._source_filename = filename
-    program = optimize(program)
+    program = optimize(program, enable_optimizations, chunk_size)
     return program
 
 
-def generate_vulkan(filename: str, output: str) -> None:
-    program = compile(filename)
+def generate_vulkan(filename: str, output: str, enable_optimizations: bool = True, chunk_size: int = 8) -> None:
+    program = compile(filename, enable_optimizations, chunk_size)
     visitor = VulkanKernelVisitor()
     shader = program.accept(visitor)
     with open(output, "w") as f:
@@ -66,9 +67,9 @@ def generate_vulkan(filename: str, output: str) -> None:
     print(f"Generated Vulkan shader -> {output}")
 
 
-def compile_vulkan(input_file: str, output_spv: str) -> None:
+def compile_vulkan(input_file: str, output_spv: str, enable_optimizations: bool = True, chunk_size: int = 8) -> None:
     glsl_path = input_file.rsplit(".", 1)[0] + ".glsl"
-    generate_vulkan(input_file, glsl_path)
+    generate_vulkan(input_file, glsl_path, enable_optimizations, chunk_size)
     cmd = [
         "glslc", "-fshader-stage=compute", "-o", output_spv,
         "--target-env=vulkan1.2", glsl_path,
@@ -82,8 +83,8 @@ def compile_vulkan(input_file: str, output_spv: str) -> None:
     print(f"Compiled SPIR-V -> {output_spv}")
 
 
-def generate_cpp_stub(filename: str, output: str) -> None:
-    program = compile(filename)
+def generate_cpp_stub(filename: str, output: str, enable_optimizations: bool = True, chunk_size: int = 8) -> None:
+    program = compile(filename, enable_optimizations, chunk_size)
     visitor = VulkanCppStubVisitor()
     stub = program.accept(visitor)
     with open(output, "w") as f:
@@ -109,21 +110,35 @@ if __name__ == "__main__":
         metavar="OUTPUT_HPP",
         help="Generate C++ stub header for kernel dispatch",
     )
+    _parser.add_argument(
+        "--no-optimize",
+        action="store_true",
+        help="Disable optimization passes before code generation",
+    )
+    _parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=8,
+        help="Reduction chunk size for shared-memory tiling optimizations",
+    )
     args = _parser.parse_args()
+    enable_optimizations = not args.no_optimize
+    if args.chunk_size <= 0:
+        _parser.error("--chunk-size must be positive")
 
     if args.vulkan or args.compile:
         if not args.file:
             _parser.error("--vulkan and --compile require an input FILE argument")
         if args.vulkan:
-            generate_vulkan(args.file, args.vulkan)
+            generate_vulkan(args.file, args.vulkan, enable_optimizations, args.chunk_size)
         elif args.compile:
-            compile_vulkan(args.file, args.compile)
+            compile_vulkan(args.file, args.compile, enable_optimizations, args.chunk_size)
     elif args.cpp_stub:
         if not args.file:
             _parser.error("--cpp-stub requires an input FILE argument")
-        generate_cpp_stub(args.file, args.cpp_stub)
+        generate_cpp_stub(args.file, args.cpp_stub, enable_optimizations, args.chunk_size)
     else:
         # Default: prettyprint all files
         for path in _sys_mod.argv[1:]:
-            program = compile(path)
+            program = compile(path, enable_optimizations, args.chunk_size)
             print(prettyprint(program))

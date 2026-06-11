@@ -1,229 +1,74 @@
 """Optimization passes for Program AST."""
 
-import copy
-
 from codegen.ast.program import Program
 from codegen.ast.statement import (
     ForLoopWithConditionAndIncrement,
-    Declaration,
     Assignment,
     Condition,
 )
-from codegen.ast.expression import BinaryExpr, Identifier, Number, ArrayAccess
-from codegen.ast.type import Int
+from codegen.ast.expression import BinaryExpr, Identifier, Number
+from codegen.ast.workgroup import WorkgroupProperties
 
 
 BLOCK_SIZE = 8
 
 
-def perform_blocking(program: Program) -> Program:
-    new_body_stmts = []
+def perform_blocking(program: Program, chunk_size: int = BLOCK_SIZE) -> Program:
+    blocked = False
+    reduction_bound = 0
     for stmt in program.body_stmts:
         if not isinstance(stmt, ForLoopWithConditionAndIncrement):
-            new_body_stmts.append(stmt)
             continue
-        result = _try_block_loop(stmt, program)
-        if result is None:
-            new_body_stmts.append(stmt)
-        else:
-            new_body_stmts.extend(result)
-    program.body_stmts = new_body_stmts
-    # Mark as tiled so downstream visitors know to adjust dispatch dimensions
-    program.tiled = True
-    program.tile_block_size = BLOCK_SIZE
+        if _can_block_loop(stmt, program):
+            blocked = True
+            condition = getattr(stmt, "condition", None)
+            reduction_bound = _extract_number(getattr(condition, "rhs", None)) or reduction_bound
+
+    # Mark as tiled only when a blockable inner-product loop was found.  The
+    # Vulkan backend lowers this to a real local workgroup size and emits a
+    # cooperative shared-memory tile for recognized matrix reductions.
+    program.tiled = blocked
+    program.tile_block_size = BLOCK_SIZE if blocked else 1
+    program.use_shared_memory_tiling = blocked and program.space_dim == 2
+    program.shared_memory_chunk_size = chunk_size if program.use_shared_memory_tiling else 1
+    program.reduction_chunk_size = chunk_size if program.use_shared_memory_tiling else 0
+    if program.use_shared_memory_tiling and reduction_bound:
+        program.reduction_chunks = (reduction_bound + chunk_size - 1) // chunk_size
+    else:
+        program.reduction_chunks = 1
+    if blocked and not program.workgroups:
+        y_size = BLOCK_SIZE if program.space_dim >= 2 else 1
+        program.workgroups.append(
+            WorkgroupProperties(
+                x_expr=Number(BLOCK_SIZE),
+                y_expr=Number(y_size),
+                z_expr=Number(1),
+            )
+        )
     return program
 
 
-def _try_block_loop(loop, program):
+def _can_block_loop(loop, program):
     condition = getattr(loop, "condition", None)
     if not isinstance(condition, Condition):
-        return None
+        return False
     upper_bound = _extract_number(condition.rhs)
     if upper_bound is None or upper_bound < BLOCK_SIZE:
-        return None
+        return False
     loop_var_name = _get_loop_var(loop)
     if not loop_var_name:
-        return None
+        return False
     accu_vars = _find_accumulators_in_loop(loop)
     if not accu_vars:
-        return None
+        return False
     if not _has_inner_product_pattern(loop):
-        return None
+        return False
     if not hasattr(program, "loop_vars") or not program.loop_vars:
-        return None
+        return False
     outer_bounds = _get_outer_bounds(program)
     if not outer_bounds:
-        return None
-    return _build_tiled_loop(loop, loop_var_name, upper_bound, accu_vars, outer_bounds)
-
-
-def _build_tiled_loop(original_loop, loop_var_name, upper_bound, accu_vars, outer_bounds):
-    body_stmts = []
-
-    # Reset accumulators using Assignment to avoid variable shadowing
-    for var in accu_vars:
-        body_stmts.append(Assignment(
-            lvalue=Identifier(var),
-            assign_op="=",
-            rvalue=Number(0),
-        ))
-
-    tile_loops = []
-    last_dim_idx = len(outer_bounds) - 1
-
-    for dim_idx in range(last_dim_idx):
-        outer_var, bound = outer_bounds[dim_idx]
-        num_tiles = (bound + BLOCK_SIZE - 1) // BLOCK_SIZE
-        tl = ForLoopWithConditionAndIncrement(
-            loop_var_type=_make_int_type(),
-            loop_var_name="tile_" + outer_var,
-            condition=Condition(Identifier("tile_" + outer_var), "<", Number(num_tiles)),
-            increment_var="tile_" + outer_var,
-            increment_op="++",
-            init_expr=Number(0),
-            body_stmts=[],
-        )
-        tile_loops.append(tl)
-
-    last_outer_var, last_bound = outer_bounds[-1]
-    num_tiles_last = (last_bound + BLOCK_SIZE - 1) // BLOCK_SIZE
-
-    inner_tile_loop = ForLoopWithConditionAndIncrement(
-        loop_var_type=_make_int_type(),
-        loop_var_name="tile_" + last_outer_var,
-        condition=Condition(Identifier("tile_" + last_outer_var), "<", Number(num_tiles_last)),
-        increment_var="tile_" + last_outer_var,
-        increment_op="++",
-        init_expr=Number(0),
-        body_stmts=list(body_stmts),
-    )
-
-    block_var_type = Int("int")
-    
-    # block_start/block_end cover the FULL original reduction dimension
-    # (not just BLOCK_SIZE) so each workgroup computes one output element
-    orig_upper_bound = _extract_number(getattr(original_loop, "condition", None))
-    if orig_upper_bound is not None:
-        pass  # use upper_bound below
-    block_range = upper_bound if upper_bound else 1024
-    
-    inner_tile_loop.body_stmts.append(Declaration(
-        is_const=True,
-        var_type=block_var_type,
-        name="block_start",
-        init_expr=Number(0),
-    ))
-
-    inner_tile_loop.body_stmts.append(Declaration(
-        is_const=True,
-        var_type=block_var_type,
-        name="block_end",
-        init_expr=Number(block_range),
-    ))
-
-    replacement_loop = _build_replacement_loop(original_loop, loop_var_name)
-    inner_tile_loop.body_stmts.append(replacement_loop)
-
-    current_innermost = inner_tile_loop
-    for tl in reversed(tile_loops):
-        new_tl = ForLoopWithConditionAndIncrement(
-            loop_var_type=tl.loop_var_type,
-            loop_var_name=tl.loop_var_name,
-            condition=Condition(getattr(tl.condition, "lhs", Identifier("x")),
-                              getattr(tl.condition, "op", "<"),
-                              Number(getattr(tl.condition, "rhs", Number(0)).value)),
-            increment_var=tl.increment_var,
-            increment_op="++",
-            init_expr=Number(0),
-            body_stmts=[],
-        )
-        new_tl.body_stmts.append(copy.deepcopy(current_innermost))
-        current_innermost = new_tl
-
-    return [current_innermost]
-
-
-def _build_replacement_loop(original_loop, loop_var_name):
-    condition = getattr(original_loop, "condition", None)
-    upper_bound = _extract_number(getattr(condition, "rhs", None)) if condition else 0
-    if not upper_bound:
-        upper_bound = 1024
-
-    # Use Int("int") for the inner loop variable to avoid mixing uint64_t with int 
-    # in array index expressions (e.g., A[(1024 * i) + k] where i is int)
-    
-    inner = ForLoopWithConditionAndIncrement(
-        loop_var_type=Int("int"),
-        loop_var_name="k",
-        condition=Condition(Identifier("k"), "<", Identifier("block_end")),
-        increment_var="k",
-        increment_op="++",
-        init_expr=Identifier("block_start"),
-        body_stmts=[],
-    )
-
-    transformed = []
-    for s in original_loop.body_stmts:
-        new_s = _transform_block_stmt(s, loop_var_name)
-        if new_s is not None:
-            transformed.append(new_s)
-
-    inner.body_stmts = transformed
-    return inner
-
-
-def _transform_block_stmt(stmt, loop_var_name):
-    if stmt is None:
-        return None
-    new_stmt = copy.deepcopy(stmt)
-    if isinstance(new_stmt, Declaration):
-        init_expr = getattr(new_stmt, "init_expr", None)
-        if init_expr and _refers_to_var(init_expr, loop_var_name):
-            return None
-        if init_expr:
-            new_stmt.init_expr = _replace_refs_in_expr(init_expr, loop_var_name)
-    elif isinstance(new_stmt, Assignment):
-        lvalue = getattr(new_stmt, "lvalue", None)
-        rvalue = getattr(new_stmt, "rvalue", None)
-        if lvalue:
-            new_stmt.lvalue = _replace_refs_in_expr(lvalue, loop_var_name)
-        if rvalue:
-            new_stmt.rvalue = _replace_refs_in_expr(rvalue, loop_var_name)
-    return new_stmt
-
-
-def _replace_refs_in_expr(expr, old_name):
-    if expr is None:
-        return None
-    if isinstance(expr, Identifier) and getattr(expr, "name", "") == old_name:
-        return Identifier("k")
-    new_expr = copy.deepcopy(expr)
-    for attr in ("lhs", "rhs", "left", "right", "operand", "base"):
-        if hasattr(new_expr, attr):
-            child = getattr(new_expr, attr)
-            setattr(new_expr, attr, _replace_refs_in_expr(child, old_name))
-    if hasattr(new_expr, "indices"):
-        new_indices = []
-        for idx in new_expr.indices:
-            new_indices.append(_replace_refs_in_expr(idx, old_name))
-        new_expr.indices = new_indices
-    return new_expr
-
-
-def _refers_to_var(expr, var_name):
-    if expr is None:
         return False
-    if isinstance(expr, Identifier) and getattr(expr, "name", "") == var_name:
-        return True
-    for attr in ("lhs", "rhs", "left", "right", "base"):
-        child = getattr(expr, attr, None)
-        if _refers_to_var(child, var_name):
-            return True
-    if hasattr(expr, "indices"):
-        for idx in expr.indices:
-            if _refers_to_var(idx, var_name):
-                return True
-    return False
+    return True
 
 
 def _get_loop_var(loop):
@@ -306,11 +151,6 @@ def _contains_binary_mult(node):
         if _contains_binary_mult(node.rvalue):
             return True
     return False
-
-
-def _make_int_type():
-    from codegen.ast.type import Int
-    return Int("int")
 
 
 def _extract_number(expr):

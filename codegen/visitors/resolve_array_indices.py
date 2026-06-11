@@ -20,6 +20,7 @@ from codegen.ast.program import *
 from codegen.ast.expression import *
 from codegen.ast.statement import *
 from codegen.ast.type import *
+from codegen.ast.workgroup import WorkgroupProperties
 
 
 class ResolveArrayIndicesVisitor(Expression):
@@ -462,6 +463,11 @@ class ResolveArrayIndicesVisitor(Expression):
             workgroups=workgroups or node.workgroups,
             tiled=getattr(node, 'tiled', False),
             tile_block_size=getattr(node, 'tile_block_size', 1),
+            reduction_chunk_size=getattr(node, 'reduction_chunk_size', 0),
+            reduction_chunks=getattr(node, 'reduction_chunks', 1),
+            reduction_chunk_var=getattr(node, 'reduction_chunk_var', ''),
+            use_shared_memory_tiling=getattr(node, 'use_shared_memory_tiling', False),
+            shared_memory_chunk_size=getattr(node, 'shared_memory_chunk_size', 1),
             _source_filename=getattr(node, '_source_filename', ''),
         )
 
