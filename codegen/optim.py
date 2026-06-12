@@ -48,6 +48,33 @@ def perform_blocking(program: Program, chunk_size: int = BLOCK_SIZE) -> Program:
     return program
 
 
+def perform_cooperative_matrix2(program: Program, chunk_size: int = BLOCK_SIZE) -> Program:
+    blocked = False
+    for stmt in program.body_stmts:
+        if not isinstance(stmt, ForLoopWithConditionAndIncrement):
+            continue
+        if _can_block_loop(stmt, program):
+            blocked = True
+
+    program.tiled = blocked
+    program.tile_block_size = BLOCK_SIZE if blocked else 1
+    program.use_shared_memory_tiling = False
+    program.shared_memory_chunk_size = 1
+    program.reduction_chunk_size = 0
+    program.reduction_chunks = 1
+    program.use_cooperative_matrix2 = blocked and program.space_dim == 2
+    program.cooperative_matrix2_chunk_size = chunk_size if program.use_cooperative_matrix2 else 1
+    if blocked and not program.workgroups:
+        program.workgroups.append(
+            WorkgroupProperties(
+                x_expr=Number(BLOCK_SIZE),
+                y_expr=Number(BLOCK_SIZE),
+                z_expr=Number(1),
+            )
+        )
+    return program
+
+
 def _can_block_loop(loop, program):
     condition = getattr(loop, "condition", None)
     if not isinstance(condition, Condition):

@@ -96,6 +96,12 @@ class VulkanKernelVisitor(Visitor):
         names = [p.name for p in node.params if isinstance(p, Declaration)]
         return names == ["A1", "B1", "A2", "B2", "A3", "B3", "C"]
 
+    def _is_cooperative_matrix2_multi_arg(self, node: Program) -> bool:
+        if not getattr(node, "use_cooperative_matrix2", False):
+            return False
+        names = [p.name for p in node.params if isinstance(p, Declaration)]
+        return names == ["A1", "B1", "A2", "B2", "A3", "B3", "C"]
+
     # ── helpers ────────────────────────────────────────────────────────
 
     def _indent(self) -> str:
@@ -453,6 +459,60 @@ class VulkanKernelVisitor(Visitor):
         self._pop()
         self._emit("}")
 
+    def _emit_cooperative_matrix2_multi_arg_body(self, tile_size: int, chunk_size: int) -> None:
+        self._emit("void main() {")
+        self._push()
+        self._emit("const uint tile_row = gl_WorkGroupID.x;")
+        self._emit("const uint tile_col = gl_WorkGroupID.y;")
+        self._emit("")
+        self._emit("tensorLayoutNV<2> tensorLayoutA = createTensorLayoutNV(2);")
+        self._emit("tensorLayoutNV<2> tensorLayoutB = createTensorLayoutNV(2);")
+        self._emit("tensorLayoutNV<2> tensorLayoutC = createTensorLayoutNV(2);")
+        self._emit("tensorLayoutA = setTensorLayoutDimensionNV(tensorLayoutA, 1024, 1024);")
+        self._emit("tensorLayoutB = setTensorLayoutDimensionNV(tensorLayoutB, 1024, 1024);")
+        self._emit("tensorLayoutC = setTensorLayoutDimensionNV(tensorLayoutC, 1024, 1024);")
+        self._emit("")
+        self._emit(
+            f"coopmat<float, gl_ScopeWorkgroup, {tile_size}, {tile_size}, gl_MatrixUseAccumulator> result = "
+            f"coopmat<float, gl_ScopeWorkgroup, {tile_size}, {tile_size}, gl_MatrixUseAccumulator>(0.0);"
+        )
+        self._emit("")
+        self._emit(f"for (uint chunkK = 0; chunkK < 1024; chunkK += {chunk_size}) {{")
+        self._push()
+        for suffix in ("1", "2", "3"):
+            self._emit(
+                f"coopmat<float, gl_ScopeWorkgroup, {tile_size}, {chunk_size}, gl_MatrixUseA> matrixA{suffix};"
+            )
+            self._emit(
+                f"coopmat<float, gl_ScopeWorkgroup, {chunk_size}, {tile_size}, gl_MatrixUseB> matrixB{suffix};"
+            )
+            self._emit(
+                f"coopMatLoadTensorNV(matrixA{suffix}, A{suffix}, 0, "
+                f"sliceTensorLayoutNV(tensorLayoutA, {tile_size} * tile_row, {tile_size}, chunkK, {chunk_size}));"
+            )
+            self._emit(
+                f"coopMatLoadTensorNV(matrixB{suffix}, B{suffix}, 0, "
+                f"sliceTensorLayoutNV(tensorLayoutB, chunkK, {chunk_size}, {tile_size} * tile_col, {tile_size}));"
+            )
+            self._emit(f"result = coopMatMulAdd(matrixA{suffix}, matrixB{suffix}, result);")
+        self._pop()
+        self._emit("}")
+        self._emit("")
+        self._emit(
+            f"coopmat<float, gl_ScopeWorkgroup, {tile_size}, {tile_size}, gl_MatrixUseAccumulator> matrixC;"
+        )
+        self._emit(
+            f"coopMatLoadTensorNV(matrixC, C, 0, "
+            f"sliceTensorLayoutNV(tensorLayoutC, {tile_size} * tile_row, {tile_size}, {tile_size} * tile_col, {tile_size}));"
+        )
+        self._emit("result = result + matrixC;")
+        self._emit(
+            f"coopMatStoreTensorNV(result, C, 0, "
+            f"sliceTensorLayoutNV(tensorLayoutC, {tile_size} * tile_row, {tile_size}, {tile_size} * tile_col, {tile_size}));"
+        )
+        self._pop()
+        self._emit("}")
+
     # ── Program visitor (main entry point) ────────────────────────────
 
 
@@ -499,6 +559,10 @@ class VulkanKernelVisitor(Visitor):
         self._emit("#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require")
         self._emit("#extension GL_KHR_shader_subgroup_arithmetic : require")
         self._emit("#extension GL_KHR_shader_subgroup_clustered : require")
+        if getattr(node, "use_cooperative_matrix2", False):
+            self._emit("#extension GL_KHR_memory_scope_semantics : require")
+            self._emit("#extension GL_KHR_cooperative_matrix : require")
+            self._emit("#extension GL_NV_cooperative_matrix2 : require")
         if self._uses_reduction_chunks:
             self._emit("#extension GL_EXT_shader_atomic_float : require")
         wg_x, wg_y, wg_z = self._workgroup_size(node)
@@ -589,6 +653,14 @@ class VulkanKernelVisitor(Visitor):
             self._emit_shared_memory_multi_arg_body(
                 getattr(node, "tile_block_size", 8),
                 getattr(node, "shared_memory_chunk_size", 8),
+            )
+            return self.result()
+
+        if self._is_cooperative_matrix2_multi_arg(node):
+            self._emit("")
+            self._emit_cooperative_matrix2_multi_arg_body(
+                getattr(node, "tile_block_size", 8),
+                getattr(node, "cooperative_matrix2_chunk_size", 8),
             )
             return self.result()
 

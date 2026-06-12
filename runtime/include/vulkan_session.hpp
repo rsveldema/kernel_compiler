@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <cctype>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -40,12 +41,12 @@ struct VulkanDimension
 class VulkanSession
 {
 public:
-    VulkanSession()
+    explicit VulkanSession(bool enable_cooperative_matrix2 = false)
     {
         VkApplicationInfo ai{};
         ai.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         ai.pApplicationName = "kernel_compiler_tests";
-        ai.apiVersion = VK_API_VERSION_1_0;
+        ai.apiVersion = enable_cooperative_matrix2 ? VK_API_VERSION_1_4 : VK_API_VERSION_1_0;
         ai.pEngineName = "kernel_compiler";
         ai.engineVersion = VK_MAKE_VERSION(1, 0, 0);
 
@@ -78,20 +79,35 @@ public:
             return;
         }
 
-        // Select device by VULKAN_DEVICE env var (default: "llvmpipe")
+        // Select device by VULKAN_DEVICE env var. By default, prefer a non-llvmpipe
+        // device when the loader exposes one, but still fall back to llvmpipe-only setups.
         m_phys_dev = devs[0]; /* fallback */
         const char *chosen = getenv("VULKAN_DEVICE");
-        if (!chosen)
-            chosen = "llvmpipe";
-        for (auto &dev : devs)
+        if (chosen)
         {
-            VkPhysicalDeviceProperties props{};
-            vkGetPhysicalDeviceProperties(dev, &props);
-            if (strstr(props.deviceName, chosen))
+            for (auto &dev : devs)
             {
-                m_phys_dev = dev;
-                fprintf(stderr, "init_vulkan_instance: selecting device \"%s\"\n", props.deviceName);
-                break;
+                VkPhysicalDeviceProperties props{};
+                vkGetPhysicalDeviceProperties(dev, &props);
+                if (strstr(props.deviceName, chosen))
+                {
+                    m_phys_dev = dev;
+                    fprintf(stderr, "init_vulkan_instance: selecting device \"%s\"\n", props.deviceName);
+                    break;
+                }
+            }
+        }
+        else
+        {
+            for (auto &dev : devs)
+            {
+                VkPhysicalDeviceProperties props{};
+                vkGetPhysicalDeviceProperties(dev, &props);
+                if (!device_name_contains(props.deviceName, "llvmpipe"))
+                {
+                    m_phys_dev = dev;
+                    break;
+                }
             }
         }
 
@@ -117,10 +133,55 @@ public:
         dqi.queueCount = 1;
         dqi.pQueuePriorities = &prio;
 
+        std::vector<const char*> device_extensions;
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR coopmat_features{};
+        VkPhysicalDeviceCooperativeMatrix2FeaturesNV coopmat2_features{};
+
+        if (enable_cooperative_matrix2)
+        {
+            if (!has_device_extension(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME) ||
+                !has_device_extension(VK_NV_COOPERATIVE_MATRIX_2_EXTENSION_NAME))
+            {
+                m_coopmat2_unavailable_reason =
+                    "device does not expose VK_KHR_cooperative_matrix and VK_NV_cooperative_matrix2";
+            }
+            else
+            {
+                coopmat2_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_2_FEATURES_NV;
+                coopmat_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR;
+                coopmat_features.pNext = &coopmat2_features;
+
+                VkPhysicalDeviceFeatures2 features2{};
+                features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+                features2.pNext = &coopmat_features;
+                vkGetPhysicalDeviceFeatures2(m_phys_dev, &features2);
+
+                if (!coopmat_features.cooperativeMatrix ||
+                    !coopmat2_features.cooperativeMatrixWorkgroupScope ||
+                    !coopmat2_features.cooperativeMatrixTensorAddressing ||
+                    !coopmat2_features.cooperativeMatrixBlockLoads)
+                {
+                    m_coopmat2_unavailable_reason =
+                        "device exposes cooperative matrix extensions but not the required coopmat2 features";
+                    coopmat_features = {};
+                    coopmat2_features = {};
+                }
+                else
+                {
+                    device_extensions.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+                    device_extensions.push_back(VK_NV_COOPERATIVE_MATRIX_2_EXTENSION_NAME);
+                    m_coopmat2_enabled = true;
+                }
+            }
+        }
+
         VkDeviceCreateInfo dci{};
         dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         dci.queueCreateInfoCount = 1;
         dci.pQueueCreateInfos = &dqi;
+        dci.enabledExtensionCount = static_cast<uint32_t>(device_extensions.size());
+        dci.ppEnabledExtensionNames = device_extensions.empty() ? nullptr : device_extensions.data();
+        dci.pNext = m_coopmat2_enabled ? &coopmat_features : nullptr;
 
         rc = vkCreateDevice(m_phys_dev, &dci, nullptr, &m_device);
         if (rc != VK_SUCCESS)
@@ -139,6 +200,8 @@ public:
     VkQueue get_queue() const { return m_queue; }
     uint32_t get_queue_family_index() const { return m_queue_fi; }
     VkPhysicalDevice get_phys_device() const { return m_phys_dev; }
+    bool cooperative_matrix2_enabled() const { return m_coopmat2_enabled; }
+    const std::string& cooperative_matrix2_unavailable_reason() const { return m_coopmat2_unavailable_reason; }
 
     ~VulkanSession()
     {
@@ -155,11 +218,53 @@ public:
     }
 
 protected:
+    static bool device_name_contains(const char* device_name, const char* needle)
+    {
+        if (!device_name || !needle)
+            return false;
+
+        const size_t needle_len = strlen(needle);
+        if (needle_len == 0)
+            return true;
+
+        for (const char* pos = device_name; *pos; ++pos)
+        {
+            size_t i = 0;
+            for (; i < needle_len && pos[i]; ++i)
+            {
+                const auto lhs = static_cast<unsigned char>(pos[i]);
+                const auto rhs = static_cast<unsigned char>(needle[i]);
+                if (std::tolower(lhs) != std::tolower(rhs))
+                    break;
+            }
+            if (i == needle_len)
+                return true;
+        }
+        return false;
+    }
+
+    bool has_device_extension(const char* name) const
+    {
+        uint32_t count = 0;
+        vkEnumerateDeviceExtensionProperties(m_phys_dev, nullptr, &count, nullptr);
+        std::vector<VkExtensionProperties> extensions(count);
+        if (count > 0)
+            vkEnumerateDeviceExtensionProperties(m_phys_dev, nullptr, &count, extensions.data());
+        for (const auto& ext : extensions)
+        {
+            if (strcmp(ext.extensionName, name) == 0)
+                return true;
+        }
+        return false;
+    }
+
     VkInstance m_instance = VK_NULL_HANDLE;
     VkPhysicalDevice m_phys_dev = VK_NULL_HANDLE;
     VkDevice m_device = VK_NULL_HANDLE;
     VkQueue m_queue = VK_NULL_HANDLE;
     uint32_t m_queue_fi = 0xFFFFFFFFu;
+    bool m_coopmat2_enabled = false;
+    std::string m_coopmat2_unavailable_reason;
 };
 
 // ───────────── VulkanComputeContext: bundles device ptr for RAII ────
@@ -296,7 +401,11 @@ private:
         if (fd < 0)
             throw std::runtime_error("mkstemp failed");
 
-        FILE *fp = popen(("glslc -x glsl -O -fshader-stage=compute " + glsl_file + " -o -").c_str(), "r");
+        std::string glslc_cmd = "glslc -x glsl -O -fshader-stage=compute ";
+        if (glsl_file.find("coopmat2") != std::string::npos)
+            glslc_cmd += "--target-env=vulkan1.4 ";
+        glslc_cmd += glsl_file + " -o -";
+        FILE *fp = popen(glslc_cmd.c_str(), "r");
         if (!fp)
         {
             close(fd);
@@ -543,15 +652,14 @@ public:
         VkMemoryRequirements mem_req{};
         vkGetBufferMemoryRequirements(m_session.get_device(), buf_, &mem_req);
 
-        /* Prefer device-local memory */
+        /* Tests write/read buffers directly, so memory must be host-mappable. */
         mem_type_idx_ = find_mem_type(m_session.get_phys_device(), mem_req.memoryTypeBits,
-                                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         if (mem_type_idx_ == 0xFFFFFFFFu)
         {
-            /* fallback: host-visible + coherent for direct access */
             mem_type_idx_ = find_mem_type(m_session.get_phys_device(), mem_req.memoryTypeBits,
-                                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
         }
 
         VkMemoryAllocateInfo ai{};
@@ -619,19 +727,22 @@ public:
 
     void write(const void *src, VkDeviceSize offset = 0, VkDeviceSize count = VK_WHOLE_SIZE)
     {
+        if (count == VK_WHOLE_SIZE)
+            count = size_ - offset;
         void *mapped;
         check_vk(vkMapMemory(m_session.get_device(), mem_, offset, count, 0, &mapped), "VBuffer::write map");
-        std::memcpy(static_cast<char *>(mapped) + offset, src, static_cast<size_t>(count));
+        std::memcpy(mapped, src, static_cast<size_t>(count));
         vkUnmapMemory(m_session.get_device(), mem_);
     }
 
     std::vector<uint8_t> read(VkDeviceSize offset = 0, VkDeviceSize count = VK_WHOLE_SIZE)
     {
+        if (count == VK_WHOLE_SIZE)
+            count = size_ - offset;
         void *mapped;
         check_vk(vkMapMemory(m_session.get_device(), mem_, offset, count, 0, &mapped), "VBuffer::read map");
         std::vector<uint8_t> data(static_cast<size_t>(count));
-        std::memcpy(data.data(), static_cast<const char *>(mapped) + offset,
-                    static_cast<size_t>(count));
+        std::memcpy(data.data(), mapped, static_cast<size_t>(count));
         vkUnmapMemory(m_session.get_device(), mem_);
         return data;
     }

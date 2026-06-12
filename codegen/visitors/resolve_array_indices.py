@@ -468,6 +468,8 @@ class ResolveArrayIndicesVisitor(Expression):
             reduction_chunk_var=getattr(node, 'reduction_chunk_var', ''),
             use_shared_memory_tiling=getattr(node, 'use_shared_memory_tiling', False),
             shared_memory_chunk_size=getattr(node, 'shared_memory_chunk_size', 1),
+            use_cooperative_matrix2=getattr(node, 'use_cooperative_matrix2', False),
+            cooperative_matrix2_chunk_size=getattr(node, 'cooperative_matrix2_chunk_size', 8),
             _source_filename=getattr(node, '_source_filename', ''),
         )
 

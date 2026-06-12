@@ -25,6 +25,8 @@ class Program(AstNode):
         reduction_chunk_var="",
         use_shared_memory_tiling=False,
         shared_memory_chunk_size=1,
+        use_cooperative_matrix2=False,
+        cooperative_matrix2_chunk_size=8,
         _source_filename="",
     ):
         self.header = header
@@ -51,6 +53,8 @@ class Program(AstNode):
         self.reduction_chunk_var = reduction_chunk_var
         self.use_shared_memory_tiling = use_shared_memory_tiling
         self.shared_memory_chunk_size = shared_memory_chunk_size
+        self.use_cooperative_matrix2 = use_cooperative_matrix2
+        self.cooperative_matrix2_chunk_size = cooperative_matrix2_chunk_size
         self._source_filename = _source_filename
 
     @property

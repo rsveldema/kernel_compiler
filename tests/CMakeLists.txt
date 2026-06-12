@@ -122,6 +122,39 @@ foreach(chunk_size 1 2 4 8 16 32 64)
     )
 endforeach()
 
+foreach(chunk_size 8 16 32)
+    set(MULTI_ARG_COOPMAT2_GLSL "${GENERATED_DIR}/multi-arg-coopmat2-chunk-${chunk_size}.glsl")
+    list(APPEND GENERATED_KERNEL_SRCS ${MULTI_ARG_COOPMAT2_GLSL})
+    add_custom_command(
+        OUTPUT "${MULTI_ARG_COOPMAT2_GLSL}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${GENERATED_DIR}"
+        COMMAND env PYTHONPATH="${CMAKE_SOURCE_DIR}:/tmp/pylib:${PYTHONPATH}"
+            ${Python3_EXECUTABLE}
+            "${CMAKE_SOURCE_DIR}/codegen/compile.py"
+            --coopmat2
+            --chunk-size "${chunk_size}"
+            --vulkan "${MULTI_ARG_COOPMAT2_GLSL}"
+            "${CMAKE_SOURCE_DIR}/testdata/multi-arg.kernel"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS
+            "${CMAKE_SOURCE_DIR}/codegen/compile.py"
+            "${CMAKE_SOURCE_DIR}/codegen/parser.py"
+            "${CMAKE_SOURCE_DIR}/codegen/transforms.py"
+            "${CMAKE_SOURCE_DIR}/codegen/optim.py"
+            "${CMAKE_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
+            "${CMAKE_SOURCE_DIR}/codegen/visitors/visitor.py"
+            "${CMAKE_SOURCE_DIR}/codegen/visitors/resolve_array_indices.py"
+            "${CMAKE_SOURCE_DIR}/codegen/ast/__init__.py"
+            "${CMAKE_SOURCE_DIR}/codegen/ast/program.py"
+            "${CMAKE_SOURCE_DIR}/codegen/ast/type.py"
+            "${CMAKE_SOURCE_DIR}/codegen/ast/expression.py"
+            "${CMAKE_SOURCE_DIR}/codegen/ast/statement.py"
+            "${CMAKE_SOURCE_DIR}/codegen/ast/ast_node.py"
+            "${CMAKE_SOURCE_DIR}/testdata/multi-arg.kernel"
+        COMMENT "Generating VK_NV_cooperative_matrix2 shader for multi-arg.kernel chunk size ${chunk_size}"
+    )
+endforeach()
+
 add_custom_target(all_generated_stubs ALL DEPENDS ${GENERATED_KERNEL_SRCS})
 
 
