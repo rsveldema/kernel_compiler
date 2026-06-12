@@ -379,119 +379,384 @@ static inline uint32_t find_mem_type(VkPhysicalDevice pdev, uint32_t type_filter
     return 0xFFFFFFFFu;
 }
 
-class VBuffer
+static inline void create_bound_buffer(
+    VulkanSession& session,
+    VkDeviceSize size_bytes,
+    VkBufferUsageFlags usage,
+    VkMemoryPropertyFlags preferred_props,
+    VkBuffer& buffer,
+    VkDeviceMemory& memory,
+    uint32_t& mem_type_idx,
+    const char* label)
+{
+    VkBufferCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    ci.size = size_bytes;
+    ci.usage = usage;
+    check_vk(vkCreateBuffer(session.get_device(), &ci, nullptr, &buffer), label);
+
+    VkMemoryRequirements mem_req{};
+    vkGetBufferMemoryRequirements(session.get_device(), buffer, &mem_req);
+
+    mem_type_idx = find_mem_type(session.get_phys_device(), mem_req.memoryTypeBits, preferred_props);
+    if (mem_type_idx == 0xFFFFFFFFu && (preferred_props & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
+        mem_type_idx = find_mem_type(session.get_phys_device(), mem_req.memoryTypeBits, 0);
+    if (mem_type_idx == 0xFFFFFFFFu &&
+        (preferred_props & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+        (preferred_props & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
+    {
+        mem_type_idx = find_mem_type(
+            session.get_phys_device(),
+            mem_req.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+    }
+    if (mem_type_idx == 0xFFFFFFFFu)
+        throw std::runtime_error(std::string(label) + ": no suitable memory type");
+
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = mem_req.size;
+    ai.memoryTypeIndex = mem_type_idx;
+    check_vk(vkAllocateMemory(session.get_device(), &ai, nullptr, &memory), label);
+    check_vk(vkBindBufferMemory(session.get_device(), buffer, memory, 0), label);
+}
+
+class VBaseHostBuffer
 {
 public:
-    VBuffer(VulkanSession &session, VkDeviceSize size_bytes)
+    VBaseHostBuffer(VulkanSession &session, VkDeviceSize size_bytes)
         : m_session(session)
     {
-        VkBufferCreateInfo ci{};
-        ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        ci.size = size_bytes;
-        ci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                   VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                   VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        check_vk(vkCreateBuffer(m_session.get_device(), &ci, nullptr, &buf_), "VBuffer::create");
-
-        VkMemoryRequirements mem_req{};
-        vkGetBufferMemoryRequirements(m_session.get_device(), buf_, &mem_req);
-
-        /* Tests write/read buffers directly, so memory must be host-mappable. */
-        mem_type_idx_ = find_mem_type(m_session.get_phys_device(), mem_req.memoryTypeBits,
-                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        if (mem_type_idx_ == 0xFFFFFFFFu)
-        {
-            mem_type_idx_ = find_mem_type(m_session.get_phys_device(), mem_req.memoryTypeBits,
-                                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
-        }
-
-        VkMemoryAllocateInfo ai{};
-        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        ai.allocationSize = mem_req.size;
-        ai.memoryTypeIndex = mem_type_idx_;
-        check_vk(vkAllocateMemory(m_session.get_device(), &ai, nullptr, &mem_), "VBuffer::alloc");
-
-        check_vk(vkBindBufferMemory(m_session.get_device(), buf_, mem_, 0), "VBuffer::bind");
         size_ = size_bytes;
+        create_bound_buffer(
+            m_session,
+            size_bytes,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            buf_,
+            mem_,
+            mem_type_idx_,
+            "VBaseHostBuffer");
+        void *mapped = nullptr;
+        check_vk(vkMapMemory(m_session.get_device(), mem_, 0, size_, 0, &mapped), "VBaseHostBuffer::map");
+        mapped_ = static_cast<uint8_t *>(mapped);
     }
 
+    VBaseHostBuffer(const VBaseHostBuffer&) = delete;
+    VBaseHostBuffer& operator=(const VBaseHostBuffer&) = delete;
 
-    VBuffer(const VBuffer&)             = delete;
-    VBuffer& operator=(const VBuffer&)   = delete;
-    /* Move constructor — transfers Vulkan resource ownership from |other|. */
-    VBuffer(VBuffer&& other)
+    VBaseHostBuffer(VBaseHostBuffer&& other)
         : m_session(other.m_session),
-          buf_(other.buf_), mem_(other.mem_), size_(other.size_), mem_type_idx_(other.mem_type_idx_)
+          buf_(other.buf_),
+          mem_(other.mem_),
+          mapped_(other.mapped_),
+          size_(other.size_),
+          mem_type_idx_(other.mem_type_idx_)
     {
-        other.buf_     = VK_NULL_HANDLE;
-        other.mem_     = VK_NULL_HANDLE;
-        other.size_    = 0;
+        other.buf_ = VK_NULL_HANDLE;
+        other.mem_ = VK_NULL_HANDLE;
+        other.mapped_ = nullptr;
+        other.size_ = 0;
         other.mem_type_idx_ = 0xFFFFFFFFu;
     }
 
-    VBuffer& operator=(VBuffer&& other)
+    VBaseHostBuffer& operator=(VBaseHostBuffer&& other)
     {
         if (this != &other)
         {
-            /* Release our own resources */
-            if (mem_ != VK_NULL_HANDLE)
-                vkFreeMemory(m_session.get_device(), mem_, nullptr);
-            if (buf_ != VK_NULL_HANDLE)
-                vkDestroyBuffer(m_session.get_device(), buf_, nullptr);
+            destroy_resources();
+            m_session = other.m_session;
+            buf_ = other.buf_;
+            mem_ = other.mem_;
+            mapped_ = other.mapped_;
+            size_ = other.size_;
+            mem_type_idx_ = other.mem_type_idx_;
 
-            /* Adopt |other|'s resources */
-            m_session         = other.m_session;
-            buf_              = other.buf_;
-            mem_              = other.mem_;
-            size_             = other.size_;
-            mem_type_idx_     = other.mem_type_idx_;
-
-            other.buf_       = VK_NULL_HANDLE;
-            other.mem_       = VK_NULL_HANDLE;
-            other.size_      = 0;
+            other.buf_ = VK_NULL_HANDLE;
+            other.mem_ = VK_NULL_HANDLE;
+            other.mapped_ = nullptr;
+            other.size_ = 0;
             other.mem_type_idx_ = 0xFFFFFFFFu;
         }
         return *this;
     }
 
-    ~VBuffer()
+    ~VBaseHostBuffer()
     {
-        if (mem_ != VK_NULL_HANDLE)
-            vkFreeMemory(m_session.get_device(), mem_, nullptr);
+        destroy_resources();
+    }
+
+    uint8_t* get() { return mapped_; }
+    const uint8_t* get() const { return mapped_; }
+    VkDeviceSize size() const { return size_; }
+    uint32_t mem_type_idx() const { return mem_type_idx_; }
+
+private:
+    friend class VDeviceBuffer;
+
+    VkBuffer vk_buffer() const { return buf_; }
+
+    bool host_memory_is_coherent() const
+    {
+        VkPhysicalDeviceMemoryProperties mp{};
+        vkGetPhysicalDeviceMemoryProperties(m_session.get_phys_device(), &mp);
+        return mem_type_idx_ < mp.memoryTypeCount &&
+            (mp.memoryTypes[mem_type_idx_].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    }
+
+    void flush()
+    {
+        if (host_memory_is_coherent())
+            return;
+        VkMappedMemoryRange range{};
+        range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+        range.memory = mem_;
+        range.offset = 0;
+        range.size = VK_WHOLE_SIZE;
+        check_vk(vkFlushMappedMemoryRanges(m_session.get_device(), 1, &range), "VBaseHostBuffer::write flush");
+    }
+
+    void invalidate()
+    {
+        if (host_memory_is_coherent())
+            return;
+        VkMappedMemoryRange range{};
+        range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+        range.memory = mem_;
+        range.offset = 0;
+        range.size = VK_WHOLE_SIZE;
+        check_vk(vkInvalidateMappedMemoryRanges(m_session.get_device(), 1, &range), "VBaseHostBuffer::read invalidate");
+    }
+
+    void destroy_resources()
+    {
+        if (mapped_)
+            vkUnmapMemory(m_session.get_device(), mem_);
         if (buf_ != VK_NULL_HANDLE)
             vkDestroyBuffer(m_session.get_device(), buf_, nullptr);
-        mem_ = static_cast<VkDeviceMemory>(VK_NULL_HANDLE);
-        buf_ = static_cast<VkBuffer>(VK_NULL_HANDLE);
+        if (mem_ != VK_NULL_HANDLE)
+            vkFreeMemory(m_session.get_device(), mem_, nullptr);
+        mapped_ = nullptr;
+        mem_ = VK_NULL_HANDLE;
+        buf_ = VK_NULL_HANDLE;
+    }
+
+    VulkanSession &m_session;
+
+    VkBuffer buf_ = VK_NULL_HANDLE;
+    VkDeviceMemory mem_ = VK_NULL_HANDLE;
+    uint8_t *mapped_ = nullptr;
+    VkDeviceSize size_ = 0;
+    uint32_t mem_type_idx_ = 0xFFFFFFFFu;
+};
+
+template <typename T>
+class VHostBuffer : public VBaseHostBuffer
+{
+public:
+    VHostBuffer(VulkanSession& session, size_t count)
+        : VBaseHostBuffer(session, static_cast<VkDeviceSize>(count) * sizeof(T)),
+          count_(count)
+    {
+    }
+
+    T* get() { return reinterpret_cast<T*>(VBaseHostBuffer::get()); }
+    const T* get() const { return reinterpret_cast<const T*>(VBaseHostBuffer::get()); }
+    T get(size_t index) const { return get()[index]; }
+    void set(size_t index, T value) { get()[index] = value; }
+    void fill(T value) { std::fill_n(get(), count_, value); }
+    size_t count() const { return count_; }
+
+private:
+    size_t count_ = 0;
+};
+
+class VDeviceBuffer
+{
+public:
+    VDeviceBuffer(VulkanSession &session, VkDeviceSize size_bytes)
+        : m_session(session)
+    {
+        size_ = size_bytes;
+        create_bound_buffer(
+            m_session,
+            size_bytes,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            buf_,
+            mem_,
+            mem_type_idx_,
+            "VDeviceBuffer");
+    }
+
+    VDeviceBuffer(const VDeviceBuffer&) = delete;
+    VDeviceBuffer& operator=(const VDeviceBuffer&) = delete;
+
+    VDeviceBuffer(VDeviceBuffer&& other)
+        : m_session(other.m_session),
+          buf_(other.buf_),
+          mem_(other.mem_),
+          size_(other.size_),
+          mem_type_idx_(other.mem_type_idx_)
+    {
+        other.buf_ = VK_NULL_HANDLE;
+        other.mem_ = VK_NULL_HANDLE;
+        other.size_ = 0;
+        other.mem_type_idx_ = 0xFFFFFFFFu;
+    }
+
+    VDeviceBuffer& operator=(VDeviceBuffer&& other)
+    {
+        if (this != &other)
+        {
+            destroy_resources();
+            m_session = other.m_session;
+            buf_ = other.buf_;
+            mem_ = other.mem_;
+            size_ = other.size_;
+            mem_type_idx_ = other.mem_type_idx_;
+
+            other.buf_ = VK_NULL_HANDLE;
+            other.mem_ = VK_NULL_HANDLE;
+            other.size_ = 0;
+            other.mem_type_idx_ = 0xFFFFFFFFu;
+        }
+        return *this;
+    }
+
+    ~VDeviceBuffer()
+    {
+        destroy_resources();
     }
 
     VkBuffer get() const { return buf_; }
     VkDeviceSize size() const { return size_; }
     uint32_t mem_type_idx() const { return mem_type_idx_; }
 
-    void write(const void *src, VkDeviceSize offset = 0, VkDeviceSize count = VK_WHOLE_SIZE)
+    void write(VBaseHostBuffer& src, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
     {
         if (count == VK_WHOLE_SIZE)
-            count = size_ - offset;
-        void *mapped;
-        check_vk(vkMapMemory(m_session.get_device(), mem_, offset, count, 0, &mapped), "VBuffer::write map");
-        std::memcpy(mapped, src, static_cast<size_t>(count));
-        vkUnmapMemory(m_session.get_device(), mem_);
+            count = src.size() - src_offset;
+        src.flush();
+        copy_buffer(src.vk_buffer(), buf_, src_offset, dst_offset, count);
     }
 
-    void read(uint8_t *dst, VkDeviceSize count, VkDeviceSize offset = 0)
+    void read(VBaseHostBuffer& dst, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
     {
         if (count == VK_WHOLE_SIZE)
-            count = size_ - offset;
-        if (!dst)
-            throw std::runtime_error("VBuffer::read dst is null");
-        void *mapped;
-        check_vk(vkMapMemory(m_session.get_device(), mem_, offset, count, 0, &mapped), "VBuffer::read map");
-        std::memcpy(dst, mapped, static_cast<size_t>(count));
-        vkUnmapMemory(m_session.get_device(), mem_);
+            count = dst.size() - dst_offset;
+        copy_buffer(buf_, dst.vk_buffer(), src_offset, dst_offset, count);
+        dst.invalidate();
     }
 
 private:
+    void copy_buffer(
+        VkBuffer src,
+        VkBuffer dst,
+        VkDeviceSize src_offset,
+        VkDeviceSize dst_offset,
+        VkDeviceSize count)
+    {
+        VkCommandPool cmd_pool = VK_NULL_HANDLE;
+        VkCommandPoolCreateInfo cpci{};
+        cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        cpci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        cpci.queueFamilyIndex = m_session.get_queue_family_index();
+        check_vk(vkCreateCommandPool(m_session.get_device(), &cpci, nullptr, &cmd_pool), "VDeviceBuffer::copy cmd pool");
+
+        VkCommandBuffer cmd_buf = VK_NULL_HANDLE;
+        VkCommandBufferAllocateInfo cai{};
+        cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cai.commandPool = cmd_pool;
+        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        check_vk(vkAllocateCommandBuffers(m_session.get_device(), &cai, &cmd_buf), "VDeviceBuffer::copy cmd buf alloc");
+
+        VkCommandBufferBeginInfo bbci{};
+        bbci.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bbci.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        check_vk(vkBeginCommandBuffer(cmd_buf, &bbci), "VDeviceBuffer::copy cmd buf begin");
+
+        if (src == buf_)
+        {
+            VkBufferMemoryBarrier barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.buffer = src;
+            barrier.offset = src_offset;
+            barrier.size = count;
+            vkCmdPipelineBarrier(
+                cmd_buf,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0,
+                0, nullptr,
+                1, &barrier,
+                0, nullptr);
+        }
+
+        VkBufferCopy region{};
+        region.srcOffset = src_offset;
+        region.dstOffset = dst_offset;
+        region.size = count;
+        vkCmdCopyBuffer(cmd_buf, src, dst, 1, &region);
+
+        VkBufferMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.buffer = dst;
+        barrier.offset = dst_offset;
+        barrier.size = count;
+        VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        if (dst == buf_)
+        {
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        }
+        else
+        {
+            barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+            dst_stage = VK_PIPELINE_STAGE_HOST_BIT;
+        }
+        vkCmdPipelineBarrier(
+            cmd_buf,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            dst_stage,
+            0,
+            0, nullptr,
+            1, &barrier,
+            0, nullptr);
+
+        check_vk(vkEndCommandBuffer(cmd_buf), "VDeviceBuffer::copy cmd buf end");
+
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd_buf;
+        check_vk(vkQueueSubmit(m_session.get_queue(), 1, &si, VK_NULL_HANDLE), "VDeviceBuffer::copy submit");
+        check_vk(vkDeviceWaitIdle(m_session.get_device()), "VDeviceBuffer::copy wait idle");
+
+        vkFreeCommandBuffers(m_session.get_device(), cmd_pool, 1, &cmd_buf);
+        vkDestroyCommandPool(m_session.get_device(), cmd_pool, nullptr);
+    }
+
+    void destroy_resources()
+    {
+        if (buf_ != VK_NULL_HANDLE)
+            vkDestroyBuffer(m_session.get_device(), buf_, nullptr);
+        if (mem_ != VK_NULL_HANDLE)
+            vkFreeMemory(m_session.get_device(), mem_, nullptr);
+        mem_ = VK_NULL_HANDLE;
+        buf_ = VK_NULL_HANDLE;
+    }
+
     VulkanSession &m_session;
 
     VkBuffer buf_ = VK_NULL_HANDLE;

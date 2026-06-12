@@ -5,6 +5,7 @@
  */
 
 #include <cstring>
+#include <algorithm>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -30,7 +31,7 @@ TEST_F(VulkanTestBase, single_assign_correctness)
     std::vector<int> expected(N, 42);
 
     /* Allocate device buffer for output */
-    VBuffer dst_buf(get_session(), N * sizeof(int));
+    VDeviceBuffer dst_buf(get_session(), N * sizeof(int));
 
     /* Vulkan compute context — owns DSL, descriptors, pipeline layout, command buf */
 
@@ -59,8 +60,10 @@ TEST_F(VulkanTestBase, single_assign_correctness)
     ctx.submit_and_wait();
 
     /* Read back & verify */
+    VHostBuffer<int> readback(get_session(), N);
     std::vector<int> actual(N);
-    dst_buf.read(reinterpret_cast<uint8_t*>(actual.data()), N * sizeof(int));
+    dst_buf.read(readback);
+    memcpy(actual.data(), readback.get(), N * sizeof(int));
 
     for (uint32_t i = 0; i < N; ++i) {
         EXPECT_EQ(actual[i], push_value) << "single-assign dst[" << i << "]";
@@ -72,7 +75,7 @@ TEST_F(VulkanTestBase, single_assign_correctness)
 static void write_multi_arg_descriptors(
     VulkanComputeKernel& kernel,
     VkDevice device,
-    std::vector<VBuffer>& bufs)
+    std::vector<VDeviceBuffer>& bufs)
 {
     std::vector<VkDescriptorBufferInfo> dbis(bufs.size());
     for (uint32_t i = 0; i < bufs.size(); ++i) {
@@ -91,14 +94,25 @@ static void write_multi_arg_descriptors(
     }
 }
 
+static void download_buffer(
+    VulkanSession& session,
+    VDeviceBuffer& src,
+    void* dst)
+{
+    const VkDeviceSize size_bytes = src.size();
+    VBaseHostBuffer host(session, size_bytes);
+    src.read(host);
+    memcpy(dst, host.get(), static_cast<size_t>(size_bytes));
+}
+
 static double dispatch_multi_arg_once(
     VulkanComputeKernel& kernel,
     VulkanSession& session,
-    VBuffer& c_buf,
-    const std::vector<float>& zero_c,
+    VDeviceBuffer& c_buf,
+    VBaseHostBuffer& zero_c,
     const VulkanDimension& dims)
 {
-    c_buf.write(zero_c.data(), 0, zero_c.size() * sizeof(float));
+    c_buf.write(zero_c);
 
     VulkanComputeContext ctx(session);
     auto cb = ctx.begin_command_buffer();
@@ -109,10 +123,13 @@ static double dispatch_multi_arg_once(
     return std::chrono::duration<double, std::milli>(end - start).count();
 }
 
-static std::vector<float> read_float_buffer(VBuffer& buf, VkDeviceSize size_bytes)
+static std::vector<float> read_float_buffer(VulkanSession& session, VDeviceBuffer& buf)
 {
+    const VkDeviceSize size_bytes = buf.size();
     std::vector<float> actual(static_cast<size_t>(size_bytes / sizeof(float)));
-    buf.read(reinterpret_cast<uint8_t*>(actual.data()), size_bytes);
+    VHostBuffer<float> host(session, actual.size());
+    buf.read(host);
+    memcpy(actual.data(), host.get(), static_cast<size_t>(size_bytes));
     return actual;
 }
 
@@ -123,6 +140,58 @@ static bool selected_device_is_llvmpipe(VulkanSession& session)
     return strstr(props.deviceName, "llvmpipe") != nullptr;
 }
 
+TEST_F(VulkanTestBase, host_device_buffer_copy_bandwidth)
+{
+    constexpr VkDeviceSize size_bytes = 64ull * 1024ull * 1024ull;
+    constexpr int iterations = 5;
+
+    VBaseHostBuffer upload(get_session(), size_bytes);
+    VBaseHostBuffer download(get_session(), size_bytes);
+    VDeviceBuffer device(get_session(), size_bytes);
+
+    for (VkDeviceSize i = 0; i < size_bytes; ++i) {
+        upload.get()[i] = static_cast<uint8_t>((i * 131u + 17u) & 0xffu);
+    }
+    std::memset(download.get(), 0, static_cast<size_t>(size_bytes));
+
+    device.write(upload);
+    device.read(download);
+    ASSERT_EQ(std::memcmp(upload.get(), download.get(), static_cast<size_t>(size_bytes)), 0);
+
+    double upload_ms = 1.0e30;
+    double download_ms = 1.0e30;
+    double roundtrip_ms = 1.0e30;
+
+    for (int i = 0; i < iterations; ++i) {
+        auto start = std::chrono::steady_clock::now();
+        device.write(upload);
+        auto mid = std::chrono::steady_clock::now();
+        device.read(download);
+        auto end = std::chrono::steady_clock::now();
+
+        upload_ms = std::min(upload_ms, std::chrono::duration<double, std::milli>(mid - start).count());
+        download_ms = std::min(download_ms, std::chrono::duration<double, std::milli>(end - mid).count());
+        roundtrip_ms = std::min(roundtrip_ms, std::chrono::duration<double, std::milli>(end - start).count());
+    }
+
+    ASSERT_EQ(std::memcmp(upload.get(), download.get(), static_cast<size_t>(size_bytes)), 0);
+
+    const double gib = static_cast<double>(size_bytes) / (1024.0 * 1024.0 * 1024.0);
+    const double upload_gibs = gib / (upload_ms / 1000.0);
+    const double download_gibs = gib / (download_ms / 1000.0);
+    const double roundtrip_gibs = (2.0 * gib) / (roundtrip_ms / 1000.0);
+
+    RecordProperty("size_bytes", static_cast<long long>(size_bytes));
+    RecordProperty("upload_gibs", upload_gibs);
+    RecordProperty("download_gibs", download_gibs);
+    RecordProperty("roundtrip_gibs", roundtrip_gibs);
+    std::cerr << "host/device buffer copy bandwidth: "
+              << "upload=" << upload_gibs << " GiB/s"
+              << ", download=" << download_gibs << " GiB/s"
+              << ", roundtrip=" << roundtrip_gibs << " GiB/s"
+              << " (" << size_bytes << " bytes, best of " << iterations << ")\n";
+}
+
 TEST_F(VulkanTestBase, multi_arg_correctness)
 {
     /* multi-arg does: C[i,j] += sum_k( A1[n,k]*B1[k,m] + A2* B2 + A3* B3 ) */
@@ -130,34 +199,35 @@ TEST_F(VulkanTestBase, multi_arg_correctness)
     const uint32_t COLS = 1024;
     float expected_val = 44.0f * static_cast<float>(COLS);
 
-    /* Host input data */
-    std::vector<float> a1(ROWS * COLS, 1.0f);
-    std::vector<float> b1(COLS * COLS, 2.0f);
-    std::vector<float> c(ROWS * COLS, 0.0f);
-    std::vector<float> a2(ROWS * COLS, 3.0f);
-    std::vector<float> b2(COLS * COLS, 4.0f);
-    std::vector<float> a3(ROWS * COLS, 5.0f);
-    std::vector<float> b3(COLS * COLS, 6.0f);
-
-    /* Device buffers */
-    std::vector<VBuffer> bufs;
-    VkDeviceSize buf_sizes[7] = {
-        static_cast<VkDeviceSize>(ROWS) * COLS * sizeof(float),   /* A1 */
-        static_cast<VkDeviceSize>(COLS) * COLS * sizeof(float),   /* B1 */
-        static_cast<VkDeviceSize>(ROWS) * COLS * sizeof(float),   /* A2 */
-        static_cast<VkDeviceSize>(COLS) * COLS * sizeof(float),   /* B2 */
-        static_cast<VkDeviceSize>(ROWS) * COLS * sizeof(float),   /* A3 */
-        static_cast<VkDeviceSize>(COLS) * COLS * sizeof(float),   /* B3 */
-        static_cast<VkDeviceSize>(ROWS) * COLS * sizeof(float),   /* C (output) */
-    };
-    for (uint32_t i = 0; i < 7; ++i) bufs.emplace_back(get_session(), buf_sizes[i]);
-
-    bufs[0].write(a1.data(), 0, a1.size() * sizeof(float));
-    bufs[1].write(b1.data(), 0, b1.size() * sizeof(float));
-    bufs[2].write(a2.data(), 0, a2.size() * sizeof(float));
-    bufs[3].write(b2.data(), 0, b2.size() * sizeof(float));
-    bufs[4].write(a3.data(), 0, a3.size() * sizeof(float));
-    bufs[5].write(b3.data(), 0, b3.size() * sizeof(float));
+    VHostBuffer<float> a1(get_session(), ROWS * COLS);
+    VHostBuffer<float> b1(get_session(), COLS * COLS);
+    VHostBuffer<float> a2(get_session(), ROWS * COLS);
+    VHostBuffer<float> b2(get_session(), COLS * COLS);
+    VHostBuffer<float> a3(get_session(), ROWS * COLS);
+    VHostBuffer<float> b3(get_session(), COLS * COLS);
+    VHostBuffer<float> c(get_session(), ROWS * COLS);
+    a1.fill(1.0f);
+    b1.fill(2.0f);
+    a2.fill(3.0f);
+    b2.fill(4.0f);
+    a3.fill(5.0f);
+    b3.fill(6.0f);
+    c.fill(0.0f);
+    std::vector<VDeviceBuffer> bufs;
+    bufs.emplace_back(get_session(), a1.size());
+    bufs.emplace_back(get_session(), b1.size());
+    bufs.emplace_back(get_session(), a2.size());
+    bufs.emplace_back(get_session(), b2.size());
+    bufs.emplace_back(get_session(), a3.size());
+    bufs.emplace_back(get_session(), b3.size());
+    bufs.emplace_back(get_session(), c.size());
+    bufs[0].write(a1);
+    bufs[1].write(b1);
+    bufs[2].write(a2);
+    bufs[3].write(b2);
+    bufs[4].write(a3);
+    bufs[5].write(b3);
+    bufs[6].write(c);
 
     /* Vulkan compute context */
     VulkanComputeKernel kernel(get_session(), TESTDATA_DIR "/multi-arg.glsl", 0, bufs.size());
@@ -172,7 +242,7 @@ TEST_F(VulkanTestBase, multi_arg_correctness)
 
     /* Read back C (buffer index 6) */
     std::vector<float> actual(ROWS * COLS);
-    bufs[6].read(reinterpret_cast<uint8_t*>(actual.data()), buf_sizes[6]);
+    download_buffer(get_session(), bufs[6], actual.data());
 
     for (uint32_t i = 0; i < ROWS * COLS; ++i) {
         EXPECT_NEAR(actual[i], expected_val, 1.0f) << "multi-arg C[" << i << "]";
@@ -188,32 +258,34 @@ TEST_F(VulkanTestBase, multi_arg_shared_memory_tiling_is_faster)
     const uint32_t ROWS = 256;
     const uint32_t COLS = 1024;
 
-    std::vector<float> a1(ROWS * COLS, 1.0f);
-    std::vector<float> b1(COLS * COLS, 2.0f);
-    std::vector<float> c(ROWS * COLS, 0.0f);
-    std::vector<float> a2(ROWS * COLS, 3.0f);
-    std::vector<float> b2(COLS * COLS, 4.0f);
-    std::vector<float> a3(ROWS * COLS, 5.0f);
-    std::vector<float> b3(COLS * COLS, 6.0f);
-
-    std::vector<VBuffer> bufs;
-    VkDeviceSize buf_sizes[7] = {
-        static_cast<VkDeviceSize>(ROWS) * COLS * sizeof(float),
-        static_cast<VkDeviceSize>(COLS) * COLS * sizeof(float),
-        static_cast<VkDeviceSize>(ROWS) * COLS * sizeof(float),
-        static_cast<VkDeviceSize>(COLS) * COLS * sizeof(float),
-        static_cast<VkDeviceSize>(ROWS) * COLS * sizeof(float),
-        static_cast<VkDeviceSize>(COLS) * COLS * sizeof(float),
-        static_cast<VkDeviceSize>(ROWS) * COLS * sizeof(float),
-    };
-    for (uint32_t i = 0; i < 7; ++i) bufs.emplace_back(get_session(), buf_sizes[i]);
-
-    bufs[0].write(a1.data(), 0, a1.size() * sizeof(float));
-    bufs[1].write(b1.data(), 0, b1.size() * sizeof(float));
-    bufs[2].write(a2.data(), 0, a2.size() * sizeof(float));
-    bufs[3].write(b2.data(), 0, b2.size() * sizeof(float));
-    bufs[4].write(a3.data(), 0, a3.size() * sizeof(float));
-    bufs[5].write(b3.data(), 0, b3.size() * sizeof(float));
+    VHostBuffer<float> a1(get_session(), ROWS * COLS);
+    VHostBuffer<float> b1(get_session(), COLS * COLS);
+    VHostBuffer<float> a2(get_session(), ROWS * COLS);
+    VHostBuffer<float> b2(get_session(), COLS * COLS);
+    VHostBuffer<float> a3(get_session(), ROWS * COLS);
+    VHostBuffer<float> b3(get_session(), COLS * COLS);
+    VHostBuffer<float> c(get_session(), ROWS * COLS);
+    a1.fill(1.0f);
+    b1.fill(2.0f);
+    a2.fill(3.0f);
+    b2.fill(4.0f);
+    a3.fill(5.0f);
+    b3.fill(6.0f);
+    c.fill(0.0f);
+    std::vector<VDeviceBuffer> bufs;
+    bufs.emplace_back(get_session(), a1.size());
+    bufs.emplace_back(get_session(), b1.size());
+    bufs.emplace_back(get_session(), a2.size());
+    bufs.emplace_back(get_session(), b2.size());
+    bufs.emplace_back(get_session(), a3.size());
+    bufs.emplace_back(get_session(), b3.size());
+    bufs.emplace_back(get_session(), c.size());
+    bufs[0].write(a1);
+    bufs[1].write(b1);
+    bufs[2].write(a2);
+    bufs[3].write(b2);
+    bufs[4].write(a3);
+    bufs[5].write(b3);
 
     VulkanComputeKernel unoptimized(get_session(), TESTDATA_DIR "/multi-arg-noopt.glsl", 0, bufs.size());
     write_multi_arg_descriptors(unoptimized, get_device(), bufs);
@@ -221,7 +293,7 @@ TEST_F(VulkanTestBase, multi_arg_shared_memory_tiling_is_faster)
     const VulkanDimension unoptimized_dims{ROWS, COLS, 1};
 
     (void)dispatch_multi_arg_once(unoptimized, get_session(), bufs[6], c, unoptimized_dims);
-    const auto sequential_actual = read_float_buffer(bufs[6], buf_sizes[6]);
+    const auto sequential_actual = read_float_buffer(get_session(), bufs[6]);
 
     double best_unoptimized = 1.0e30;
     for (int i = 0; i < 3; ++i) {
@@ -243,7 +315,7 @@ TEST_F(VulkanTestBase, multi_arg_shared_memory_tiling_is_faster)
         };
 
         (void)dispatch_multi_arg_once(shared, get_session(), bufs[6], c, shared_dims);
-        const auto shared_actual = read_float_buffer(bufs[6], buf_sizes[6]);
+        const auto shared_actual = read_float_buffer(get_session(), bufs[6]);
 
         ASSERT_EQ(shared_actual.size(), sequential_actual.size());
         for (uint32_t i = 0; i < shared_actual.size(); ++i) {
@@ -306,32 +378,34 @@ TEST_F(VulkanTestBase, multi_arg_cooperative_matrix2_correctness)
     const uint32_t CHUNK = 16;
     float expected_val = 44.0f * static_cast<float>(COLS);
 
-    std::vector<float> a1(ROWS * COLS, 1.0f);
-    std::vector<float> b1(COLS * COLS, 2.0f);
-    std::vector<float> c(ROWS * COLS, 0.0f);
-    std::vector<float> a2(ROWS * COLS, 3.0f);
-    std::vector<float> b2(COLS * COLS, 4.0f);
-    std::vector<float> a3(ROWS * COLS, 5.0f);
-    std::vector<float> b3(COLS * COLS, 6.0f);
-
-    std::vector<VBuffer> bufs;
-    VkDeviceSize buf_sizes[7] = {
-        static_cast<VkDeviceSize>(ROWS) * COLS * sizeof(float),
-        static_cast<VkDeviceSize>(COLS) * COLS * sizeof(float),
-        static_cast<VkDeviceSize>(ROWS) * COLS * sizeof(float),
-        static_cast<VkDeviceSize>(COLS) * COLS * sizeof(float),
-        static_cast<VkDeviceSize>(ROWS) * COLS * sizeof(float),
-        static_cast<VkDeviceSize>(COLS) * COLS * sizeof(float),
-        static_cast<VkDeviceSize>(ROWS) * COLS * sizeof(float),
-    };
-    for (uint32_t i = 0; i < 7; ++i) bufs.emplace_back(coop_session, buf_sizes[i]);
-
-    bufs[0].write(a1.data(), 0, a1.size() * sizeof(float));
-    bufs[1].write(b1.data(), 0, b1.size() * sizeof(float));
-    bufs[2].write(a2.data(), 0, a2.size() * sizeof(float));
-    bufs[3].write(b2.data(), 0, b2.size() * sizeof(float));
-    bufs[4].write(a3.data(), 0, a3.size() * sizeof(float));
-    bufs[5].write(b3.data(), 0, b3.size() * sizeof(float));
+    VHostBuffer<float> a1(coop_session, ROWS * COLS);
+    VHostBuffer<float> b1(coop_session, COLS * COLS);
+    VHostBuffer<float> a2(coop_session, ROWS * COLS);
+    VHostBuffer<float> b2(coop_session, COLS * COLS);
+    VHostBuffer<float> a3(coop_session, ROWS * COLS);
+    VHostBuffer<float> b3(coop_session, COLS * COLS);
+    VHostBuffer<float> c(coop_session, ROWS * COLS);
+    a1.fill(1.0f);
+    b1.fill(2.0f);
+    a2.fill(3.0f);
+    b2.fill(4.0f);
+    a3.fill(5.0f);
+    b3.fill(6.0f);
+    c.fill(0.0f);
+    std::vector<VDeviceBuffer> bufs;
+    bufs.emplace_back(coop_session, a1.size());
+    bufs.emplace_back(coop_session, b1.size());
+    bufs.emplace_back(coop_session, a2.size());
+    bufs.emplace_back(coop_session, b2.size());
+    bufs.emplace_back(coop_session, a3.size());
+    bufs.emplace_back(coop_session, b3.size());
+    bufs.emplace_back(coop_session, c.size());
+    bufs[0].write(a1);
+    bufs[1].write(b1);
+    bufs[2].write(a2);
+    bufs[3].write(b2);
+    bufs[4].write(a3);
+    bufs[5].write(b3);
 
     VulkanComputeKernel kernel(
         coop_session,
@@ -347,7 +421,7 @@ TEST_F(VulkanTestBase, multi_arg_cooperative_matrix2_correctness)
         c,
         VulkanDimension{(ROWS + 8 - 1) / 8, (COLS + 8 - 1) / 8, 1});
 
-    const auto actual = read_float_buffer(bufs[6], buf_sizes[6]);
+    const auto actual = read_float_buffer(coop_session, bufs[6]);
     ASSERT_EQ(actual.size(), ROWS * COLS);
     for (uint32_t i = 0; i < actual.size(); ++i) {
         EXPECT_NEAR(actual[i], expected_val, 1.0f)
@@ -363,16 +437,23 @@ TEST_F(VulkanTestBase, triangular1_correctness)
     const uint32_t W   = 32;
     const uint32_t D   = 32;
 
-    std::vector<float> d_scores_h(H * W * D, 1.0f);
-    std::vector<float> attn_w_h(H * W * D, 1.0f);
     float expected_val = 1.0f - static_cast<float>(D); /* 1 - 32 = -31 */
 
-    VkDeviceSize buf_size = static_cast<VkDeviceSize>(H) * W * D * sizeof(float);
-    std::vector<VBuffer> bufs;
-    for (uint32_t i = 0; i < 3; ++i) bufs.emplace_back(get_session(), buf_size);
+    const size_t elem_count = static_cast<size_t>(H) * W * D;
+    std::vector<VDeviceBuffer> bufs;
 
-    bufs[0].write(d_scores_h.data(), 0, d_scores_h.size() * sizeof(float));
-    bufs[2].write(attn_w_h.data(), 0, attn_w_h.size() * sizeof(float));
+    VHostBuffer<float> d_scores_h(get_session(), elem_count);
+    VHostBuffer<float> d_raw_h(get_session(), elem_count);
+    VHostBuffer<float> attn_w_h(get_session(), elem_count);
+    d_scores_h.fill(1.0f);
+    d_raw_h.fill(0.0f);
+    attn_w_h.fill(1.0f);
+    bufs.emplace_back(get_session(), d_scores_h.size());
+    bufs.emplace_back(get_session(), d_raw_h.size());
+    bufs.emplace_back(get_session(), attn_w_h.size());
+    bufs[0].write(d_scores_h);
+    bufs[1].write(d_raw_h);
+    bufs[2].write(attn_w_h);
 
     /* Push constants */
     struct Tri1Push { int32_t seq_len; int32_t ds_rows; int32_t ds_cols; int32_t dr_rows; int32_t dr_cols; };
@@ -406,8 +487,8 @@ TEST_F(VulkanTestBase, triangular1_correctness)
     ctx.submit_and_wait();
 
     /* Read back d_raw (buffer index 1) */
-    std::vector<float> actual(H * W * D);
-    bufs[1].read(reinterpret_cast<uint8_t*>(actual.data()), buf_size);
+    std::vector<float> actual(elem_count);
+    download_buffer(get_session(), bufs[1], actual.data());
 
     for (uint32_t hi = 0; hi < H; ++hi) {
         for (uint32_t i = 0; i < W; ++i) {
