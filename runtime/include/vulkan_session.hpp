@@ -13,8 +13,6 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
-#include <cctype>
-#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -41,165 +39,14 @@ struct VulkanDimension
 class VulkanSession
 {
 public:
-    explicit VulkanSession(bool enable_cooperative_matrix2 = false)
-    {
-        VkApplicationInfo ai{};
-        ai.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-        ai.pApplicationName = "kernel_compiler_tests";
-        ai.apiVersion = enable_cooperative_matrix2 ? VK_API_VERSION_1_4 : VK_API_VERSION_1_0;
-        ai.pEngineName = "kernel_compiler";
-        ai.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-
-        VkInstanceCreateInfo ici{};
-        ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-        ici.pApplicationInfo = &ai;
-        ici.enabledLayerCount = 0;
-        ici.ppEnabledLayerNames = nullptr;
-        ici.enabledExtensionCount = 0;
-        ici.ppEnabledExtensionNames = nullptr;
-
-        VkResult rc = vkCreateInstance(&ici, nullptr, &m_instance);
-        if (rc != VK_SUCCESS)
-        {
-            fprintf(stderr, "init_vulkan_instance: vkCreateInstance failed: %s\n", vk_result_str(rc).c_str());
-            m_instance = VK_NULL_HANDLE;
-            return;
-        }
-
-        /* Enumerate physical devices */
-        uint32_t count = 0;
-        vkEnumeratePhysicalDevices(m_instance, &count, nullptr);
-        std::vector<VkPhysicalDevice> devs(count);
-        if (count > 0)
-            vkEnumeratePhysicalDevices(m_instance, &count, devs.data());
-        if (count == 0)
-        {
-            fprintf(stderr, "init_vulkan_instance: no Vulkan physical devices found\n");
-            m_instance = VK_NULL_HANDLE;
-            return;
-        }
-
-        // Select device by VULKAN_DEVICE env var. By default, prefer a non-llvmpipe
-        // device when the loader exposes one, but still fall back to llvmpipe-only setups.
-        m_phys_dev = devs[0]; /* fallback */
-        const char *chosen = getenv("VULKAN_DEVICE");
-        if (chosen)
-        {
-            for (auto &dev : devs)
-            {
-                VkPhysicalDeviceProperties props{};
-                vkGetPhysicalDeviceProperties(dev, &props);
-                if (strstr(props.deviceName, chosen))
-                {
-                    m_phys_dev = dev;
-                    fprintf(stderr, "init_vulkan_instance: selecting device \"%s\"\n", props.deviceName);
-                    break;
-                }
-            }
-        }
-        else
-        {
-            for (auto &dev : devs)
-            {
-                VkPhysicalDeviceProperties props{};
-                vkGetPhysicalDeviceProperties(dev, &props);
-                if (!device_name_contains(props.deviceName, "llvmpipe"))
-                {
-                    m_phys_dev = dev;
-                    break;
-                }
-            }
-        }
-
-        /* Get queue family */
-        uint32_t qfc = 0;
-        vkGetPhysicalDeviceQueueFamilyProperties(m_phys_dev, &qfc, nullptr);
-        std::vector<VkQueueFamilyProperties> qfps(qfc > 0 ? qfc : 1);
-        if (qfc > 0)
-            vkGetPhysicalDeviceQueueFamilyProperties(m_phys_dev, &qfc, qfps.data());
-        for (uint32_t i = 0; i < qfc; ++i)
-        {
-            if (qfps[i].queueFlags & VK_QUEUE_COMPUTE_BIT)
-            {
-                m_queue_fi = i;
-                break;
-            }
-        }
-
-        float prio = 1.0f;
-        VkDeviceQueueCreateInfo dqi{};
-        dqi.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        dqi.queueFamilyIndex = m_queue_fi;
-        dqi.queueCount = 1;
-        dqi.pQueuePriorities = &prio;
-
-        std::vector<const char*> device_extensions;
-        VkPhysicalDeviceCooperativeMatrixFeaturesKHR coopmat_features{};
-        VkPhysicalDeviceCooperativeMatrix2FeaturesNV coopmat2_features{};
-
-        if (enable_cooperative_matrix2)
-        {
-            if (!has_device_extension(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME) ||
-                !has_device_extension(VK_NV_COOPERATIVE_MATRIX_2_EXTENSION_NAME))
-            {
-                m_coopmat2_unavailable_reason =
-                    "device does not expose VK_KHR_cooperative_matrix and VK_NV_cooperative_matrix2";
-            }
-            else
-            {
-                coopmat2_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_2_FEATURES_NV;
-                coopmat_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR;
-                coopmat_features.pNext = &coopmat2_features;
-
-                VkPhysicalDeviceFeatures2 features2{};
-                features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-                features2.pNext = &coopmat_features;
-                vkGetPhysicalDeviceFeatures2(m_phys_dev, &features2);
-
-                if (!coopmat_features.cooperativeMatrix ||
-                    !coopmat2_features.cooperativeMatrixWorkgroupScope ||
-                    !coopmat2_features.cooperativeMatrixTensorAddressing ||
-                    !coopmat2_features.cooperativeMatrixBlockLoads)
-                {
-                    m_coopmat2_unavailable_reason =
-                        "device exposes cooperative matrix extensions but not the required coopmat2 features";
-                    coopmat_features = {};
-                    coopmat2_features = {};
-                }
-                else
-                {
-                    device_extensions.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
-                    device_extensions.push_back(VK_NV_COOPERATIVE_MATRIX_2_EXTENSION_NAME);
-                    m_coopmat2_enabled = true;
-                }
-            }
-        }
-
-        VkDeviceCreateInfo dci{};
-        dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        dci.queueCreateInfoCount = 1;
-        dci.pQueueCreateInfos = &dqi;
-        dci.enabledExtensionCount = static_cast<uint32_t>(device_extensions.size());
-        dci.ppEnabledExtensionNames = device_extensions.empty() ? nullptr : device_extensions.data();
-        dci.pNext = m_coopmat2_enabled ? &coopmat_features : nullptr;
-
-        rc = vkCreateDevice(m_phys_dev, &dci, nullptr, &m_device);
-        if (rc != VK_SUCCESS)
-        {
-            fprintf(stderr, "init_vulkan_instance: vkCreateDevice failed: %s\n", vk_result_str(rc).c_str());
-            m_instance = static_cast<VkInstance>(VK_NULL_HANDLE);
-            m_device = static_cast<VkDevice>(VK_NULL_HANDLE);
-            return;
-        }
-
-        vkGetDeviceQueue(m_device, m_queue_fi, 0, &m_queue);
-    }
+    explicit VulkanSession(bool enable_cooperative_matrix2 = false);
 
     bool has_device() const { return m_instance != VK_NULL_HANDLE && m_device != VK_NULL_HANDLE; }
     VkDevice get_device() const { return m_device; }
     VkQueue get_queue() const { return m_queue; }
     uint32_t get_queue_family_index() const { return m_queue_fi; }
     VkPhysicalDevice get_phys_device() const { return m_phys_dev; }
+    bool shader_buffer_float32_atomic_add_enabled() const { return m_shader_buffer_float32_atomic_add_enabled; }
     bool cooperative_matrix2_enabled() const { return m_coopmat2_enabled; }
     const std::string& cooperative_matrix2_unavailable_reason() const { return m_coopmat2_unavailable_reason; }
 
@@ -218,51 +65,15 @@ public:
     }
 
 protected:
-    static bool device_name_contains(const char* device_name, const char* needle)
-    {
-        if (!device_name || !needle)
-            return false;
-
-        const size_t needle_len = strlen(needle);
-        if (needle_len == 0)
-            return true;
-
-        for (const char* pos = device_name; *pos; ++pos)
-        {
-            size_t i = 0;
-            for (; i < needle_len && pos[i]; ++i)
-            {
-                const auto lhs = static_cast<unsigned char>(pos[i]);
-                const auto rhs = static_cast<unsigned char>(needle[i]);
-                if (std::tolower(lhs) != std::tolower(rhs))
-                    break;
-            }
-            if (i == needle_len)
-                return true;
-        }
-        return false;
-    }
-
-    bool has_device_extension(const char* name) const
-    {
-        uint32_t count = 0;
-        vkEnumerateDeviceExtensionProperties(m_phys_dev, nullptr, &count, nullptr);
-        std::vector<VkExtensionProperties> extensions(count);
-        if (count > 0)
-            vkEnumerateDeviceExtensionProperties(m_phys_dev, nullptr, &count, extensions.data());
-        for (const auto& ext : extensions)
-        {
-            if (strcmp(ext.extensionName, name) == 0)
-                return true;
-        }
-        return false;
-    }
+    static bool device_name_contains(const char* device_name, const char* needle);
+    bool has_device_extension(const char* name) const;
 
     VkInstance m_instance = VK_NULL_HANDLE;
     VkPhysicalDevice m_phys_dev = VK_NULL_HANDLE;
     VkDevice m_device = VK_NULL_HANDLE;
     VkQueue m_queue = VK_NULL_HANDLE;
     uint32_t m_queue_fi = 0xFFFFFFFFu;
+    bool m_shader_buffer_float32_atomic_add_enabled = false;
     bool m_coopmat2_enabled = false;
     std::string m_coopmat2_unavailable_reason;
 };
@@ -387,75 +198,8 @@ private:
         check_vk(vkAllocateDescriptorSets(get_device(), &dasai, &m_desc_set), "VkComputeSession allocate descriptor set");
     }
 
-    /* Compile GLSL → SPIR-V and create compute pipeline */
-    void create_pipeline(const std::string &glsl_file)
-    {
-        /* Read GLSL source */
-        std::ifstream ifs(glsl_file);
-        if (!ifs.is_open())
-            throw std::runtime_error("Cannot open GLSL file: " + glsl_file);
-
-        /* Compile via glslc and pipe to temp file */
-        char tmp_spv[] = "/tmp/spv_gen_XXXXXX";
-        int fd = mkstemp(tmp_spv);
-        if (fd < 0)
-            throw std::runtime_error("mkstemp failed");
-
-        std::string glslc_cmd = "glslc -x glsl -O -fshader-stage=compute ";
-        if (glsl_file.find("coopmat2") != std::string::npos)
-            glslc_cmd += "--target-env=vulkan1.4 ";
-        glslc_cmd += glsl_file + " -o -";
-        FILE *fp = popen(glslc_cmd.c_str(), "r");
-        if (!fp)
-        {
-            close(fd);
-            throw std::runtime_error("glslc failed for: " + glsl_file);
-        }
-
-        char buf[4096];
-        while (auto n = fread(buf, 1, sizeof(buf), fp))
-            write(fd, buf, static_cast<size_t>(n));
-        int rc_p = pclose(fp);
-        if (rc_p != 0)
-        {
-            close(fd);
-            throw std::runtime_error("glslc error for: " + glsl_file);
-        }
-        close(fd);
-
-        /* Read back SPIR-V */
-        std::ifstream ifs_spv(tmp_spv, std::ios::binary);
-        if (!ifs_spv.is_open())
-            throw std::runtime_error("Cannot read generated SPIR-V");
-        std::vector<uint8_t> spirv((std::istreambuf_iterator<char>(ifs_spv)),
-                                    std::istreambuf_iterator<char>());
-
-        /* Clean up temp file */
-        remove(tmp_spv);
-
-        if (spirv.empty())
-            throw std::runtime_error("Empty SPIR-V from glslc for: " + glsl_file);
-
-        VkShaderModuleCreateInfo smci{};
-        smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        smci.codeSize = spirv.size();
-        smci.pCode = reinterpret_cast<const uint32_t*>(spirv.data());
-
-        check_vk(vkCreateShaderModule(get_device(), &smci, nullptr, &m_shader_module), "VkComputeSession shader module");
-
-        VkPipelineShaderStageCreateInfo psci{};
-        psci.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        psci.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        psci.module = m_shader_module;
-        psci.pName = "main";
-
-        VkComputePipelineCreateInfo cpci{};
-        cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        cpci.stage = psci;
-        cpci.layout = m_pipe_layout;
-
-        check_vk(vkCreateComputePipelines(get_device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_pipeline), "VkComputeSession pipeline");
-    }
+    /* Compile GLSL -> SPIR-V and create compute pipeline */
+    void create_pipeline(const std::string &glsl_file);
 
 public:
     VkDescriptorSet desc_set() const { return m_desc_set; }
@@ -735,16 +479,16 @@ public:
         vkUnmapMemory(m_session.get_device(), mem_);
     }
 
-    std::vector<uint8_t> read(VkDeviceSize offset = 0, VkDeviceSize count = VK_WHOLE_SIZE)
+    void read(uint8_t *dst, VkDeviceSize count, VkDeviceSize offset = 0)
     {
         if (count == VK_WHOLE_SIZE)
             count = size_ - offset;
+        if (!dst)
+            throw std::runtime_error("VBuffer::read dst is null");
         void *mapped;
         check_vk(vkMapMemory(m_session.get_device(), mem_, offset, count, 0, &mapped), "VBuffer::read map");
-        std::vector<uint8_t> data(static_cast<size_t>(count));
-        std::memcpy(data.data(), mapped, static_cast<size_t>(count));
+        std::memcpy(dst, mapped, static_cast<size_t>(count));
         vkUnmapMemory(m_session.get_device(), mem_);
-        return data;
     }
 
 private:

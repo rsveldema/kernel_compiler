@@ -59,9 +59,8 @@ TEST_F(VulkanTestBase, single_assign_correctness)
     ctx.submit_and_wait();
 
     /* Read back & verify */
-    auto data = dst_buf.read(0, N * sizeof(int));
     std::vector<int> actual(N);
-    memcpy(actual.data(), data.data(), N * sizeof(int));
+    dst_buf.read(reinterpret_cast<uint8_t*>(actual.data()), N * sizeof(int));
 
     for (uint32_t i = 0; i < N; ++i) {
         EXPECT_EQ(actual[i], push_value) << "single-assign dst[" << i << "]";
@@ -112,9 +111,8 @@ static double dispatch_multi_arg_once(
 
 static std::vector<float> read_float_buffer(VBuffer& buf, VkDeviceSize size_bytes)
 {
-    auto data = buf.read(0, size_bytes);
     std::vector<float> actual(static_cast<size_t>(size_bytes / sizeof(float)));
-    memcpy(actual.data(), data.data(), static_cast<size_t>(size_bytes));
+    buf.read(reinterpret_cast<uint8_t*>(actual.data()), size_bytes);
     return actual;
 }
 
@@ -173,9 +171,8 @@ TEST_F(VulkanTestBase, multi_arg_correctness)
     ctx.submit_and_wait();
 
     /* Read back C (buffer index 6) */
-    auto data = bufs[6].read(0, buf_sizes[6]);
     std::vector<float> actual(ROWS * COLS);
-    memcpy(actual.data(), data.data(), static_cast<size_t>(buf_sizes[6]));
+    bufs[6].read(reinterpret_cast<uint8_t*>(actual.data()), buf_sizes[6]);
 
     for (uint32_t i = 0; i < ROWS * COLS; ++i) {
         EXPECT_NEAR(actual[i], expected_val, 1.0f) << "multi-arg C[" << i << "]";
@@ -184,6 +181,10 @@ TEST_F(VulkanTestBase, multi_arg_correctness)
 
 TEST_F(VulkanTestBase, multi_arg_shared_memory_tiling_is_faster)
 {
+    if (!get_session().shader_buffer_float32_atomic_add_enabled()) {
+        GTEST_SKIP() << "selected Vulkan device does not expose shaderBufferFloat32AtomicAdd";
+    }
+
     const uint32_t ROWS = 256;
     const uint32_t COLS = 1024;
 
@@ -405,9 +406,8 @@ TEST_F(VulkanTestBase, triangular1_correctness)
     ctx.submit_and_wait();
 
     /* Read back d_raw (buffer index 1) */
-    auto data = bufs[1].read(0, buf_size);
     std::vector<float> actual(H * W * D);
-    memcpy(actual.data(), data.data(), static_cast<size_t>(buf_size));
+    bufs[1].read(reinterpret_cast<uint8_t*>(actual.data()), buf_size);
 
     for (uint32_t hi = 0; hi < H; ++hi) {
         for (uint32_t i = 0; i < W; ++i) {
