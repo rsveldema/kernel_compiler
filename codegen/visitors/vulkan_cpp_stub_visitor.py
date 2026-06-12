@@ -263,8 +263,10 @@ class VulkanCppStubVisitor(Visitor):
 
         # Collect dispatch dimensions
         has_2d = node.space_dim >= 2 and len(node.loop_vars) >= 2
+        has_3d = node.space_dim >= 3 and len(node.loop_vars) >= 3
         rows_param_name = node.loop_vars[0] if node.loop_vars else "dispatch_rows"
         cols_param_name = node.loop_vars[1] if has_2d else None
+        levels_param_name = node.loop_vars[2] if has_3d else None
 
         # Workgroup sizes
         wg_x, wg_y, wg_z = "1", "1", "1"
@@ -286,18 +288,24 @@ class VulkanCppStubVisitor(Visitor):
         func_params.append("    VkDevice device")
         func_params.append("    VkPipelineLayout pipeline_layout")
         func_params.append("    VkDescriptorSetLayout descriptor_set_layout")
+        func_params.append("    VkPipeline pipeline")
         func_params.append("    VkCommandBuffer command_buffer")
         func_params.append("    VkDescriptorSet _desc_set")
 
-        if has_2d:
+        if has_3d:
+            func_params.append("    uint32_t dispatch_rows")
+            func_params.append("    uint32_t dispatch_cols")
+            func_params.append("    uint32_t dispatch_levels")
+        elif has_2d:
             func_params.append("    uint32_t dispatch_rows")
             func_params.append("    uint32_t dispatch_cols")
         else:
             func_params.append("    uint32_t dispatch_rows")
 
-        # Add buffer params as references
+        # Add buffer params as Vulkan buffer handles. The generated structs
+        # above document SSBO layout, but callers should pass actual buffers.
         for param, sname in buffer_params:
-            func_params.append(f"    {sname}& {param.name}")
+            func_params.append(f"    VkBuffer {param.name}")
 
         # Build push constant field names (deduplicated)
         pc_field_names = set()
@@ -375,28 +383,48 @@ class VulkanCppStubVisitor(Visitor):
         def _div_ceil(a, b):
             return "((" + a + ") + (" + str(b) + ") - 1) / (" + str(b) + ")"
 
-        if has_2d:
+        if has_3d:
             x_dim = f"(dispatch_rows + {wg_x} - 1) / {wg_x}"
             y_dim = f"(dispatch_cols + {wg_y} - 1) / {wg_y}"
+            z_dim = f"(dispatch_levels + {wg_z} - 1) / {wg_z}"
+        elif has_2d:
+            x_dim = f"(dispatch_rows + {wg_x} - 1) / {wg_x}"
+            y_dim = f"(dispatch_cols + {wg_y} - 1) / {wg_y}"
+            z_dim = str(getattr(node, "reduction_chunks", 1))
         else:
             x_dim = f"(dispatch_rows + {wg_x} - 1) / {wg_x}"
             y_dim = "1"
-        z_dim = str(getattr(node, "reduction_chunks", 1))
+            z_dim = str(getattr(node, "reduction_chunks", 1))
 
-        self._emit(
-            "#ifndef VK_STUB_NOOP"
-        )
-        if has_2d:
-            self._emit(
-                f"vkCmdDispatch(command_buffer, "
-                f"{x_dim}, {y_dim}, {z_dim});"
-            )
+        self._emit("(void)descriptor_set_layout;")
+        if buffer_params:
+            self._emit(f"VkDescriptorBufferInfo buffer_infos[{len(buffer_params)}]{{}};")
+            self._emit(f"VkWriteDescriptorSet writes[{len(buffer_params)}]{{}};")
+            for i, (param, _sname) in enumerate(buffer_params):
+                self._emit(f"buffer_infos[{i}].buffer = {param.name};")
+                self._emit(f"buffer_infos[{i}].offset = 0;")
+                self._emit(f"buffer_infos[{i}].range = VK_WHOLE_SIZE;")
+                self._emit(f"writes[{i}].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;")
+                self._emit(f"writes[{i}].dstSet = _desc_set;")
+                self._emit(f"writes[{i}].dstBinding = {i};")
+                self._emit(f"writes[{i}].descriptorCount = 1;")
+                self._emit(f"writes[{i}].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;")
+                self._emit(f"writes[{i}].pBufferInfo = &buffer_infos[{i}];")
+            self._emit(f"vkUpdateDescriptorSets(device, {len(buffer_params)}, writes, 0, nullptr);")
         else:
+            self._emit("(void)device;")
+        if all_pc_fields:
             self._emit(
-                f"vkCmdDispatch(command_buffer, "
-                f"{x_dim}, 1, {z_dim});"
+                f"vkCmdPushConstants(command_buffer, pipeline_layout, "
+                f"VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants), &push_constants);"
             )
-        self._emit("#endif // VK_STUB_NOOP")
+        if buffer_params:
+            self._emit(
+                "vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, "
+                "pipeline_layout, 0, 1, &_desc_set, 0, nullptr);"
+            )
+        self._emit("vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);")
+        self._emit(f"vkCmdDispatch(command_buffer, {x_dim}, {y_dim}, {z_dim});")
 
         self._pop()
         self._emit("}")

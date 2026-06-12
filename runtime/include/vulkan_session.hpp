@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -203,6 +204,9 @@ private:
 
 public:
     VkDescriptorSet desc_set() const { return m_desc_set; }
+    VkDescriptorSetLayout desc_set_layout() const { return m_dsl; }
+    VkPipelineLayout pipeline_layout() const { return m_pipe_layout; }
+    VkPipeline pipeline() const { return m_pipeline; }
 
     /* Dispatch the compute kernel. Bind a descriptor set if provided; otherwise push-constants only. */
     void dispatch(VkCommandBuffer cb, void* constants, size_t num_bytes, const VulkanDimension& dims, VkDescriptorSet desc_set = VK_NULL_HANDLE)

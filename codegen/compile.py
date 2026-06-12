@@ -84,6 +84,12 @@ def generate_vulkan(
     with open(output, "w") as f:
         f.write(shader)
     print(f"Generated Vulkan shader -> {output}")
+    visitor = VulkanCppStubVisitor()
+    stub = program.accept(visitor)
+    stub_output = output.rsplit(".", 1)[0] + ".h"
+    with open(stub_output, "w") as f:
+        f.write(stub)
+    print(f"Generated C++ stub -> {stub_output}")
 
 
 def compile_vulkan(
@@ -108,21 +114,6 @@ def compile_vulkan(
     print(f"Compiled SPIR-V -> {output_spv}")
 
 
-def generate_cpp_stub(
-    filename: str,
-    output: str,
-    enable_optimizations: bool = True,
-    chunk_size: int = 8,
-    optimization_pass: str = "shared-memory",
-) -> None:
-    program = compile(filename, enable_optimizations, chunk_size, optimization_pass)
-    visitor = VulkanCppStubVisitor()
-    stub = program.accept(visitor)
-    with open(output, "w") as f:
-        f.write(stub)
-    print(f"Generated C++ stub -> {output}")
-
-
 if __name__ == "__main__":
     _parser = argparse.ArgumentParser(description="Kernel compiler front-end")
     _parser.add_argument(
@@ -135,11 +126,6 @@ if __name__ == "__main__":
         "--compile",
         metavar="OUTPUT_SPV",
         help="Generate and compile Vulkan shader to SPIR-V",
-    )
-    _parser.add_argument(
-        "--cpp-stub",
-        metavar="OUTPUT_HPP",
-        help="Generate C++ stub header for kernel dispatch",
     )
     _parser.add_argument(
         "--no-optimize",
@@ -170,10 +156,6 @@ if __name__ == "__main__":
             generate_vulkan(args.file, args.vulkan, enable_optimizations, args.chunk_size, optimization_pass)
         elif args.compile:
             compile_vulkan(args.file, args.compile, enable_optimizations, args.chunk_size, optimization_pass)
-    elif args.cpp_stub:
-        if not args.file:
-            _parser.error("--cpp-stub requires an input FILE argument")
-        generate_cpp_stub(args.file, args.cpp_stub, enable_optimizations, args.chunk_size, optimization_pass)
     else:
         # Default: prettyprint all files
         for path in _sys_mod.argv[1:]:

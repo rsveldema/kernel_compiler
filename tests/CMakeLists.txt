@@ -32,11 +32,6 @@ foreach(kernel_name multi-arg single-assign triangular1 with-wg2)
         COMMAND env PYTHONPATH="${CMAKE_SOURCE_DIR}:/tmp/pylib:${PYTHONPATH}"
             ${Python3_EXECUTABLE}
             "${CMAKE_SOURCE_DIR}/codegen/compile.py"
-            --cpp-stub "${output_header}"
-            "${kernel_file}"
-        COMMAND env PYTHONPATH="${CMAKE_SOURCE_DIR}:/tmp/pylib:${PYTHONPATH}"
-            ${Python3_EXECUTABLE}
-            "${CMAKE_SOURCE_DIR}/codegen/compile.py"
             --vulkan "${output_glsl}"
             "${kernel_file}"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
@@ -77,6 +72,7 @@ add_custom_command(
         "${CMAKE_SOURCE_DIR}/codegen/parser.py"
         "${CMAKE_SOURCE_DIR}/codegen/transforms.py"
         "${CMAKE_SOURCE_DIR}/codegen/optim.py"
+        "${CMAKE_SOURCE_DIR}/codegen/visitors/vulkan_cpp_stub_visitor.py"
         "${CMAKE_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
         "${CMAKE_SOURCE_DIR}/codegen/visitors/visitor.py"
         "${CMAKE_SOURCE_DIR}/codegen/visitors/resolve_array_indices.py"
@@ -108,6 +104,7 @@ foreach(chunk_size 1 2 4 8 16 32 64)
             "${CMAKE_SOURCE_DIR}/codegen/parser.py"
             "${CMAKE_SOURCE_DIR}/codegen/transforms.py"
             "${CMAKE_SOURCE_DIR}/codegen/optim.py"
+            "${CMAKE_SOURCE_DIR}/codegen/visitors/vulkan_cpp_stub_visitor.py"
             "${CMAKE_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
             "${CMAKE_SOURCE_DIR}/codegen/visitors/visitor.py"
             "${CMAKE_SOURCE_DIR}/codegen/visitors/resolve_array_indices.py"
@@ -141,6 +138,7 @@ foreach(chunk_size 8 16 32)
             "${CMAKE_SOURCE_DIR}/codegen/parser.py"
             "${CMAKE_SOURCE_DIR}/codegen/transforms.py"
             "${CMAKE_SOURCE_DIR}/codegen/optim.py"
+            "${CMAKE_SOURCE_DIR}/codegen/visitors/vulkan_cpp_stub_visitor.py"
             "${CMAKE_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
             "${CMAKE_SOURCE_DIR}/codegen/visitors/visitor.py"
             "${CMAKE_SOURCE_DIR}/codegen/visitors/resolve_array_indices.py"
@@ -165,7 +163,7 @@ add_executable(test_vulkan_stubs
 add_dependencies(test_vulkan_stubs all_generated_stubs)
 target_link_libraries(test_vulkan_stubs PRIVATE GTest::gtest_main Vulkan::Vulkan libvulkanruntime)
 target_compile_options(test_vulkan_stubs PRIVATE )
-target_compile_definitions(test_vulkan_stubs PRIVATE VK_STUB_NOOP TESTDATA_DIR="${GENERATED_DIR}")
+target_compile_definitions(test_vulkan_stubs PRIVATE TESTDATA_DIR="${GENERATED_DIR}")
 target_include_directories(test_vulkan_stubs PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/tests

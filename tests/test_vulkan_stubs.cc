@@ -33,30 +33,24 @@ TEST_F(VulkanTestBase, single_assign_correctness)
     /* Allocate device buffer for output */
     VDeviceBuffer dst_buf(get_session(), N * sizeof(int));
 
-    /* Vulkan compute context — owns DSL, descriptors, pipeline layout, command buf */
-
-    VulkanComputeKernel kernel(get_session(), TESTDATA_DIR "/single-assign.glsl", 4, 1);
+    VulkanComputeKernel kernel(
+        get_session(),
+        TESTDATA_DIR "/single-assign.glsl",
+        sizeof(single_assign_vecmath_PushConstants),
+        1);
     VulkanComputeContext ctx(get_session());
 
-    /* Write buffer to descriptor set */
-    VkDescriptorBufferInfo dbi{};
-    dbi.buffer = dst_buf.get();
-    dbi.offset = 0;
-    dbi.range  = VK_WHOLE_SIZE;
-
-    VkWriteDescriptorSet wds{};
-    wds.sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    wds.dstSet            = kernel.desc_set();
-    wds.dstBinding        = 0;
-    wds.descriptorCount   = 1;
-    wds.descriptorType    = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    wds.pBufferInfo       = &dbi;
-    vkUpdateDescriptorSets(get_device(), 1, &wds, 0, nullptr);
-
-    /* Dispatch */
     auto cb = ctx.begin_command_buffer();
-    kernel.dispatch(cb, &push_value, sizeof(push_value), VulkanDimension{N, 1, 1});
-
+    single_assign_vecmath(
+        get_device(),
+        kernel.pipeline_layout(),
+        kernel.desc_set_layout(),
+        kernel.pipeline(),
+        cb,
+        kernel.desc_set(),
+        N,
+        dst_buf.get(),
+        single_assign_vecmath_PushConstants{push_value});
     ctx.submit_and_wait();
 
     /* Read back & verify */
@@ -229,15 +223,26 @@ TEST_F(VulkanTestBase, multi_arg_correctness)
     bufs[5].write(b3);
     bufs[6].write(c);
 
-    /* Vulkan compute context */
     VulkanComputeKernel kernel(get_session(), TESTDATA_DIR "/multi-arg.glsl", 0, bufs.size());
     VulkanComputeContext ctx(get_session());
 
-    write_multi_arg_descriptors(kernel, get_device(), bufs);
-
-    /* Dispatch */
     auto cb = ctx.begin_command_buffer();
-    kernel.dispatch(cb, nullptr, 0, VulkanDimension{(ROWS + 8 - 1) / 8, (COLS + 8 - 1) / 8, 1024 / 8});
+    multi_arg_vecmath(
+        get_device(),
+        kernel.pipeline_layout(),
+        kernel.desc_set_layout(),
+        kernel.pipeline(),
+        cb,
+        kernel.desc_set(),
+        ROWS,
+        COLS,
+        bufs[0].get(),
+        bufs[1].get(),
+        bufs[2].get(),
+        bufs[3].get(),
+        bufs[4].get(),
+        bufs[5].get(),
+        bufs[6].get());
     ctx.submit_and_wait();
 
     /* Read back C (buffer index 6) */
@@ -455,35 +460,37 @@ TEST_F(VulkanTestBase, triangular1_correctness)
     bufs[1].write(d_raw_h);
     bufs[2].write(attn_w_h);
 
-    /* Push constants */
-    struct Tri1Push { int32_t seq_len; int32_t ds_rows; int32_t ds_cols; int32_t dr_rows; int32_t dr_cols; };
-    Tri1Push pc = { static_cast<int32_t>(W), H, W, H, D };
+    triangular1_TransformerBlock_PushConstants pc{
+        static_cast<int32_t>(W),
+        static_cast<int32_t>(H),
+        static_cast<int32_t>(W),
+        static_cast<int32_t>(H),
+        static_cast<int32_t>(D),
+    };
 
-    VulkanComputeKernel kernel(get_session(), TESTDATA_DIR "/triangular1.glsl", sizeof(pc), 3);
+    VulkanComputeKernel kernel(
+        get_session(),
+        TESTDATA_DIR "/triangular1.glsl",
+        sizeof(triangular1_TransformerBlock_PushConstants),
+        3);
 
-    /* Vulkan compute context */
     VulkanComputeContext ctx(get_session());
 
-    /* Write descriptors */
-    std::vector<VkDescriptorBufferInfo> dbis(3);
-    for (uint32_t i = 0; i < 3; ++i) {
-        dbis[i].buffer = bufs[i].get();
-        dbis[i].offset = 0;
-        dbis[i].range  = VK_WHOLE_SIZE;
-
-        VkWriteDescriptorSet wds{};
-        wds.sType             = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        wds.dstSet            = kernel.desc_set();
-        wds.dstBinding        = i;
-        wds.descriptorCount   = 1;
-        wds.descriptorType    = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        wds.pBufferInfo       = &dbis[i];
-        vkUpdateDescriptorSets(get_device(), 1, &wds, 0, nullptr);
-    }
-
-    /* Dispatch */
     auto cb = ctx.begin_command_buffer();
-    kernel.dispatch(cb, &pc, sizeof(pc), VulkanDimension{H, W, D});
+    triangular1_TransformerBlock(
+        get_device(),
+        kernel.pipeline_layout(),
+        kernel.desc_set_layout(),
+        kernel.pipeline(),
+        cb,
+        kernel.desc_set(),
+        H,
+        W,
+        D,
+        bufs[0].get(),
+        bufs[1].get(),
+        bufs[2].get(),
+        pc);
     ctx.submit_and_wait();
 
     /* Read back d_raw (buffer index 1) */
@@ -508,15 +515,26 @@ TEST_F(VulkanTestBase, with_wg2_correctness)
     const uint32_t N = 1024;
 
     /* Vulkan compute context — no descriptor layout needed (no SSBOs) */
-    VulkanComputeKernel kernel(get_session(), TESTDATA_DIR "/with-wg2.glsl", sizeof(int), 0);
+    VulkanComputeKernel kernel(
+        get_session(),
+        TESTDATA_DIR "/with-wg2.glsl",
+        sizeof(with_wg2_test_PushConstants),
+        0);
     VulkanComputeContext ctx(get_session());
 
     uint32_t wg_x = 512, wg_y = 64;
     int32_t push_A = 42;
 
     auto cb = ctx.begin_command_buffer();
-    /* Dispatch: ceil(1024/512) x ceil(1024/64) = 2 x 16 = 32 total workgroups */
-    kernel.dispatch(cb, &push_A, sizeof(push_A), VulkanDimension{(N + wg_x - 1) / wg_x, (N + wg_y - 1) / wg_y, 1});
+    with_wg2_test(
+        get_device(),
+        kernel.pipeline_layout(),
+        kernel.desc_set_layout(),
+        kernel.pipeline(),
+        cb,
+        kernel.desc_set(),
+        N,
+        with_wg2_test_PushConstants{push_A});
     ctx.submit_and_wait();
 
     SUCCEED() << "with-wg2 dispatch completed (grid=" << N << "x" << N
