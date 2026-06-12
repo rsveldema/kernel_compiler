@@ -42,6 +42,9 @@ class VulkanCppStubVisitor(Visitor):
             return "float"
         return "unknown_type"
 
+    def _class_name(self, kernel_name: str) -> str:
+        return "".join(part[:1].upper() + part[1:] for part in kernel_name.split("_") if part) + "Kernel"
+
     # ── expression visitors ────────────────────────────────────────────
 
     def visit_type(self, node: ast.Type) -> str:
@@ -284,28 +287,24 @@ class VulkanCppStubVisitor(Visitor):
 
         # ── Emit C++ header ────────────────────────────────────────────
 
-        func_params: List[str] = []
-        func_params.append("    VkDevice device")
-        func_params.append("    VkPipelineLayout pipeline_layout")
-        func_params.append("    VkDescriptorSetLayout descriptor_set_layout")
-        func_params.append("    VkPipeline pipeline")
-        func_params.append("    VkCommandBuffer command_buffer")
-        func_params.append("    VkDescriptorSet _desc_set")
+        method_params: List[str] = []
+        method_params.append("        VulkanComputeContext& context")
 
         if has_3d:
-            func_params.append("    uint32_t dispatch_rows")
-            func_params.append("    uint32_t dispatch_cols")
-            func_params.append("    uint32_t dispatch_levels")
+            method_params.append("        uint32_t dispatch_rows")
+            method_params.append("        uint32_t dispatch_cols")
+            method_params.append("        uint32_t dispatch_levels")
         elif has_2d:
-            func_params.append("    uint32_t dispatch_rows")
-            func_params.append("    uint32_t dispatch_cols")
+            method_params.append("        uint32_t dispatch_rows")
+            method_params.append("        uint32_t dispatch_cols")
         else:
-            func_params.append("    uint32_t dispatch_rows")
+            method_params.append("        uint32_t dispatch_rows")
 
-        # Add buffer params as Vulkan buffer handles. The generated structs
+        # Add buffer params as runtime device buffers. The generated structs
         # above document SSBO layout, but callers should pass actual buffers.
         for param, sname in buffer_params:
-            func_params.append(f"    VkBuffer {param.name}")
+            const_prefix = "const " if getattr(param, "is_const", False) else ""
+            method_params.append(f"        {const_prefix}VDeviceBuffer<{sname}>& {param.name}")
 
         # Build push constant field names (deduplicated)
         pc_field_names = set()
@@ -330,8 +329,8 @@ class VulkanCppStubVisitor(Visitor):
                     )
 
         if is_triangular or scalar_params:
-            func_params.append(
-                f"    const {self._kernel_name}_PushConstants& push_constants"
+            method_params.append(
+                f"        const {self._kernel_name}_PushConstants& push_constants"
             )
 
         # Emit includes
@@ -339,7 +338,9 @@ class VulkanCppStubVisitor(Visitor):
         hdr_text = node.header.strip('"') if node.header else "unknown"
         self._emit(f"// ── Kernel dispatch stub: {hdr_text} ─────────────")
         self._emit("#include <cstdint>")
+        self._emit("#include <string>")
         self._emit("#include <vulkan/vulkan_core.h>")
+        self._emit('#include "vulkan_session.hpp"')
         self._emit("")
 
         # Buffer structs (matching SSBO layout)
@@ -369,10 +370,20 @@ class VulkanCppStubVisitor(Visitor):
             self._emit("};")
             self._emit("")
 
-        # Dispatch function signature
-        self._emit(f"inline void {self._kernel_name}(")
-        for i, fp in enumerate(func_params):
-            comma = "," if i < len(func_params) - 1 else ""
+        # Kernel wrapper class and dispatch method
+        class_name = self._class_name(self._kernel_name)
+        push_size = f"sizeof({self._kernel_name}_PushConstants)" if all_pc_fields else "0"
+        self._emit(f"class {class_name} {{")
+        self._emit("public:")
+        self._push()
+        self._emit(f"{class_name}(VulkanSession& session, const std::string& glsl_file)")
+        self._emit(f"    : kernel_(session, glsl_file, {push_size}, {len(buffer_params)})")
+        self._emit("{")
+        self._emit("}")
+        self._emit("")
+        self._emit("void dispatch(")
+        for i, fp in enumerate(method_params):
+            comma = "," if i < len(method_params) - 1 else ""
             self._emit(fp + comma)
         self._emit(") {")
         self._push()
@@ -396,37 +407,44 @@ class VulkanCppStubVisitor(Visitor):
             y_dim = "1"
             z_dim = str(getattr(node, "reduction_chunks", 1))
 
-        self._emit("(void)descriptor_set_layout;")
+        self._emit("VkCommandBuffer command_buffer = context.begin_command_buffer();")
         if buffer_params:
+            self._emit("VkDescriptorSet desc_set = kernel_.desc_set();")
             self._emit(f"VkDescriptorBufferInfo buffer_infos[{len(buffer_params)}]{{}};")
             self._emit(f"VkWriteDescriptorSet writes[{len(buffer_params)}]{{}};")
             for i, (param, _sname) in enumerate(buffer_params):
-                self._emit(f"buffer_infos[{i}].buffer = {param.name};")
+                self._emit(f"buffer_infos[{i}].buffer = {param.name}.get();")
                 self._emit(f"buffer_infos[{i}].offset = 0;")
                 self._emit(f"buffer_infos[{i}].range = VK_WHOLE_SIZE;")
                 self._emit(f"writes[{i}].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;")
-                self._emit(f"writes[{i}].dstSet = _desc_set;")
+                self._emit(f"writes[{i}].dstSet = desc_set;")
                 self._emit(f"writes[{i}].dstBinding = {i};")
                 self._emit(f"writes[{i}].descriptorCount = 1;")
                 self._emit(f"writes[{i}].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;")
                 self._emit(f"writes[{i}].pBufferInfo = &buffer_infos[{i}];")
-            self._emit(f"vkUpdateDescriptorSets(device, {len(buffer_params)}, writes, 0, nullptr);")
-        else:
-            self._emit("(void)device;")
+            self._emit(f"vkUpdateDescriptorSets(context.get_device(), {len(buffer_params)}, writes, 0, nullptr);")
         if all_pc_fields:
             self._emit(
-                f"vkCmdPushConstants(command_buffer, pipeline_layout, "
+                f"vkCmdPushConstants(command_buffer, kernel_.pipeline_layout(), "
                 f"VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants), &push_constants);"
             )
         if buffer_params:
             self._emit(
                 "vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, "
-                "pipeline_layout, 0, 1, &_desc_set, 0, nullptr);"
+                "kernel_.pipeline_layout(), 0, 1, &desc_set, 0, nullptr);"
             )
-        self._emit("vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);")
+        self._emit("vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, kernel_.pipeline());")
         self._emit(f"vkCmdDispatch(command_buffer, {x_dim}, {y_dim}, {z_dim});")
+        self._emit("context.submit_and_wait();")
 
         self._pop()
         self._emit("}")
+        self._pop()
+        self._emit("")
+        self._emit("private:")
+        self._push()
+        self._emit("VulkanComputeKernel kernel_;")
+        self._pop()
+        self._emit("};")
 
         return self.result()

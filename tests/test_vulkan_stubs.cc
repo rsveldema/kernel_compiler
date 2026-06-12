@@ -31,27 +31,18 @@ TEST_F(VulkanTestBase, single_assign_correctness)
     std::vector<int> expected(N, 42);
 
     /* Allocate device buffer for output */
-    VDeviceBuffer dst_buf(get_session(), N * sizeof(int));
+    VDeviceBuffer<RllmBuffer_dst> dst_buf(get_session(), N * sizeof(int));
 
-    VulkanComputeKernel kernel(
+    SingleAssignVecmathKernel kernel(
         get_session(),
-        TESTDATA_DIR "/single-assign.glsl",
-        sizeof(single_assign_vecmath_PushConstants),
-        1);
+        TESTDATA_DIR "/single-assign.glsl");
     VulkanComputeContext ctx(get_session());
 
-    auto cb = ctx.begin_command_buffer();
-    single_assign_vecmath(
-        get_device(),
-        kernel.pipeline_layout(),
-        kernel.desc_set_layout(),
-        kernel.pipeline(),
-        cb,
-        kernel.desc_set(),
+    kernel.dispatch(
+        ctx,
         N,
-        dst_buf.get(),
+        dst_buf,
         single_assign_vecmath_PushConstants{push_value});
-    ctx.submit_and_wait();
 
     /* Read back & verify */
     VHostBuffer<int> readback(get_session(), N);
@@ -69,7 +60,7 @@ TEST_F(VulkanTestBase, single_assign_correctness)
 static void write_multi_arg_descriptors(
     VulkanComputeKernel& kernel,
     VkDevice device,
-    std::vector<VDeviceBuffer>& bufs)
+    std::vector<VBaseDeviceBuffer>& bufs)
 {
     std::vector<VkDescriptorBufferInfo> dbis(bufs.size());
     for (uint32_t i = 0; i < bufs.size(); ++i) {
@@ -90,7 +81,7 @@ static void write_multi_arg_descriptors(
 
 static void download_buffer(
     VulkanSession& session,
-    VDeviceBuffer& src,
+    VBaseDeviceBuffer& src,
     void* dst)
 {
     const VkDeviceSize size_bytes = src.size();
@@ -102,7 +93,7 @@ static void download_buffer(
 static double dispatch_multi_arg_once(
     VulkanComputeKernel& kernel,
     VulkanSession& session,
-    VDeviceBuffer& c_buf,
+    VBaseDeviceBuffer& c_buf,
     VBaseHostBuffer& zero_c,
     const VulkanDimension& dims)
 {
@@ -117,7 +108,7 @@ static double dispatch_multi_arg_once(
     return std::chrono::duration<double, std::milli>(end - start).count();
 }
 
-static std::vector<float> read_float_buffer(VulkanSession& session, VDeviceBuffer& buf)
+static std::vector<float> read_float_buffer(VulkanSession& session, VBaseDeviceBuffer& buf)
 {
     const VkDeviceSize size_bytes = buf.size();
     std::vector<float> actual(static_cast<size_t>(size_bytes / sizeof(float)));
@@ -141,7 +132,7 @@ TEST_F(VulkanTestBase, host_device_buffer_copy_bandwidth)
 
     VBaseHostBuffer upload(get_session(), size_bytes);
     VBaseHostBuffer download(get_session(), size_bytes);
-    VDeviceBuffer device(get_session(), size_bytes);
+    VBaseDeviceBuffer device(get_session(), size_bytes);
 
     for (VkDeviceSize i = 0; i < size_bytes; ++i) {
         upload.get()[i] = static_cast<uint8_t>((i * 131u + 17u) & 0xffu);
@@ -207,47 +198,39 @@ TEST_F(VulkanTestBase, multi_arg_correctness)
     a3.fill(5.0f);
     b3.fill(6.0f);
     c.fill(0.0f);
-    std::vector<VDeviceBuffer> bufs;
-    bufs.emplace_back(get_session(), a1.size());
-    bufs.emplace_back(get_session(), b1.size());
-    bufs.emplace_back(get_session(), a2.size());
-    bufs.emplace_back(get_session(), b2.size());
-    bufs.emplace_back(get_session(), a3.size());
-    bufs.emplace_back(get_session(), b3.size());
-    bufs.emplace_back(get_session(), c.size());
-    bufs[0].write(a1);
-    bufs[1].write(b1);
-    bufs[2].write(a2);
-    bufs[3].write(b2);
-    bufs[4].write(a3);
-    bufs[5].write(b3);
-    bufs[6].write(c);
+    VDeviceBuffer<RllmBuffer_A1> a1_buf(get_session(), a1.size());
+    VDeviceBuffer<RllmBuffer_B1> b1_buf(get_session(), b1.size());
+    VDeviceBuffer<RllmBuffer_A2> a2_buf(get_session(), a2.size());
+    VDeviceBuffer<RllmBuffer_B2> b2_buf(get_session(), b2.size());
+    VDeviceBuffer<RllmBuffer_A3> a3_buf(get_session(), a3.size());
+    VDeviceBuffer<RllmBuffer_B3> b3_buf(get_session(), b3.size());
+    VDeviceBuffer<RllmBuffer_C> c_buf(get_session(), c.size());
+    a1_buf.write(a1);
+    b1_buf.write(b1);
+    a2_buf.write(a2);
+    b2_buf.write(b2);
+    a3_buf.write(a3);
+    b3_buf.write(b3);
+    c_buf.write(c);
 
-    VulkanComputeKernel kernel(get_session(), TESTDATA_DIR "/multi-arg.glsl", 0, bufs.size());
+    MultiArgVecmathKernel kernel(get_session(), TESTDATA_DIR "/multi-arg.glsl");
     VulkanComputeContext ctx(get_session());
 
-    auto cb = ctx.begin_command_buffer();
-    multi_arg_vecmath(
-        get_device(),
-        kernel.pipeline_layout(),
-        kernel.desc_set_layout(),
-        kernel.pipeline(),
-        cb,
-        kernel.desc_set(),
+    kernel.dispatch(
+        ctx,
         ROWS,
         COLS,
-        bufs[0].get(),
-        bufs[1].get(),
-        bufs[2].get(),
-        bufs[3].get(),
-        bufs[4].get(),
-        bufs[5].get(),
-        bufs[6].get());
-    ctx.submit_and_wait();
+        a1_buf,
+        b1_buf,
+        a2_buf,
+        b2_buf,
+        a3_buf,
+        b3_buf,
+        c_buf);
 
     /* Read back C (buffer index 6) */
     std::vector<float> actual(ROWS * COLS);
-    download_buffer(get_session(), bufs[6], actual.data());
+    download_buffer(get_session(), c_buf, actual.data());
 
     for (uint32_t i = 0; i < ROWS * COLS; ++i) {
         EXPECT_NEAR(actual[i], expected_val, 1.0f) << "multi-arg C[" << i << "]";
@@ -277,7 +260,7 @@ TEST_F(VulkanTestBase, multi_arg_shared_memory_tiling_is_faster)
     a3.fill(5.0f);
     b3.fill(6.0f);
     c.fill(0.0f);
-    std::vector<VDeviceBuffer> bufs;
+    std::vector<VBaseDeviceBuffer> bufs;
     bufs.emplace_back(get_session(), a1.size());
     bufs.emplace_back(get_session(), b1.size());
     bufs.emplace_back(get_session(), a2.size());
@@ -397,7 +380,7 @@ TEST_F(VulkanTestBase, multi_arg_cooperative_matrix2_correctness)
     a3.fill(5.0f);
     b3.fill(6.0f);
     c.fill(0.0f);
-    std::vector<VDeviceBuffer> bufs;
+    std::vector<VBaseDeviceBuffer> bufs;
     bufs.emplace_back(coop_session, a1.size());
     bufs.emplace_back(coop_session, b1.size());
     bufs.emplace_back(coop_session, a2.size());
@@ -445,7 +428,6 @@ TEST_F(VulkanTestBase, triangular1_correctness)
     float expected_val = 1.0f - static_cast<float>(D); /* 1 - 32 = -31 */
 
     const size_t elem_count = static_cast<size_t>(H) * W * D;
-    std::vector<VDeviceBuffer> bufs;
 
     VHostBuffer<float> d_scores_h(get_session(), elem_count);
     VHostBuffer<float> d_raw_h(get_session(), elem_count);
@@ -453,12 +435,12 @@ TEST_F(VulkanTestBase, triangular1_correctness)
     d_scores_h.fill(1.0f);
     d_raw_h.fill(0.0f);
     attn_w_h.fill(1.0f);
-    bufs.emplace_back(get_session(), d_scores_h.size());
-    bufs.emplace_back(get_session(), d_raw_h.size());
-    bufs.emplace_back(get_session(), attn_w_h.size());
-    bufs[0].write(d_scores_h);
-    bufs[1].write(d_raw_h);
-    bufs[2].write(attn_w_h);
+    VDeviceBuffer<RllmBuffer_d_scores> d_scores_buf(get_session(), d_scores_h.size());
+    VDeviceBuffer<RllmBuffer_d_raw> d_raw_buf(get_session(), d_raw_h.size());
+    VDeviceBuffer<RllmBuffer_attn_w> attn_w_buf(get_session(), attn_w_h.size());
+    d_scores_buf.write(d_scores_h);
+    d_raw_buf.write(d_raw_h);
+    attn_w_buf.write(attn_w_h);
 
     triangular1_TransformerBlock_PushConstants pc{
         static_cast<int32_t>(W),
@@ -468,34 +450,25 @@ TEST_F(VulkanTestBase, triangular1_correctness)
         static_cast<int32_t>(D),
     };
 
-    VulkanComputeKernel kernel(
+    Triangular1TransformerBlockKernel kernel(
         get_session(),
-        TESTDATA_DIR "/triangular1.glsl",
-        sizeof(triangular1_TransformerBlock_PushConstants),
-        3);
+        TESTDATA_DIR "/triangular1.glsl");
 
     VulkanComputeContext ctx(get_session());
 
-    auto cb = ctx.begin_command_buffer();
-    triangular1_TransformerBlock(
-        get_device(),
-        kernel.pipeline_layout(),
-        kernel.desc_set_layout(),
-        kernel.pipeline(),
-        cb,
-        kernel.desc_set(),
+    kernel.dispatch(
+        ctx,
         H,
         W,
         D,
-        bufs[0].get(),
-        bufs[1].get(),
-        bufs[2].get(),
+        d_scores_buf,
+        d_raw_buf,
+        attn_w_buf,
         pc);
-    ctx.submit_and_wait();
 
     /* Read back d_raw (buffer index 1) */
     std::vector<float> actual(elem_count);
-    download_buffer(get_session(), bufs[1], actual.data());
+    download_buffer(get_session(), d_raw_buf, actual.data());
 
     for (uint32_t hi = 0; hi < H; ++hi) {
         for (uint32_t i = 0; i < W; ++i) {
@@ -515,27 +488,18 @@ TEST_F(VulkanTestBase, with_wg2_correctness)
     const uint32_t N = 1024;
 
     /* Vulkan compute context — no descriptor layout needed (no SSBOs) */
-    VulkanComputeKernel kernel(
+    WithWg2TestKernel kernel(
         get_session(),
-        TESTDATA_DIR "/with-wg2.glsl",
-        sizeof(with_wg2_test_PushConstants),
-        0);
+        TESTDATA_DIR "/with-wg2.glsl");
     VulkanComputeContext ctx(get_session());
 
     uint32_t wg_x = 512, wg_y = 64;
     int32_t push_A = 42;
 
-    auto cb = ctx.begin_command_buffer();
-    with_wg2_test(
-        get_device(),
-        kernel.pipeline_layout(),
-        kernel.desc_set_layout(),
-        kernel.pipeline(),
-        cb,
-        kernel.desc_set(),
+    kernel.dispatch(
+        ctx,
         N,
         with_wg2_test_PushConstants{push_A});
-    ctx.submit_and_wait();
 
     SUCCEED() << "with-wg2 dispatch completed (grid=" << N << "x" << N
               << ", workgroup=" << wg_x << "x" << wg_y

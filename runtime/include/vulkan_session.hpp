@@ -497,7 +497,7 @@ public:
     uint32_t mem_type_idx() const { return mem_type_idx_; }
 
 private:
-    friend class VDeviceBuffer;
+    friend class VBaseDeviceBuffer;
 
     VkBuffer vk_buffer() const { return buf_; }
 
@@ -576,10 +576,10 @@ private:
     size_t count_ = 0;
 };
 
-class VDeviceBuffer
+class VBaseDeviceBuffer
 {
 public:
-    VDeviceBuffer(VulkanSession &session, VkDeviceSize size_bytes)
+    VBaseDeviceBuffer(VulkanSession &session, VkDeviceSize size_bytes)
         : m_session(session)
     {
         size_ = size_bytes;
@@ -593,13 +593,13 @@ public:
             buf_,
             mem_,
             mem_type_idx_,
-            "VDeviceBuffer");
+            "VBaseDeviceBuffer");
     }
 
-    VDeviceBuffer(const VDeviceBuffer&) = delete;
-    VDeviceBuffer& operator=(const VDeviceBuffer&) = delete;
+    VBaseDeviceBuffer(const VBaseDeviceBuffer&) = delete;
+    VBaseDeviceBuffer& operator=(const VBaseDeviceBuffer&) = delete;
 
-    VDeviceBuffer(VDeviceBuffer&& other)
+    VBaseDeviceBuffer(VBaseDeviceBuffer&& other)
         : m_session(other.m_session),
           buf_(other.buf_),
           mem_(other.mem_),
@@ -612,7 +612,7 @@ public:
         other.mem_type_idx_ = 0xFFFFFFFFu;
     }
 
-    VDeviceBuffer& operator=(VDeviceBuffer&& other)
+    VBaseDeviceBuffer& operator=(VBaseDeviceBuffer&& other)
     {
         if (this != &other)
         {
@@ -631,7 +631,7 @@ public:
         return *this;
     }
 
-    ~VDeviceBuffer()
+    ~VBaseDeviceBuffer()
     {
         destroy_resources();
     }
@@ -669,7 +669,7 @@ private:
         cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         cpci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
         cpci.queueFamilyIndex = m_session.get_queue_family_index();
-        check_vk(vkCreateCommandPool(m_session.get_device(), &cpci, nullptr, &cmd_pool), "VDeviceBuffer::copy cmd pool");
+        check_vk(vkCreateCommandPool(m_session.get_device(), &cpci, nullptr, &cmd_pool), "VBaseDeviceBuffer::copy cmd pool");
 
         VkCommandBuffer cmd_buf = VK_NULL_HANDLE;
         VkCommandBufferAllocateInfo cai{};
@@ -677,12 +677,12 @@ private:
         cai.commandPool = cmd_pool;
         cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         cai.commandBufferCount = 1;
-        check_vk(vkAllocateCommandBuffers(m_session.get_device(), &cai, &cmd_buf), "VDeviceBuffer::copy cmd buf alloc");
+        check_vk(vkAllocateCommandBuffers(m_session.get_device(), &cai, &cmd_buf), "VBaseDeviceBuffer::copy cmd buf alloc");
 
         VkCommandBufferBeginInfo bbci{};
         bbci.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bbci.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        check_vk(vkBeginCommandBuffer(cmd_buf, &bbci), "VDeviceBuffer::copy cmd buf begin");
+        check_vk(vkBeginCommandBuffer(cmd_buf, &bbci), "VBaseDeviceBuffer::copy cmd buf begin");
 
         if (src == buf_)
         {
@@ -738,14 +738,14 @@ private:
             1, &barrier,
             0, nullptr);
 
-        check_vk(vkEndCommandBuffer(cmd_buf), "VDeviceBuffer::copy cmd buf end");
+        check_vk(vkEndCommandBuffer(cmd_buf), "VBaseDeviceBuffer::copy cmd buf end");
 
         VkSubmitInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.commandBufferCount = 1;
         si.pCommandBuffers = &cmd_buf;
-        check_vk(vkQueueSubmit(m_session.get_queue(), 1, &si, VK_NULL_HANDLE), "VDeviceBuffer::copy submit");
-        check_vk(vkDeviceWaitIdle(m_session.get_device()), "VDeviceBuffer::copy wait idle");
+        check_vk(vkQueueSubmit(m_session.get_queue(), 1, &si, VK_NULL_HANDLE), "VBaseDeviceBuffer::copy submit");
+        check_vk(vkDeviceWaitIdle(m_session.get_device()), "VBaseDeviceBuffer::copy wait idle");
 
         vkFreeCommandBuffers(m_session.get_device(), cmd_pool, 1, &cmd_buf);
         vkDestroyCommandPool(m_session.get_device(), cmd_pool, nullptr);
@@ -767,4 +767,19 @@ private:
     VkDeviceMemory mem_ = VK_NULL_HANDLE;
     VkDeviceSize size_ = 0;
     uint32_t mem_type_idx_ = 0xFFFFFFFFu;
+};
+
+template <typename T>
+class VDeviceBuffer : public VBaseDeviceBuffer
+{
+public:
+    explicit VDeviceBuffer(VulkanSession& session)
+        : VBaseDeviceBuffer(session, sizeof(T))
+    {
+    }
+
+    VDeviceBuffer(VulkanSession& session, VkDeviceSize size_bytes)
+        : VBaseDeviceBuffer(session, size_bytes)
+    {
+    }
 };
