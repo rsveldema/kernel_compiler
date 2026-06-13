@@ -48,7 +48,7 @@ def _token_value(t):
 _TYPE_NAMES = frozenset((
     "int", "size_t", "float", "float16", "PositionIndex",
     "fixed_size_vector", "flexible_rows_matrix", "fixed_size_matrix",
-    "flexible_size_matrix", "fixed_size_levels_rows_cols_matrix",
+    "flexible_size_matrix", "flexible_cols_matrix", "fixed_size_levels_rows_cols_matrix",
     "flexible_rows_cols_levels_matrix", "fixed_size_obj_vector",
 ))
 
@@ -207,12 +207,18 @@ def extract_limit_expr(space_tree):
     if not expr_trees:
         return None
 
+    if space_tree.data in {"parfor_2d_triangular_param", "parfor_2d_upper_triangular_param"}:
+        upper = transform_expression(expr_trees[0])
+        raw_name = _extract_expression_name(expr_trees[0])
+        kind = "upper" if space_tree.data == "parfor_2d_upper_triangular_param" else "lower"
+        return (Number(0), upper, ["0", raw_name], kind)
+
     if len(expr_trees) == 2:
         # Triangular case: two bounds (lower and upper)
         lower = transform_expression(expr_trees[0])
         upper = transform_expression(expr_trees[1])
         raw_names = [_extract_expression_name(et) for et in expr_trees]
-        return (lower, upper, raw_names)
+        return (lower, upper, raw_names, "lower")
 
     expr_tree = expr_trees[0]
 
@@ -578,8 +584,11 @@ def _parse_field_access_for_lhs(fa_tree):
         return CallExpr(base, call_args)
 
     if index_groups:
-        assert field is None
         expr = base
+        if field:
+            # Pure field chain (no array indexing)
+            expr = FieldAccess(base=base, field=field)
+
         for indices in index_groups:
             expr = ArrayAccess(base=expr, indices=indices)
         return expr
@@ -690,6 +699,13 @@ def _transform_type(type_tree, default_name="int"):
                     transform_expression(expr_children[1]),
                 )
         elif "flexible_rows_cols_matrix" in type_name:
+            if len(expr_children) >= 2:
+                return FlexibleRowsColsMatrix(
+                    _resolve_nested_type(children[1]),
+                    transform_expression(expr_children[0]),
+                    transform_expression(expr_children[1]),
+                )
+        elif "flexible_cols_matrix" in type_name:
             if len(expr_children) >= 2:
                 return FlexibleRowsColsMatrix(
                     _resolve_nested_type(children[1]),
@@ -1422,6 +1438,8 @@ def transform(t: Tree) -> Program:
     if isinstance(limit_result, tuple):
         p.lower_bound_expr = limit_result[0]
         p.upper_bound_expr = limit_result[1]
+        if len(limit_result) >= 4:
+            p.triangular_kind = limit_result[3]
 
     if not hasattr(p, "lower_bound_expr"):
         if p.space_dim >= 2:
@@ -1480,8 +1498,6 @@ def transform(t: Tree) -> Program:
                                 var_name = dc.value
         param_type_map[var_name] = transform_declaration(decl_tree)
 
-    p.params = [param_type_map.get(n) for n in param_names]
-
     # Collect constexpr parameter declarations for type resolution
     param_constexpr_defines = []
     if hasattr(decls_node, 'children'):
@@ -1501,11 +1517,19 @@ def transform(t: Tree) -> Program:
     p._param_constexpr_defines = param_constexpr_defines
 
     # Store triangular bound expressions and names (for RLLM-style push constants)
-    if isinstance(limit_result, tuple) and len(limit_result) == 3:
-        lower, upper, raw_bounds = limit_result
+    if isinstance(limit_result, tuple) and len(limit_result) >= 3:
+        lower, upper, raw_bounds = limit_result[:3]
         p.lower_bound_expr = lower
         p.upper_bound_expr = upper
         p.triangular_bounds_raw = raw_bounds
+        if len(limit_result) >= 4:
+            p.triangular_kind = limit_result[3]
+
+    for bound_name in getattr(p, "triangular_bounds_raw", []) or []:
+        if bound_name in param_type_map and bound_name not in param_names:
+            param_names.append(bound_name)
+
+    p.params = [param_type_map.get(n) for n in param_names]
 
     for stmt_tree in t.children[3].children:
         result = transform_statement(stmt_tree)

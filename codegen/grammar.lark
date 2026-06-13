@@ -12,12 +12,12 @@ header: "PROGRAM" "(" string ")" workgroup_properties*
 workgroup_properties: "workgroup" "{" "x" ":" expression "," "y" ":" expression "," "z" ":" expression "}"
 | "shared" declaration ";"
 
-parfor_space: "OFFLOAD_PARFOR_1D_PARAM" "(" IDENT "," expression "," parfor_parameters_list ")" 
-| "OFFLOAD_PARFOR_2D_PARAM" "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" 
-| "OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM"       "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" 
-| "OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM" "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" 
-| "OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM" "(" IDENT "," IDENT "," IDENT "," expression "," expression "," parfor_parameters_list ")" 
-| "OFFLOAD_PARFOR_3D_PARAM" "(" IDENT "," IDENT "," IDENT "," expression "," parfor_parameters_list ")" 
+parfor_space: "OFFLOAD_PARFOR_1D_PARAM" "(" IDENT "," expression "," parfor_parameters_list ")" -> parfor_1d_param
+| "OFFLOAD_PARFOR_2D_PARAM" "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" -> parfor_2d_param
+| "OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM"       "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" -> parfor_2d_triangular_param
+| "OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM" "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" -> parfor_2d_upper_triangular_param
+| "OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM" "(" IDENT "," IDENT "," IDENT "," expression "," expression "," parfor_parameters_list ")" -> parfor_3d_triangular_param
+| "OFFLOAD_PARFOR_3D_PARAM" "(" IDENT "," IDENT "," IDENT "," expression "," parfor_parameters_list ")" -> parfor_3d_param
 
 parfor_parameters_list: "(" parameter ("," parameter)* ")"
 parameter: IDENT
@@ -79,6 +79,7 @@ type: FSV "<" type "," expression ">" ("&")?
     | FSLRMC "<" type "," expression "," expression "," expression ">" ("&")?
     | FRCLM "<" type "," expression "," expression "," expression ">" ("&")?
     | FRCM "<" type "," expression "," expression ">" ("&")?
+    | FCOLM "<" type "," expression "," expression ">" ("&")?
     | FSOV "<" (FSM | FLEXSM) "<" type "," expression "," expression ">" "," expression ">" ("&")?
     | TYPE_LITERAL
 
@@ -137,6 +138,7 @@ FLEXSM: "flexible_size_matrix"
 FSLRMC: "fixed_size_levels_rows_cols_matrix"
 FRCLM: "flexible_rows_cols_levels_matrix"
 FRCM: "flexible_rows_cols_matrix"
+FCOLM: "flexible_cols_matrix"
 FSOV: "fixed_size_obj_vector"
 
  

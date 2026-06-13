@@ -17,6 +17,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <mutex>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -312,9 +313,18 @@ public:
     /* Begin the command buffer (caller fills it in between begin/end) */
     VkCommandBuffer begin_command_buffer()
     {
+        m_mutex.lock();
         VkCommandBufferBeginInfo bbci{};
         bbci.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        check_vk(vkBeginCommandBuffer(m_cmd_buf, &bbci), "VkComputeSession cmd buf begin");
+        try
+        {
+            check_vk(vkBeginCommandBuffer(m_cmd_buf, &bbci), "VkComputeSession cmd buf begin");
+        }
+        catch (...)
+        {
+            m_mutex.unlock();
+            throw;
+        }
         return m_cmd_buf;
     }
 
@@ -330,7 +340,10 @@ public:
         check_vk(vkQueueSubmit(get_queue(), 1, &si, VK_NULL_HANDLE), "VkComputeSession submit");
         check_vk(vkDeviceWaitIdle(get_device()), "VkComputeSession wait idle");
         check_vk(vkResetCommandPool(get_device(), m_cmd_pool, 0), "VkComputeSession reset cmd pool");
+        m_mutex.unlock();
     }
+
+    std::recursive_mutex& mutex() { return m_mutex; }
 
 private:
     /* Allocate a descriptor set from a per-context pool. */
@@ -377,6 +390,7 @@ private:
     VkCommandBuffer m_cmd_buf  = VK_NULL_HANDLE;
     VkDescriptorPool m_desc_pool = VK_NULL_HANDLE;
     VkDescriptorSet  m_desc_set  = VK_NULL_HANDLE;
+    std::recursive_mutex m_mutex;
 };
 
 static inline uint32_t find_mem_type(VkPhysicalDevice pdev, uint32_t type_filter, VkMemoryPropertyFlags props)
@@ -713,6 +727,7 @@ public:
 
     void write(VulkanComputeContext& context, VBaseHostBuffer& src, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
     {
+        std::lock_guard<std::recursive_mutex> lock(context.mutex());
         assert(src_offset <= src.size());
         assert(dst_offset <= size_);
         if (count == VK_WHOLE_SIZE)
@@ -726,6 +741,7 @@ public:
 
     void read(VulkanComputeContext& context, VBaseHostBuffer& dst, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
     {
+        std::lock_guard<std::recursive_mutex> lock(context.mutex());
         assert(src_offset <= size_);
         assert(dst_offset <= dst.size());
         if (count == VK_WHOLE_SIZE)

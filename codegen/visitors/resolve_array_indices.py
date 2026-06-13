@@ -28,7 +28,8 @@ class ResolveArrayIndicesVisitor(Expression):
     their linear-address equivalent based on the parameter type map.
     """
 
-    def __init__(self, params: list[Declaration]):
+    def __init__(self, params: list[Declaration], space_dim: int = 0):
+        self._space_dim = space_dim
         self._param_map: Dict[str, Declaration] = {}
         for p in params:
             if isinstance(p, Declaration) and p.name:
@@ -164,6 +165,23 @@ class ResolveArrayIndicesVisitor(Expression):
 
         return None
 
+    def _compute_dynamic_2d_strides(self, base_name: str | None, var_type):
+        """Return runtime strides for compact 2-D matrix buffers when available."""
+        if not base_name or not isinstance(var_type, (FlexibleSizeMatrix, FlexibleRowsColsMatrix)):
+            return None
+
+        cols_name = f"{base_name}_cols"
+        if cols_name in self._param_map:
+            return [Identifier(cols_name), Number(1)]
+
+        if self._space_dim >= 2:
+            return [Identifier("rllm_bound_y"), Number(1)]
+
+        if isinstance(var_type, FlexibleRowsColsMatrix) and "T" in self._param_map:
+            return [Identifier("T"), Number(1)]
+
+        return None
+
     def _make_linear_index(self, ident: ArrayAccess):
         """Mutate *ident* so that its indices are replaced with linear-address expressions.
 
@@ -192,6 +210,9 @@ class ResolveArrayIndicesVisitor(Expression):
         )
 
         dynamic_strides = self._compute_dynamic_3d_strides(base_name, var_type)
+        if dynamic_strides is None:
+            dynamic_strides = self._compute_dynamic_2d_strides(base_name, var_type)
+
         if dynamic_strides is not None:
             strides, is_large = dynamic_strides, False
         else:
@@ -512,6 +533,7 @@ class ResolveArrayIndicesVisitor(Expression):
             if getattr(node, "upper_bound_expr", None)
             else None,
             triangular_bounds_raw=getattr(node, "triangular_bounds_raw", []),
+            triangular_kind=getattr(node, "triangular_kind", ""),
             params=params or node.params,
             body_stmts=body_stmts or node.body_stmts,
             workgroups=workgroups or node.workgroups,
@@ -537,5 +559,5 @@ def resolve_array_indices(program: Program) -> Program:
     each supported matrix/vector type.  Indices that cannot be resolved (unknown
     dimensions) are left unchanged.
     """
-    visitor = ResolveArrayIndicesVisitor(program.params)
+    visitor = ResolveArrayIndicesVisitor(program.params, getattr(program, "space_dim", 0))
     return program.accept(visitor)

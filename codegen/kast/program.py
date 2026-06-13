@@ -15,6 +15,7 @@ class Program(AstNode):
         lower_bound_expr=None,
         upper_bound_expr=None,
         triangular_bounds_raw=None,  # [raw_lower_str, raw_upper_str] for triangular
+        triangular_kind="",
         params=None,
         body_stmts=None,
         workgroups=None,
@@ -44,6 +45,7 @@ class Program(AstNode):
         self.lower_bound_expr = lower_bound_expr
         self.upper_bound_expr = upper_bound_expr
         self.triangular_bounds_raw = triangular_bounds_raw or []
+        self.triangular_kind = triangular_kind
         self.params = params or []
         self.body_stmts = body_stmts or []
         self.workgroups = workgroups or []

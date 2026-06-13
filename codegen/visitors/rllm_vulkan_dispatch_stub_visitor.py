@@ -132,11 +132,11 @@ class RllmVulkanDispatchStubVisitor(Visitor):
 
         template_prefix = ""
         if template_params:
-            template_prefix = "template <typename Range, " + ", ".join(template_params) + ">\n"
+            template_prefix = "template <typename Range, " + ", ".join(template_params) + ", typename... Ignored>\n"
         else:
-            template_prefix = "template <typename Range>\n"
+            template_prefix = "template <typename Range, typename... Ignored>\n"
 
-        joined_function_params = ", ".join(["Range&& range", *function_params])
+        joined_function_params = ", ".join(["Range&& range", *function_params, "Ignored&&... ignored_args"])
         joined_dispatch_args = ", ".join(dispatch_args)
 
         mark_lines = []
@@ -161,6 +161,8 @@ class RllmVulkanDispatchStubVisitor(Visitor):
             f"{template_prefix}"
             f"inline void {symbol}({joined_function_params})\n"
             "{\n"
+            "    static_cast<void>(sizeof...(ignored_args));\n"
+            "    std::lock_guard<std::recursive_mutex> vulkan_lock(rllm::vulkan_runtime::mutex());\n"
             f"    static {namespace_name}::{class_name} kernel(rllm::vulkan_runtime::session(), std::string(RLLM_VULKAN_KERNEL_ROOT) + \"/{self._spv_path}\");\n"
             f"    const {namespace_name}::{push_name} push_constants{{\n"
             f"{push_body}\n"

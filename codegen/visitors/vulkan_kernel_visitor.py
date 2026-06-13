@@ -766,7 +766,8 @@ class VulkanKernelVisitor(Visitor):
             if getattr(node, "triangular_bounds_raw", None)
             else []
         )
-        is_triangular = len(triangular_bounds_raw) >= 2
+        triangular_kind = getattr(node, "triangular_kind", "")
+        is_triangular = bool(triangular_kind) or len(triangular_bounds_raw) >= 2
         if is_triangular and _is_push_identifier(triangular_bounds_raw[1]) and not triangular_bounds_raw[1].lstrip("-").isdigit():
             self._triangular_upper_bound_name = triangular_bounds_raw[1]
 
@@ -957,11 +958,18 @@ class VulkanKernelVisitor(Visitor):
             self._emit(f"{vtype} {name} = rllm_push.{name};")
 
         # 3. Triangular guard (if applicable)
-        if is_triangular and triangular_bounds_raw and len(triangular_bounds_raw) >= 2:
+        if is_triangular:
             parts = []
             for idx, var in enumerate(node.loop_vars):
                 bound_name = f"rllm_bound_{'xyz'[idx]}"
                 parts.append(f"{var} >= rllm_push.{bound_name}")
+            if len(node.loop_vars) >= 2:
+                row_var = node.loop_vars[-2]
+                col_var = node.loop_vars[-1]
+                if triangular_kind == "upper":
+                    parts.append(f"{row_var} > {col_var}")
+                else:
+                    parts.append(f"{col_var} > {row_var}")
 
             self._emit(f"if ({' || '.join(parts)}) return;")
 
