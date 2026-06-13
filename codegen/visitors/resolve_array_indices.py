@@ -54,7 +54,7 @@ class ResolveArrayIndicesVisitor(Expression):
     def _is_large_array_type(self, var_type) -> bool:
         """Check if a type has dimensions large enough to produce linear indices >= INT_MAX."""
         size_exprs = []
-        if isinstance(var_type, (FixedSizeMatrix, FlexibleRowsMatrix)):
+        if isinstance(var_type, (FixedSizeMatrix, FlexibleRowsMatrix, FlexibleSizeMatrix, FlexibleRowsColsMatrix, FixedSizeObjVectorMatrix)):
             size_exprs.extend([var_type.row_size_expr, var_type.col_size_expr])
         elif isinstance(var_type, (FixedSizeLevelsRowsColsMatrix, FlexibleRowsColsLevelsMatrix)):
             size_exprs.extend([
@@ -91,7 +91,7 @@ class ResolveArrayIndicesVisitor(Expression):
             if col is not None and row is not None:
                 return [col, 1], self._is_large_array_type(var_type)
 
-        elif isinstance(var_type, FixedSizeMatrix):
+        elif isinstance(var_type, (FixedSizeMatrix, FlexibleSizeMatrix, FlexibleRowsColsMatrix)):
             col = self._extract_size(var_type.col_size_expr)
             row = self._extract_size(var_type.row_size_expr)
             if col is not None and row is not None:
@@ -114,6 +114,12 @@ class ResolveArrayIndicesVisitor(Expression):
                 s0 = col * lvl
                 s1 = lvl
                 return [s0, s1, 1], self._is_large_array_type(var_type)
+
+        elif isinstance(var_type, FixedSizeObjVectorMatrix):
+            col = self._extract_size(var_type.col_size_expr)
+            row = self._extract_size(var_type.row_size_expr)
+            if col is not None and row is not None:
+                return [col, 1], self._is_large_array_type(var_type)
 
         elif isinstance(var_type, FixedSizeVector):
             size = self._extract_size(var_type.size_expr)
@@ -254,6 +260,27 @@ class ResolveArrayIndicesVisitor(Expression):
         col_s = node.col_size_expr.accept(self) if node.col_size_expr else None
         return FixedSizeMatrix(elem_type=elem, row_size_expr=row_s, col_size_expr=col_s)
 
+    def visit_flexible_size_matrix(self, node):
+        elem = node.elem_type.accept(self) if node.elem_type else None
+        row_s = node.row_size_expr.accept(self) if node.row_size_expr else None
+        col_s = node.col_size_expr.accept(self) if node.col_size_expr else None
+        return FlexibleSizeMatrix(elem_type=elem, row_size_expr=row_s, col_size_expr=col_s)
+
+    def visit_flexible_rows_cols_matrix(self, node):
+        elem = node.elem_type.accept(self) if node.elem_type else None
+        row_s = node.row_size_expr.accept(self) if node.row_size_expr else None
+        col_s = node.col_size_expr.accept(self) if node.col_size_expr else None
+        return FlexibleRowsColsMatrix(elem_type=elem, row_size_expr=row_s, col_size_expr=col_s)
+
+    def visit_fixed_size_obj_vector_matrix(self, node):
+        elem = node.elem_type.accept(self) if node.elem_type else None
+        lvl = node.level_expr.accept(self) if node.level_expr else None
+        row_s = node.row_size_expr.accept(self) if node.row_size_expr else None
+        col_s = node.col_size_expr.accept(self) if node.col_size_expr else None
+        return FixedSizeObjVectorMatrix(
+            elem_type=elem, level_expr=lvl, row_size_expr=row_s, col_size_expr=col_s
+        )
+
     def visit_fixed_size_levels_rows_cols_matrix(self, node):
         elem = node.elem_type.accept(self) if node.elem_type else None
         lvl = node.level_expr.accept(self) if node.level_expr else None
@@ -284,6 +311,10 @@ class ResolveArrayIndicesVisitor(Expression):
     def visit_identifier(self, node):
         return Identifier(name=node.name)
 
+    def visit_field_access(self, node: FieldAccess):
+        base = node.base.accept(self) if node.base else None
+        return FieldAccess(base=base, field=node.field)
+
     def visit_array_access(self, node: ArrayAccess):
         """Resolve multi-dimensional indices to linear addresses in place."""
         resolved = self._make_linear_index(node)
@@ -303,15 +334,33 @@ class ResolveArrayIndicesVisitor(Expression):
         # Mutated in place – already resolved
         return node
 
+    def visit_call_expr(self, node: CallExpr):
+        callee = node.callee.accept(self) if node.callee else None
+        args = [arg.accept(self) if hasattr(arg, "accept") else arg for arg in node.args]
+        return CallExpr(callee=callee, args=args)
+
     def visit_limit_expr(self, node: LimitExpr):
         max_val = node.max_val.accept(self) if node.max_val else None
-        body = node.body.accept(self) if node.body else None
-        return LimitExpr(max_val=max_val, body=body)
+        start = node.start.accept(self) if getattr(node, "start", None) else None
+        end = node.end.accept(self) if getattr(node, "end", None) else None
+        if start is not None:
+            return LimitExpr(max_val, start, end)
+        return LimitExpr(max_val, end)
 
     def visit_binary_expr(self, node: BinaryExpr):
         left = node.left.accept(self) if node.left else None
         right = node.right.accept(self) if node.right else None
         return BinaryExpr(left=left, op=node.op, right=right)
+
+    def visit_ternary_expr(self, node: TernaryExpr):
+        condition = node.condition.accept(self) if node.condition else None
+        true_expr = node.true_expr.accept(self) if node.true_expr else None
+        false_expr = node.false_expr.accept(self) if node.false_expr else None
+        return TernaryExpr(condition=condition, true_expr=true_expr, false_expr=false_expr)
+
+    def visit_unary_minus_expr(self, node: UnaryMinusExpr):
+        operand = node.operand.accept(self) if node.operand else None
+        return UnaryMinusExpr(operand=operand)
 
     def visit_cast_expr(self, node: CastExpr):
         operand = node.operand.accept(self) if node.operand else None
@@ -400,6 +449,11 @@ class ResolveArrayIndicesVisitor(Expression):
         lvalue = node.lvalue.accept(self) if node.lvalue else None
         operand = node.operand.accept(self) if node.operand else None
         return OverflowCheck(lvalue=lvalue, operand=operand)
+
+    def visit_atomic_op(self, node: AtomicOp):
+        lhs = node.lhs.accept(self) if node.lhs else None
+        rhs = node.rhs.accept(self) if node.rhs else None
+        return AtomicOp(lhs=lhs, rhs=rhs, op=node.op)
 
     def visit_shared_decl(self, node: SharedDecl):
         init_expr = node.init_expr.accept(self) if node.init_expr else None

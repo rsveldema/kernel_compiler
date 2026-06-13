@@ -30,6 +30,7 @@ from codegen.transforms import transform
 from codegen.visitors.pretty_printer import prettyprint
 from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
 from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
+from codegen.visitors.rllm_vulkan_dispatch_stub_visitor import RllmVulkanDispatchStubVisitor
 from codegen.optim import perform_blocking, perform_cooperative_matrix2
 
 log = logging.getLogger(__name__)
@@ -77,6 +78,8 @@ def generate_vulkan(
     enable_optimizations: bool = True,
     chunk_size: int = 8,
     optimization_pass: str = "shared-memory",
+    rllm_dispatch_stub: str | None = None,
+    rllm_spv_path: str | None = None,
 ) -> None:
     program = compile(filename, enable_optimizations, chunk_size, optimization_pass)
     visitor = VulkanKernelVisitor()
@@ -90,6 +93,12 @@ def generate_vulkan(
     with open(stub_output, "w") as f:
         f.write(stub)
     print(f"Generated C++ stub -> {stub_output}")
+    if rllm_dispatch_stub:
+        visitor = RllmVulkanDispatchStubVisitor(rllm_spv_path or (output.rsplit(".", 1)[0] + ".spv"))
+        dispatch_stub = program.accept(visitor)
+        with open(rllm_dispatch_stub, "w") as f:
+            f.write(dispatch_stub)
+        print(f"Generated RLLM dispatch stub -> {rllm_dispatch_stub}")
 
 
 def compile_vulkan(
@@ -98,9 +107,11 @@ def compile_vulkan(
     enable_optimizations: bool = True,
     chunk_size: int = 8,
     optimization_pass: str = "shared-memory",
+    rllm_dispatch_stub: str | None = None,
+    rllm_spv_path: str | None = None,
 ) -> None:
     glsl_path = input_file.rsplit(".", 1)[0] + ".glsl"
-    generate_vulkan(input_file, glsl_path, enable_optimizations, chunk_size, optimization_pass)
+    generate_vulkan(input_file, glsl_path, enable_optimizations, chunk_size, optimization_pass, rllm_dispatch_stub, rllm_spv_path)
     cmd = [
         "glslc", "-fshader-stage=compute", "-o", output_spv,
         "--target-env=vulkan1.4" if optimization_pass == "coopmat2" else "--target-env=vulkan1.2", glsl_path,
@@ -127,6 +138,8 @@ if __name__ == "__main__":
         metavar="OUTPUT_SPV",
         help="Generate and compile Vulkan shader to SPIR-V",
     )
+    _parser.add_argument("--rllm-dispatch-stub", metavar="OUTPUT_H", help="Generate an RLLM ComputeKernel dispatch wrapper header")
+    _parser.add_argument("--rllm-spv-path", metavar="REL_SPV", help="SPIR-V path embedded in the RLLM dispatch wrapper")
     _parser.add_argument(
         "--no-optimize",
         action="store_true",
@@ -153,9 +166,9 @@ if __name__ == "__main__":
         if not args.file:
             _parser.error("--vulkan and --compile require an input FILE argument")
         if args.vulkan:
-            generate_vulkan(args.file, args.vulkan, enable_optimizations, args.chunk_size, optimization_pass)
+            generate_vulkan(args.file, args.vulkan, enable_optimizations, args.chunk_size, optimization_pass, args.rllm_dispatch_stub, args.rllm_spv_path)
         elif args.compile:
-            compile_vulkan(args.file, args.compile, enable_optimizations, args.chunk_size, optimization_pass)
+            compile_vulkan(args.file, args.compile, enable_optimizations, args.chunk_size, optimization_pass, args.rllm_dispatch_stub, args.rllm_spv_path)
     else:
         # Default: prettyprint all files
         for path in _sys_mod.argv[1:]:

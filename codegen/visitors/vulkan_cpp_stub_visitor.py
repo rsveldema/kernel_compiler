@@ -91,6 +91,11 @@ class VulkanCppStubVisitor(Visitor):
         base += "." + node.field
         return base
 
+    def visit_call_expr(self, node: ast.CallExpr) -> str:
+        callee = node.callee.accept(self) if node.callee else ""
+        args = ", ".join(arg.accept(self) for arg in node.args)
+        return f"{callee}({args})"
+
     def _to_str(self, node) -> str:
         if node is None:
             return ""
@@ -341,6 +346,8 @@ class VulkanCppStubVisitor(Visitor):
 
         if is_triangular:
             for tb in getattr(node, "triangular_bounds_raw", []):
+                if tb is None:
+                    continue
                 if tb not in pc_field_names and not tb.lstrip("-").isdigit():
                     pc_field_names.add(tb)
                     # Create a synthetic field for triangular bounds
@@ -505,7 +512,7 @@ class VulkanCppStubVisitor(Visitor):
     def visit_atomic_op(self, node: ast.AtomicOp) -> str:
         lhs = self._visit_expr_child(node.lhs)
         rhs = self._visit_expr_child(node.rhs)
-        return f"atomicAdd({lhs}, {rhs});"
+        return f"{node.op}({lhs}, {rhs});"
 
     def visit_if(self, node: ast.If) -> str:
         cond = (

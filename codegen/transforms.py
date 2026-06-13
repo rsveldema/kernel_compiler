@@ -32,7 +32,8 @@ def _token_value(t):
 _TYPE_NAMES = frozenset((
     "int", "size_t", "float", "float16", "PositionIndex",
     "fixed_size_vector", "flexible_rows_matrix", "fixed_size_matrix",
-    "fixed_size_levels_rows_cols_matrix", "flexible_rows_cols_levels_matrix",
+    "flexible_size_matrix", "fixed_size_levels_rows_cols_matrix",
+    "flexible_rows_cols_levels_matrix", "fixed_size_obj_vector",
 ))
 
 
@@ -277,18 +278,43 @@ def _transform_workgroup_properties(wg_tree):
 
 def transform_expression(expr_tree):
     """Convert an expression Tree to an AST node."""
+    if expr_tree.data == "inc_call":
+        for child in expr_tree.children:
+            if isinstance(child, Tree) and child.data == "expression":
+                operand = transform_expression(child)
+                if operand is not None:
+                    return BinaryExpr(operand, "+", Number(1))
+
     # Direct limit_expr
     if expr_tree.data == "limit_expr":
-        max_val = transform_expression(expr_tree.children[0])
-        body = max_val
-        if (len(expr_tree.children) > 1):
-            body = transform_expression(expr_tree.children[1])
-        return LimitExpr(max_val, body)
+        expr_children = []
+        for child in expr_tree.children:
+            if isinstance(child, Tree) and child.data == "expression":
+                expr_children.append(child)
+            elif isinstance(child, Tree) and child.data == "limit_args":
+                expr_children.extend(
+                    sub for sub in child.children
+                    if isinstance(sub, Tree) and sub.data == "expression"
+                )
+        max_val = transform_expression(expr_children[0]) if expr_children else None
+        if len(expr_children) >= 3:
+            return LimitExpr(
+                max_val,
+                transform_expression(expr_children[1]),
+                transform_expression(expr_children[2]),
+            )
+        if len(expr_children) >= 2:
+            return LimitExpr(max_val, transform_expression(expr_children[1]))
+        return LimitExpr(max_val, max_val)
 
     # 'expression' wrapper with binary ops
     if expr_tree.data == "expression":
         children = expr_tree.children
         op_val = None
+        ternary_tree = None
+        if children and isinstance(children[-1], Tree) and children[-1].data == "ternary_trailer":
+            ternary_tree = children[-1]
+            children = children[:-1]
 
         if len(children) == 3 and _is_token(children[1]):
             op_val = children[1].value
@@ -305,12 +331,25 @@ def transform_expression(expr_tree):
             left = transform_expression(children[0])
             right = transform_expression(children[2])
             if left is not None and right is not None:
-                return BinaryExpr(left, op_val, right)
+                expr = BinaryExpr(left, op_val, right)
+                if ternary_tree is not None and len(ternary_tree.children) >= 2:
+                    return TernaryExpr(
+                        expr,
+                        transform_expression(ternary_tree.children[0]),
+                        transform_expression(ternary_tree.children[1]),
+                    )
+                return expr
 
         for child in children:
             if isinstance(child, Tree):
                 result = transform_expression(child)
                 if result is not None:
+                    if ternary_tree is not None and len(ternary_tree.children) >= 2:
+                        return TernaryExpr(
+                            result,
+                            transform_expression(ternary_tree.children[0]),
+                            transform_expression(ternary_tree.children[1]),
+                        )
                     return result
 
     # Direct number tree
@@ -318,12 +357,15 @@ def transform_expression(expr_tree):
         val_token = expr_tree.children[0]
         try:
             val_str = val_token.value
-            if isinstance(val_str, str) and "." in val_str:
+            unsigned = isinstance(val_str, str) and val_str.endswith(("u", "U"))
+            if isinstance(val_str, str):
+                val_str = val_str.rstrip("uU")
+            if isinstance(val_str, str) and ("." in val_str or "e" in val_str.lower()):
                 core = val_str.rstrip("fF")
                 if core.endswith("."):
                     core = core + "0"
-                return Number(int(float(core)))
-            return Number(int(val_str))
+                return Number(float(core), unsigned=unsigned)
+            return Number(int(val_str), unsigned=unsigned)
         except (ValueError, TypeError):
             return None
 
@@ -373,10 +415,24 @@ def _transform_from_base(base_tree):
                 operand = transform_expression(child.children[1])
                 if operand is not None:
                     return CastExpr(cast_type, operand)
-            elif data == "negation":
-                operand = transform_expression(child.children[0])
+            elif data == "unary_expression":
+                op = None
+                operand = None
+                for sub in child.children:
+                    if isinstance(sub, Tree) and sub.data == "unary_operator":
+                        op = _extract_op_token_from_tree(sub)
+                    elif isinstance(sub, Tree):
+                        operand = transform_expression(sub)
                 if operand is not None:
+                    if op == "-":
+                        return UnaryMinusExpr(operand)
                     return NegationExpr(operand)
+            elif data == "inc_call":
+                for sub in child.children:
+                    if isinstance(sub, Tree) and sub.data == "expression":
+                        operand = transform_expression(sub)
+                        if operand is not None:
+                            return BinaryExpr(operand, "+", Number(1))
             else:
                 result = transform_expression(child)
                 if result is not None:
@@ -472,25 +528,44 @@ def _parse_field_access_for_lhs(fa_tree):
 
     base_name = first.value
     field = None
-    indices = []
+    index_groups = []
+    call_args = None
 
     for child in children[1:]:
         if isinstance(child, Tree) and child.data == "array_index":
+            indices = []
             for idx_child in child.children:
                 if isinstance(idx_child, Tree):
                     expr_result = transform_expression(idx_child)
                     if expr_result is not None:
                         indices.append(expr_result)
+            index_groups.append(indices)
         elif _is_token(child) and child.type == "DOT":
             pass  # separator between field names
         elif _is_token(child) and child.type == "IDENT":
             field = child.value
+        elif isinstance(child, Tree) and child.data == "call_args":
+            call_args = []
+            for arg_child in child.children:
+                if isinstance(arg_child, Tree) and arg_child.data == "expression":
+                    arg_expr = transform_expression(arg_child)
+                    if arg_expr is not None:
+                        call_args.append(arg_expr)
 
     base = Identifier(base_name)
 
-    if indices:
+    if call_args is not None:
+        assert field is None and not index_groups
+        if base_name == "inc" and call_args:
+            return BinaryExpr(call_args[0], "+", Number(1))
+        return CallExpr(base, call_args)
+
+    if index_groups:
         assert field is None
-        return ArrayAccess(base=base, indices=indices)
+        expr = base
+        for indices in index_groups:
+            expr = ArrayAccess(base=expr, indices=indices)
+        return expr
 
     if field:
         # Pure field chain (no array indexing)
@@ -512,7 +587,7 @@ def _resolve_nested_type(node, default_name="int"):
         if data == "type" and len(node.children) == 1 and _is_token(node.children[0]):
             token = node.children[0]
             val = token.value
-            if val in ("int", "size_t", "PositionIndex"):
+            if val in ("int", "size_t", "PositionIndex", "TokenID", "EmbeddingDimension", "HeadsIndex", "TempStorage", "FFDimension", "HeadDimension", "RmsNormPartialSumIndex", "MultiTokenPredictionIndex", "NeuronConnectionIndex", "ConflictIndex"):
                 return Int(val)
             elif val in ("float", "rlmm_float", "rlmm_float_small"):
                 return Float()
@@ -548,7 +623,15 @@ def _transform_type(type_tree, default_name="int"):
             c for c in children[1:] if isinstance(c, Tree) and c.data == "expression"
         ]
 
-        if "fixed_size_levels_rows_cols_matrix" in type_name:
+        if "fixed_size_obj_vector" in type_name:
+            if len(expr_children) >= 3:
+                return FixedSizeObjVectorMatrix(
+                    _resolve_nested_type(children[2]),
+                    transform_expression(expr_children[2]),
+                    transform_expression(expr_children[0]),
+                    transform_expression(expr_children[1]),
+                )
+        elif "fixed_size_levels_rows_cols_matrix" in type_name:
             # 4 params: elem_type + level + row + col
             if len(expr_children) >= 3:
                 return FixedSizeLevelsRowsColsMatrix(
@@ -566,6 +649,13 @@ def _transform_type(type_tree, default_name="int"):
                     transform_expression(expr_children[1]),
                     transform_expression(expr_children[2]),
                 )
+        elif "flexible_size_matrix" in type_name:
+            if len(expr_children) >= 2:
+                return FlexibleSizeMatrix(
+                    _resolve_nested_type(children[1]),
+                    transform_expression(expr_children[0]),
+                    transform_expression(expr_children[1]),
+                )
         elif "fixed_size_matrix" in type_name:
             # 3 params: elem_type + row + col
             if len(expr_children) >= 2:
@@ -582,6 +672,13 @@ def _transform_type(type_tree, default_name="int"):
                     transform_expression(expr_children[0]),
                     transform_expression(expr_children[1]),
                 )
+        elif "flexible_rows_cols_matrix" in type_name:
+            if len(expr_children) >= 2:
+                return FlexibleRowsColsMatrix(
+                    _resolve_nested_type(children[1]),
+                    transform_expression(expr_children[0]),
+                    transform_expression(expr_children[1]),
+                )
         elif "fixed_size_vector" in type_name:
             # 2 params: elem_type + size_expr
             if len(expr_children) >= 1:
@@ -594,7 +691,7 @@ def _transform_type(type_tree, default_name="int"):
     # Handle single-child TYPE_LITERAL terminal
     if len(children) == 1 and _is_token(first_child):
         name_val = first_child.value
-        return Int(name_val) if name_val in ("int", "size_t", "PositionIndex") else Float()
+        return Int(name_val) if name_val in ("int", "size_t", "PositionIndex", "TokenID", "EmbeddingDimension", "HeadsIndex", "TempStorage", "FFDimension", "HeadDimension", "RmsNormPartialSumIndex", "MultiTokenPredictionIndex", "NeuronConnectionIndex", "ConflictIndex") else Float()
 
     # Simple types (data like 'int' or 'float')
     if hasattr(first_child, 'data') and first_child.data in ("int", "float"):
@@ -681,6 +778,17 @@ def transform_statement(stmt_tree):
         operand = transform_expression(expr_child)
         if lvalue is not None and operand is not None:
             return OverflowCheck(lvalue, operand)
+
+    if data == "atomic_op":
+        op = "atomicAdd"
+        exprs = []
+        for child in stmt_tree.children:
+            if _is_token(child) and child.type == "ATOMIC_OP":
+                op = child.value
+            elif isinstance(child, Tree) and child.data == "expression":
+                exprs.append(transform_expression(child))
+        if len(exprs) >= 2:
+            return AtomicOp(exprs[0], exprs[1], op)
 
     # block: "{" statement* "}"
     # for_statement

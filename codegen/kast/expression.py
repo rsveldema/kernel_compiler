@@ -59,6 +59,17 @@ class FieldAccess(Expression):
         return visitor.visit_field_access(self)
 
 
+class CallExpr(Expression):
+    """Represents a function call expression such as pow(x, y)."""
+
+    def __init__(self, callee: Expression, args: list[Expression]):
+        self.callee = callee
+        self.args = args or []
+
+    def accept(self, visitor):
+        return visitor.visit_call_expr(self)
+
+
 class LimitExpr(Expression):
     """
     LimitExpr works as a Range expression for a given type. 
@@ -117,6 +128,7 @@ __all__ = [
     "Identifier",
     "ArrayAccess",
     "FieldAccess",
+    "CallExpr",
     "LimitExpr",
     "BinaryExpr",
     "CastExpr",

@@ -12,6 +12,8 @@ workgroup_properties: "workgroup" "{" "x" ":" expression "," "y" ":" expression 
 
 parfor_space: "OFFLOAD_PARFOR_1D_PARAM" "(" IDENT "," expression "," parfor_parameters_list ")" 
 | "OFFLOAD_PARFOR_2D_PARAM" "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" 
+| "OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM"       "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" 
+| "OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM" "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" 
 | "OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM" "(" IDENT "," IDENT "," IDENT "," expression "," expression "," parfor_parameters_list ")" 
 | "OFFLOAD_PARFOR_3D_PARAM" "(" IDENT "," IDENT "," IDENT "," expression "," parfor_parameters_list ")" 
 
@@ -30,7 +32,8 @@ statement: for_statement
 | atomic_op
 
 
-atomic_op: "atomicAdd" "(" expression "," expression ")" ";"
+atomic_op: ATOMIC_OP "(" expression "," expression ")" ";"
+ATOMIC_OP: "atomicAdd" | "atomicMax" | "atomicMin"
 
 
 return_statement: RETURN ";"
@@ -64,14 +67,16 @@ INC_OP: "++" | "--"
 declaration: "const" type IDENT ("=" expression)? -> const_decl
 | type IDENT  ("=" expression)? -> decl
 
-TYPE_LITERAL: "int" | "size_t" | "float" | "float" | "float16" | "PositionIndex"
+TYPE_LITERAL: "int" | "size_t" | "float" | "float" | "float16" | "PositionIndex" | "TokenID" | "EmbeddingDimension" | "HeadsIndex" | "TempStorage" | "FFDimension" | "HeadDimension" | "RmsNormPartialSumIndex" | "MultiTokenPredictionIndex" | "NeuronConnectionIndex" | "ConflictIndex"
 
 type: FSV "<" type "," expression ">" "&"
     | FRM "<" type "," expression "," expression ">" "&"
     | FSM "<" type "," expression "," expression ">" "&"
+    | FLEXSM "<" type "," expression "," expression ">" "&"
     | FSLRMC "<" type "," expression "," expression "," expression ">" "&"
     | FRCLM "<" type "," expression "," expression "," expression ">" "&"
     | FRCM "<" type "," expression "," expression ">" "&"
+    | FSOV "<" (FSM | FLEXSM) "<" type "," expression "," expression ">" "," expression ">" "&"
     | TYPE_LITERAL
 
 
@@ -83,7 +88,7 @@ ASSIGN_OP: "=" | "+=" | "-=" | "*=" | "/="
 assign_operator: ASSIGN_OP
 
 DOT: "."
-field_access: IDENT ( DOT IDENT)? ( array_index | call_args )? 
+field_access: IDENT ( DOT IDENT)? ( array_index | call_args )* 
 
 array_index:  "[" expression ("," expression)* "]"
 
@@ -125,9 +130,11 @@ number_term: NUMBER -> number
 FSV: "fixed_size_vector"
 FRM: "flexible_rows_matrix"
 FSM: "fixed_size_matrix"
+FLEXSM: "flexible_size_matrix"
 FSLRMC: "fixed_size_levels_rows_cols_matrix"
 FRCLM: "flexible_rows_cols_levels_matrix"
 FRCM: "flexible_rows_cols_matrix"
+FSOV: "fixed_size_obj_vector"
 
  
 
@@ -149,4 +156,3 @@ NUMBER: /([0-9]+\.[0-9]*|\.[0-9]+|[0-9]+)(e[+-]?[0-9]*)?[fFu]?/
 %import common.WS_INLINE
 %import common.WS
 %ignore WS_INLINE
-

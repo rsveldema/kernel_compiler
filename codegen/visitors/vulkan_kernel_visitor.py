@@ -52,7 +52,7 @@ def _extract_size_from_expr(expr: Expression) -> int:
 
 def _compute_matrix_size(ty: Type) -> int:
     parts = 1
-    if isinstance(ty, (FixedSizeLevelsRowsColsMatrix, FlexibleRowsColsLevelsMatrix)):
+    if isinstance(ty, (FixedSizeLevelsRowsColsMatrix, FlexibleRowsColsLevelsMatrix, FixedSizeObjVectorMatrix)):
         for attr in ("level_expr", "row_size_expr", "col_size_expr"):
             expr = getattr(ty, attr, None)
             if expr:
@@ -60,7 +60,7 @@ def _compute_matrix_size(ty: Type) -> int:
                 if s:
                     parts *= s
         return parts
-    elif isinstance(ty, FixedSizeMatrix):
+    elif isinstance(ty, (FixedSizeMatrix, FlexibleSizeMatrix, FlexibleRowsColsMatrix)):
         for attr in ("row_size_expr", "col_size_expr"):
             expr = getattr(ty, attr, None)
             if expr:
@@ -167,6 +167,12 @@ class VulkanKernelVisitor(Visitor):
     def visit_fixed_size_matrix(self, node: FixedSizeMatrix) -> str:
         return self._glsl_elem_type(node)
 
+    def visit_flexible_size_matrix(self, node: FlexibleSizeMatrix) -> str:
+        return self._glsl_elem_type(node)
+
+    def visit_fixed_size_obj_vector_matrix(self, node: FixedSizeObjVectorMatrix) -> str:
+        return self._glsl_elem_type(node)
+
     def visit_fixed_size_levels_rows_cols_matrix(
         self, node: FixedSizeLevelsRowsColsMatrix
     ) -> str:
@@ -202,7 +208,7 @@ class VulkanKernelVisitor(Visitor):
         val = node.value
         if isinstance(val, float):
             s = f"{val}"
-            if "." not in s:
+            if "." not in s and "e" not in s.lower():
                 s += ".0"
             return s
         s = str(int(val))
@@ -225,6 +231,14 @@ class VulkanKernelVisitor(Visitor):
         return node.accept(self)
 
     def visit_array_access(self, node: ArrayAccess) -> str:
+        if isinstance(node.base, ArrayAccess) and isinstance(node.base.base, Identifier):
+            base_name = node.base.base.name
+            mapped = self._ssbo_map.get(base_name)
+            if mapped is not None and isinstance(mapped[1], FixedSizeObjVectorMatrix):
+                level = self._visit_expr_child(node.base.indices[0]) if node.base.indices else "0"
+                row = self._visit_expr_child(node.indices[0]) if len(node.indices) > 0 else "0"
+                col = self._visit_expr_child(node.indices[1]) if len(node.indices) > 1 else "0"
+                return f"rllm_load_{base_name}({level}, {row}, {col})"
         base = node.base.accept(self) if node.base else "?"
         parts = []
         for idx in node.indices:
@@ -242,10 +256,18 @@ class VulkanKernelVisitor(Visitor):
         base += "." + node.field
         return base
 
+    def visit_call_expr(self, node: CallExpr) -> str:
+        callee = self._visit_expr_child(node.callee)
+        args = ", ".join(self._visit_expr_child(arg) for arg in node.args)
+        return f"{callee}({args})"
+
     def visit_limit_expr(self, node: LimitExpr) -> str:
         max_val = self._visit_expr_child(node.max_val)
-        body = self._visit_expr_child(node.body)
-        return f"limit<{max_val}>({body})"
+        start = self._visit_expr_child(getattr(node, "start", None))
+        end = self._visit_expr_child(getattr(node, "end", None))
+        if start and start != "0":
+            return f"limit<{max_val}>({start}, {end})"
+        return f"limit<{max_val}>({end})"
 
     def visit_binary_expr(self, node: BinaryExpr) -> str:
         left = self._visit_expr_child(node.left)
@@ -279,17 +301,19 @@ class VulkanKernelVisitor(Visitor):
         lines = []
         ind = "    " * (self._indent_level + 1)
 
+        lower_bound = "0"
         upper_bound = "?"
         if node.init_expr and isinstance(node.init_expr, LimitExpr):
-            max_val = (
-                self._to_str(node.init_expr.max_val) if node.init_expr.max_val else "?"
-            )
-            upper_bound = max_val
-            if self._triangular_upper_bound_name and max_val.lstrip("-").isdigit():
+            max_val = self._to_str(node.init_expr.max_val) if node.init_expr.max_val else "?"
+            start_val = self._to_str(getattr(node.init_expr, "start", None)) if getattr(node.init_expr, "start", None) else "0"
+            end_val = self._to_str(getattr(node.init_expr, "end", None)) if getattr(node.init_expr, "end", None) else "?"
+            lower_bound = start_val
+            upper_bound = end_val if end_val != "?" else max_val
+            if self._triangular_upper_bound_name and upper_bound.lstrip("-").isdigit():
                 upper_bound = f"rllm_push.{self._triangular_upper_bound_name}"
 
         lines.append(
-            f"{ind}for (int {node.loop_var_name} = 0; "
+            f"{ind}for (int {node.loop_var_name} = {lower_bound}; "
             f"{node.loop_var_name} < {upper_bound}; ++{node.loop_var_name}) {{"
         )
 
@@ -372,6 +396,22 @@ class VulkanKernelVisitor(Visitor):
         return f"{prefix}{var_type} {node.name}{init_str};"
 
     def visit_assignment(self, node: Assignment) -> str:
+        if (
+            isinstance(node.lvalue, ArrayAccess)
+            and isinstance(node.lvalue.base, ArrayAccess)
+            and isinstance(node.lvalue.base.base, Identifier)
+        ):
+            base_name = node.lvalue.base.base.name
+            mapped = self._ssbo_map.get(base_name)
+            if mapped is not None and isinstance(mapped[1], FixedSizeObjVectorMatrix):
+                level = self._visit_expr_child(node.lvalue.base.indices[0]) if node.lvalue.base.indices else "0"
+                row = self._visit_expr_child(node.lvalue.indices[0]) if len(node.lvalue.indices) > 0 else "0"
+                col = self._visit_expr_child(node.lvalue.indices[1]) if len(node.lvalue.indices) > 1 else "0"
+                rvalue = self._to_str(node.rvalue) if node.rvalue else "?"
+                if node.assign_op != "=":
+                    op = node.assign_op[0]
+                    rvalue = f"rllm_load_{base_name}({level}, {row}, {col}) {op} ({rvalue})"
+                return f"rllm_store_{base_name}({level}, {row}, {col}, {rvalue});"
         lvalue = self._to_str(node.lvalue) if node.lvalue else "?"
         rvalue = self._to_str(node.rvalue) if node.rvalue else "?"
         if (
@@ -413,7 +453,7 @@ class VulkanKernelVisitor(Visitor):
         lhs = self._to_str(node.lhs)
         rhs = self._to_str(node.rhs)
         ind = "    " * self._indent_level
-        return f"{ind}atomicAdd({lhs}, {rhs});"
+        return f"{ind}{node.op}({lhs}, {rhs});"
 
     def _workgroup_size(self, node: Program) -> tuple[str, str, str]:
         wg_x, wg_y, wg_z = "1", "1", "1"
@@ -599,12 +639,12 @@ class VulkanKernelVisitor(Visitor):
         self._emit("#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require")
         self._emit("#extension GL_KHR_shader_subgroup_arithmetic : require")
         self._emit("#extension GL_KHR_shader_subgroup_clustered : require")
+        self._emit("#extension GL_EXT_shader_atomic_float : require")
+        self._emit("#extension GL_EXT_shader_atomic_float2 : require")
         if getattr(node, "use_cooperative_matrix2", False):
             self._emit("#extension GL_KHR_memory_scope_semantics : require")
             self._emit("#extension GL_KHR_cooperative_matrix : require")
             self._emit("#extension GL_NV_cooperative_matrix2 : require")
-        if self._uses_reduction_chunks:
-            self._emit("#extension GL_EXT_shader_atomic_float : require")
         wg_x, wg_y, wg_z = self._workgroup_size(node)
         self._emit(f"layout(local_size_x = {wg_x}, local_size_y = {wg_y}, local_size_z = {wg_z}) in;")
         self._emit("")
@@ -629,9 +669,12 @@ class VulkanKernelVisitor(Visitor):
                 vt,
                 (
                     FlexibleRowsMatrix,
+                    FlexibleSizeMatrix,
+                    FlexibleRowsColsMatrix,
                     FixedSizeMatrix,
                     FlexibleRowsColsLevelsMatrix,
                     FixedSizeLevelsRowsColsMatrix,
+                    FixedSizeObjVectorMatrix,
                 ),
             )
             is_vector = isinstance(vt, FixedSizeVector)
@@ -640,7 +683,7 @@ class VulkanKernelVisitor(Visitor):
                 all_matrix_params.append(param)
             else:
                 if param.name not in {f[0] for f in self._push_constant_fields}:
-                    self._push_constant_fields.append((param.name, "int"))
+                    self._push_constant_fields.append((param.name, "float" if isinstance(vt, Float) else "int"))
                     self._push_constant_map[param.name] = True
 
         def _is_literal(s):
@@ -653,9 +696,30 @@ class VulkanKernelVisitor(Visitor):
                 self._push_constant_fields.append((tb, "int"))
                 self._push_constant_map[tb] = True
 
+        bound_fields = [("rllm_bound_x", "int")]
+        if node.space_dim >= 2:
+            bound_fields.append(("rllm_bound_y", "int"))
+        if node.space_dim >= 3:
+            bound_fields.append(("rllm_bound_z", "int"))
+        for name, vtype in reversed(bound_fields):
+            if name not in {f[0] for f in self._push_constant_fields}:
+                self._push_constant_fields.insert(0, (name, vtype))
+                self._push_constant_map[name] = True
+
+        # ── Emit push_constant block before helper functions that reference it ──
+        if self._push_constant_fields:
+            self._emit("")
+            self._emit("layout(push_constant) uniform RllmPushConstants {")
+            self._push()
+            for name, vtype in self._push_constant_fields:
+                self._emit(f"{vtype} {name};")
+            self._pop()
+            self._emit("} rllm_push;")
+
         # ── Emit SSBO buffers with compile-time sized arrays ──
         for param in all_matrix_params:
             vt = param.var_type
+            is_obj_vector_matrix = isinstance(vt, FixedSizeObjVectorMatrix)
             is_3d = hasattr(vt, "level_expr") and vt.level_expr is not None
             inner = self._glsl_elem_type(vt)
 
@@ -667,26 +731,54 @@ class VulkanKernelVisitor(Visitor):
             else:
                 size_str = " /* unknown */ "
 
-            self._emit(
-                f"layout(std430, set = 0, binding = {self._binding_counter}) buffer RllmBuffer_{param.name} {{"
-            )
-            self._push()
-            self._emit(f"{inner} {param.name}[{size_str}];")
-            self._pop()
-            self._emit("};")
+            if is_obj_vector_matrix:
+                levels = _extract_size_from_expr(vt.level_expr)
+                flat_size = _extract_size_from_expr(vt.row_size_expr) * _extract_size_from_expr(vt.col_size_expr)
+                flat_size_str = "" if flat_size >= 2147483648 else str(flat_size)
+                for level in range(levels):
+                    self._emit(
+                        f"layout(std430, set = 0, binding = {self._binding_counter}) buffer RllmBuffer_{param.name}_{level} {{"
+                    )
+                    self._push()
+                    self._emit(f"{inner} rllm_{param.name}_load_store_{level}[{flat_size_str}];")
+                    self._pop()
+                    self._emit("};")
+                    self._binding_counter += 1
+                self._emit(f"{inner} rllm_load_{param.name}(int level, int row, int col) {{")
+                self._push()
+                self._emit("int idx = row * rllm_push.rllm_bound_y + col;")
+                self._emit("switch (level) {")
+                self._push()
+                for level in range(levels):
+                    self._emit(f"case {level}: return rllm_{param.name}_load_store_{level}[idx];")
+                self._emit("default: return 0;")
+                self._pop()
+                self._emit("}")
+                self._pop()
+                self._emit("}")
+                self._emit(f"void rllm_store_{param.name}(int level, int row, int col, {inner} value) {{")
+                self._push()
+                self._emit("int idx = row * rllm_push.rllm_bound_y + col;")
+                self._emit("switch (level) {")
+                self._push()
+                for level in range(levels):
+                    self._emit(f"case {level}: rllm_{param.name}_load_store_{level}[idx] = value; return;")
+                self._emit("default: return;")
+                self._pop()
+                self._emit("}")
+                self._pop()
+                self._emit("}")
+            else:
+                self._emit(
+                    f"layout(std430, set = 0, binding = {self._binding_counter}) buffer RllmBuffer_{param.name} {{"
+                )
+                self._push()
+                self._emit(f"{inner} {param.name}[{size_str}];")
+                self._pop()
+                self._emit("};")
+                self._binding_counter += 1
 
             self._ssbo_map[param.name] = (is_3d, vt)
-            self._binding_counter += 1
-
-        # ── Emit push_constant block ──
-        if self._push_constant_fields:
-            self._emit("")
-            self._emit("layout(push_constant) uniform RllmPushConstants {")
-            self._push()
-            for name, vtype in self._push_constant_fields:
-                self._emit(f"{vtype} {name};")
-            self._pop()
-            self._emit("} rllm_push;")
 
         if self._is_shared_memory_multi_arg(node):
             self._emit("")
@@ -725,8 +817,7 @@ class VulkanKernelVisitor(Visitor):
 
         # 2. Initialize params from push constants
         for name, vtype in self._push_constant_fields:
-            if vtype == "int":
-                self._emit(f"int {name} = rllm_push.{name};")
+            self._emit(f"{vtype} {name} = rllm_push.{name};")
 
         # 3. Triangular guard (if applicable)
         if is_triangular and triangular_bounds_raw and len(triangular_bounds_raw) >= 2:

@@ -167,11 +167,12 @@ class ReturnStatement(Statement):
 
 
 class AtomicOp(Statement):
-    """Represents an `atomicAdd(expr, expr);` statement."""
+    """Represents an atomic operation statement."""
 
-    def __init__(self, lhs: Expression, rhs: Expression):
+    def __init__(self, lhs: Expression, rhs: Expression, op: str = "atomicAdd"):
         self.lhs = lhs
         self.rhs = rhs
+        self.op = op
 
     def accept(self, visitor):
         return visitor.visit_atomic_op(self)
