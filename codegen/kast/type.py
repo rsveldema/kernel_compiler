@@ -114,4 +114,22 @@ __all__ = [
     "FixedSizeMatrix",
     "FixedSizeLevelsRowsColsMatrix",
     "FlexibleRowsColsLevelsMatrix",
+    "FlexibleRowsColsMatrix",
 ]
+
+
+class FlexibleRowsColsMatrix(Type):
+    """flexible_rows_cols_matrix<elem_type, row_size_expr, col_size_expr>&"""
+
+    def __init__(
+        self,
+        elem_type: Type,
+        row_size_expr: Expression,
+        col_size_expr: Expression,
+    ):
+        self.elem_type = elem_type
+        self.row_size_expr = row_size_expr
+        self.col_size_expr = col_size_expr
+
+    def accept(self, visitor):
+        return visitor.visit_flexible_rows_cols_matrix(self)

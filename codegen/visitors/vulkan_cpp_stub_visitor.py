@@ -108,11 +108,6 @@ class VulkanCppStubVisitor(Visitor):
         op = node.op or "+"
         return f"({left} {op} {right})"
 
-    def visit_limit_expr(self, node: ast.LimitExpr) -> str:
-        max_v = self._visit_expr_child(node.max_val)
-        body_v = self._visit_expr_child(node.body)
-        return f"limit<{max_v}>({body_v})"
-
     def visit_cast_expr(self, node: ast.CastExpr) -> str:
         cast_type = "int32_t"
         operand = self._visit_expr_child(node.operand)
@@ -486,3 +481,75 @@ class VulkanCppStubVisitor(Visitor):
 
         self._emit("}")
         return self.result()
+
+    # ── additional type visitors for grammar updates ───────────────────
+
+    def visit_flexible_rows_cols_matrix(self, node: ast.FlexibleRowsColsMatrix) -> str:
+        return ""  # handled in visit_program
+
+    def visit_ternary_expr(self, node: ast.TernaryExpr) -> str:
+        cond = self._visit_expr_child(node.condition)
+        true_val = self._visit_expr_child(node.true_expr)
+        false_val = self._visit_expr_child(node.false_expr)
+        return f"({cond} ? {true_val} : {false_val})"
+
+    def visit_unary_minus_expr(self, node: ast.UnaryMinusExpr) -> str:
+        operand = self._visit_expr_child(node.operand)
+        return f"-{operand}"
+
+    # ── statement visitors for grammar updates ─────────────────────────
+
+    def visit_return_statement(self, node: ast.ReturnStatement) -> str:
+        return "return;"
+
+    def visit_atomic_op(self, node: ast.AtomicOp) -> str:
+        lhs = self._visit_expr_child(node.lhs)
+        rhs = self._visit_expr_child(node.rhs)
+        return f"atomicAdd({lhs}, {rhs});"
+
+    def visit_if(self, node: ast.If) -> str:
+        cond = (
+            node.condition.accept(self)
+            if isinstance(node.condition, ast.Expression)
+            else str(node.condition)
+        )
+        body = "\n".join(s.accept(self) for s in node.body_stmts)
+        result = f"if ({cond}) {{\n{body}\n}}"
+        if node.else_stmts:
+            else_body = "\n".join(s.accept(self) for s in node.else_stmts)
+            result += f" else {{\n{else_body}\n}}"
+        return result
+
+    def visit_declaration(self, node: ast.Declaration) -> str:
+        type_str = node.var_type.accept(self) if hasattr(node.var_type, "accept") else ""
+        name = node.name
+        init = f" = {node.init_expr.accept(self)}" if node.init_expr else ""
+        const_prefix = "const " if node.is_const else ""
+        return f"{const_prefix}{type_str} {name}{init};"
+
+    def visit_assignment(self, node: ast.Assignment) -> str:
+        lvalue = node.lvalue.accept(self) if hasattr(node.lvalue, "accept") else str(node.lvalue)
+        rvalue = node.rvalue.accept(self) if node.rvalue and hasattr(node.rvalue, "accept") else ""
+        op = node.assign_op or "="
+        return f"{lvalue} {op} {rvalue};"
+
+    def visit_overflow_check(self, node: ast.OverflowCheck) -> str:
+        lvalue = node.lvalue.accept(self) if hasattr(node.lvalue, "accept") else str(node.lvalue)
+        operand = node.operand
+        return f"OVERFLOW_CHECK_ADD({lvalue}, {operand});"
+
+    def visit_shared_decl(self, node: ast.SharedDecl) -> str:
+        type_str = node.var_type.accept(self) if hasattr(node.var_type, "accept") else ""
+        name = node.name
+        init = f" = {node.init_expr.accept(self)}" if node.init_expr else ""
+        const_prefix = "const " if node.is_const else ""
+        return f"shared {const_prefix}{type_str} {name}{init};"
+
+    def visit_limit_expr(self, node: ast.LimitExpr) -> str:
+        max_v = self._visit_expr_child(node.max_val)
+        if hasattr(node, 'end') and getattr(node.end, 'value', None) is not None:
+            start = self._visit_expr_child(node.start) if hasattr(node.start, "accept") else ""
+            end = self._visit_expr_child(node.end) if hasattr(node.end, "accept") else ""
+            return f"limit<{max_v}>({start}, {end})"
+        end = self._visit_expr_child(node.end) if hasattr(node.end, "accept") else str(getattr(node.end, "value", ""))
+        return f"limit<{max_v}>({end})"

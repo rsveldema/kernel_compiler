@@ -102,7 +102,9 @@ arith_operator: ARITH_OP | NEG
 
 NEG: "-"
 
-base_expr: limit_expr | number_term | field_access | type "(" expression ")" | unary_expression | inc_call | "(" expression ")"
+base_expr: limit_expr | number_term | field_access | cast_expr | unary_expression | inc_call | "(" expression ")"
+
+cast_expr: type "(" expression ")"
 
 unary_expression: unary_operator expression
 

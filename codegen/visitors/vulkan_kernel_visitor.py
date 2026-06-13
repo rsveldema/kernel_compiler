@@ -180,6 +180,24 @@ class VulkanKernelVisitor(Visitor):
     def visit_expression(self, node: Expression) -> str:
         return node.accept(self)
 
+    def visit_flexible_rows_cols_matrix(
+        self, node: FlexibleRowsColsMatrix
+    ) -> str:
+        return self._glsl_elem_type(node)
+
+    def visit_ternary_expr(self, node: TernaryExpr) -> str:
+        cond = self._to_str(node.condition)
+        true_val = self._to_str(node.true_expr)
+        false_val = self._to_str(node.false_expr)
+        return f"({cond} ? {true_val} : {false_val})"
+
+    def visit_unary_minus_expr(self, node: UnaryMinusExpr) -> str:
+        operand = self._to_str(node.operand)
+        return f"-{operand}"
+
+    def visit_expression(self, node: Expression) -> str:
+        return node.accept(self)
+
     def visit_number(self, node: Number) -> str:
         val = node.value
         if isinstance(val, float):
@@ -237,7 +255,8 @@ class VulkanKernelVisitor(Visitor):
 
     def visit_cast_expr(self, node: CastExpr) -> str:
         operand = self._visit_expr_child(node.operand)
-        return f"int({operand})"
+        cast_type = node.cast_type.accept(self)
+        return f"{cast_type}({operand})"
 
     def visit_negation_expr(self, node: NegationExpr) -> str:
         operand = self._visit_expr_child(node.operand)
@@ -331,6 +350,17 @@ class VulkanKernelVisitor(Visitor):
                     lines.append(f"{ind}{result}")
 
         lines.append(f"{ind}}}")
+        
+        if node.else_stmts:
+            else_lines = [f"{ind}else {{"]
+            for stmt in node.else_stmts:
+                if hasattr(stmt, "accept"):
+                    result = stmt.accept(self)
+                    if isinstance(result, str):
+                        else_lines.append(f"{ind}{result}")
+            else_lines.append(f"{ind}}}")
+            lines.extend(else_lines)
+        
         return "\n".join(lines) + "\n"
 
     def visit_declaration(self, node: Declaration) -> str:
@@ -374,6 +404,16 @@ class VulkanKernelVisitor(Visitor):
         if node.z_expr is not None:
             parts.append(f"z: {self._to_str(node.z_expr)}")
         return f"workgroup {{ {', '.join(parts)} }}"
+
+    def visit_return_statement(self, node: ReturnStatement) -> str:
+        ind = "    " * self._indent_level
+        return f"{ind}return;"
+
+    def visit_atomic_op(self, node: AtomicOp) -> str:
+        lhs = self._to_str(node.lhs)
+        rhs = self._to_str(node.rhs)
+        ind = "    " * self._indent_level
+        return f"{ind}atomicAdd({lhs}, {rhs});"
 
     def _workgroup_size(self, node: Program) -> tuple[str, str, str]:
         wg_x, wg_y, wg_z = "1", "1", "1"

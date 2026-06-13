@@ -77,13 +77,13 @@ For = ForLoopWithConditionAndIncrement
 
 
 class If(Statement):
-    def __init__(self, condition: Expression, body_stmts: list[Statement]):
+    def __init__(self, condition: Expression, body_stmts: list[Statement], else_stmts: list[Statement] | None = None):
         self.condition = condition
         self.body_stmts = body_stmts or []
+        self.else_stmts = else_stmts or []
 
     def accept(self, visitor):
         return visitor.visit_if(self)
-
 
 class Declaration(Statement):
     def __init__(
@@ -154,4 +154,24 @@ __all__ = [
     "Assignment",
     "OverflowCheck",
     "SharedDecl",
+    "ReturnStatement",
+    "AtomicOp",
 ]
+
+
+class ReturnStatement(Statement):
+    """Represents a `return;` statement."""
+
+    def accept(self, visitor):
+        return visitor.visit_return_statement(self)
+
+
+class AtomicOp(Statement):
+    """Represents an `atomicAdd(expr, expr);` statement."""
+
+    def __init__(self, lhs: Expression, rhs: Expression):
+        self.lhs = lhs
+        self.rhs = rhs
+
+    def accept(self, visitor):
+        return visitor.visit_atomic_op(self)

@@ -42,6 +42,9 @@ class Visitor:
     def visit_expression(self, node: _ast.Expression):
         raise NotImplementedError
 
+    def visit_flexible_rows_cols_matrix(self, node: _ast.FlexibleRowsColsMatrix):
+        raise NotImplementedError
+
     def visit_number(self, node: _ast.Number):
         raise NotImplementedError
 
@@ -99,4 +102,16 @@ class Visitor:
         raise NotImplementedError
 
     def visit_program(self, node: _ast.Program):
+        raise NotImplementedError
+
+    def visit_ternary_expr(self, node: _ast.TernaryExpr):
+        raise NotImplementedError
+
+    def visit_unary_minus_expr(self, node: _ast.UnaryMinusExpr):
+        raise NotImplementedError
+
+    def visit_return_statement(self, node: _ast.ReturnStatement):
+        raise NotImplementedError
+
+    def visit_atomic_op(self, node: _ast.AtomicOp):
         raise NotImplementedError

@@ -121,4 +121,28 @@ __all__ = [
     "BinaryExpr",
     "CastExpr",
     "NegationExpr",
+    "TernaryExpr",
+    "UnaryMinusExpr",
 ]
+
+
+class TernaryExpr(Expression):
+    """Represents a ternary/conditional expression (cond ? true_val : false_val)."""
+
+    def __init__(self, condition: Expression, true_expr: Expression, false_expr: Expression):
+        self.condition = condition
+        self.true_expr = true_expr
+        self.false_expr = false_expr
+
+    def accept(self, visitor):
+        return visitor.visit_ternary_expr(self)
+
+
+class UnaryMinusExpr(Expression):
+    """Represents a unary minus expression (-x)."""
+
+    def __init__(self, operand: Expression):
+        self.operand = operand
+
+    def accept(self, visitor):
+        return visitor.visit_unary_minus_expr(self)

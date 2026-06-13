@@ -28,6 +28,18 @@ def _token_value(t):
     return None
 
 
+
+_TYPE_NAMES = frozenset((
+    "int", "size_t", "float", "float16", "PositionIndex",
+    "fixed_size_vector", "flexible_rows_matrix", "fixed_size_matrix",
+    "fixed_size_levels_rows_cols_matrix", "flexible_rows_cols_levels_matrix",
+))
+
+
+def _is_type_name(token_val):
+    """Check if a token value is a known type name (not just any IDENT)."""
+    return token_val in _TYPE_NAMES
+
 # ── extractors ─────────────────────────────────────────────────────
 
 
@@ -323,7 +335,12 @@ def _transform_from_base(base_tree):
             elif data == "lhs":
                 return _transform_lvalue(child)
             elif data == "field_access":
-                # Handle field_access in base_expr context
+                # Check for cast expression pattern: type_name(...) where
+                # the base IDENT is a known type name and call_args exists.
+                # This catches `int(l_idx)` which grammar prefers as field_access.
+                fa_result = _maybe_parse_cast_from_field_access(child)
+                if fa_result is not None:
+                    return fa_result
                 result = _transform_lvalue(child)
                 if result is not None:
                     return result
@@ -345,6 +362,44 @@ def _transform_from_base(base_tree):
             return Identifier(child.value)
 
     return None
+
+
+def _maybe_parse_cast_from_field_access(fa_tree):
+    """Detect cast pattern in field_access (e.g. int(l_idx)) and return CastExpr if found.
+
+    The grammar prefers `field_access` over the inline cast form
+    `type "(" expression ")"` for expressions like `int(l_idx)`.
+    This helper detects when the base IDENT is a known type name
+    with call_args present, treating it as a cast expression.
+    """
+    children = fa_tree.children
+    if not children:
+        return None
+
+    # First child must be a token whose value is a known type name
+    first = children[0]
+    if not _is_token(first) or not _is_type_name(first.value):
+        return None
+
+    # Look for call_args among remaining children
+    call_arg_children = []
+    for c in children[1:]:
+        if isinstance(c, Tree) and c.data == "call_args":
+            for cc in c.children:
+                if isinstance(cc, Tree) and cc.data == "expression":
+                    call_arg_children.append(cc)
+
+    if not call_arg_children:
+        return None
+
+    # Get the operand expression from call_args
+    operand = transform_expression(call_arg_children[0])
+    if operand is None:
+        return None
+
+    # Resolve the type name
+    cast_type = _resolve_nested_type(fa_tree.children[0]) or Int(first.value)
+    return CastExpr(cast_type, operand)
 
 
 def _transform_lvalue(lhs_tree):
