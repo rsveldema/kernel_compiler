@@ -243,48 +243,55 @@ bool VulkanSession::has_device_extension(const char* name) const
 
 void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
 {
-    /* Read GLSL source */
-    std::ifstream ifs(glsl_file);
-    if (!ifs.is_open())
-        throw std::runtime_error("Cannot open GLSL file: " + glsl_file);
-
-    /* Compile via glslc and pipe to temp file */
-    char tmp_spv[] = "/tmp/spv_gen_XXXXXX";
-    int fd = mkstemp(tmp_spv);
-    if (fd < 0)
-        throw std::runtime_error("mkstemp failed");
-
-    std::string glslc_cmd = "glslc -x glsl -O -fshader-stage=compute ";
-    if (glsl_file.find("coopmat2") != std::string::npos)
-        glslc_cmd += "--target-env=vulkan1.4 ";
-    glslc_cmd += glsl_file + " -o -";
-    FILE *fp = popen(glslc_cmd.c_str(), "r");
-    if (!fp)
+    std::vector<uint8_t> spirv;
+    if (glsl_file.size() >= 4 && glsl_file.ends_with(".spv"))
     {
-        close(fd);
-        throw std::runtime_error("glslc failed for: " + glsl_file);
+        std::ifstream ifs_spv(glsl_file, std::ios::binary);
+        if (!ifs_spv.is_open())
+            throw std::runtime_error("Cannot open SPIR-V file: " + glsl_file);
+        spirv.assign(
+            std::istreambuf_iterator<char>(ifs_spv),
+            std::istreambuf_iterator<char>());
     }
-
-    char buf[4096];
-    while (auto n = fread(buf, 1, sizeof(buf), fp))
-        write(fd, buf, static_cast<size_t>(n));
-    int rc_p = pclose(fp);
-    if (rc_p != 0)
+    else
     {
+        /* Compile GLSL via glslc and pipe to temp file. */
+        char tmp_spv[] = "/tmp/spv_gen_XXXXXX";
+        int fd = mkstemp(tmp_spv);
+        if (fd < 0)
+            throw std::runtime_error("mkstemp failed");
+
+        std::string glslc_cmd = "glslc -x glsl -O -fshader-stage=compute ";
+        if (glsl_file.find("coopmat2") != std::string::npos)
+            glslc_cmd += "--target-env=vulkan1.4 ";
+        glslc_cmd += glsl_file + " -o -";
+        FILE *fp = popen(glslc_cmd.c_str(), "r");
+        if (!fp)
+        {
+            close(fd);
+            throw std::runtime_error("glslc failed for: " + glsl_file);
+        }
+
+        char buf[4096];
+        while (auto n = fread(buf, 1, sizeof(buf), fp))
+            write(fd, buf, static_cast<size_t>(n));
+        int rc_p = pclose(fp);
+        if (rc_p != 0)
+        {
+            close(fd);
+            throw std::runtime_error("glslc error for: " + glsl_file);
+        }
         close(fd);
-        throw std::runtime_error("glslc error for: " + glsl_file);
+
+        std::ifstream ifs_spv(tmp_spv, std::ios::binary);
+        if (!ifs_spv.is_open())
+            throw std::runtime_error("Cannot read generated SPIR-V");
+        spirv.assign(
+            std::istreambuf_iterator<char>(ifs_spv),
+            std::istreambuf_iterator<char>());
+
+        remove(tmp_spv);
     }
-    close(fd);
-
-    /* Read back SPIR-V */
-    std::ifstream ifs_spv(tmp_spv, std::ios::binary);
-    if (!ifs_spv.is_open())
-        throw std::runtime_error("Cannot read generated SPIR-V");
-    std::vector<uint8_t> spirv((std::istreambuf_iterator<char>(ifs_spv)),
-                                std::istreambuf_iterator<char>());
-
-    /* Clean up temp file */
-    remove(tmp_spv);
 
     if (spirv.empty())
         throw std::runtime_error("Empty SPIR-V from glslc for: " + glsl_file);

@@ -13,6 +13,22 @@ from .kast.statement import *
 
 # ── helpers ────────────────────────────────────────────────────────
 
+def _ast_to_str(expr):
+    """Convert an AST expression to its string representation."""
+    if isinstance(expr, Number):
+        return str(expr.value)
+    if isinstance(expr, Identifier):
+        return expr.name
+    if isinstance(expr, BinaryExpr):
+        left = _ast_to_str(expr.left)
+        right = _ast_to_str(expr.right)
+        op = expr.op
+        return f"({left} {op} {right})"
+    if hasattr(expr, 'max_val'):  # LimitExpr
+        inner = _ast_to_str(expr.max_val)
+        return f"limit<{inner}>()"
+    return str(expr)
+
 
 def _is_token(val):
     return isinstance(val, Token)
@@ -237,6 +253,7 @@ def _transform_workgroup_properties(wg_tree):
     if isinstance(wg_tree.children[0], Tree):
         decl_tree = wg_tree.children[0]
         is_const = decl_tree.data == "const_decl"
+        is_constexpr = decl_tree.data == "constexpr_decl"
         var_type = None
         name = ""
         init_expr = None
@@ -261,7 +278,7 @@ def _transform_workgroup_properties(wg_tree):
             elif isinstance(child, Token):
                 name = child.value
 
-        return SharedDecl(is_const, var_type or Int(), name, init_expr)
+    return SharedDecl(is_const, var_type or Int(), name, init_expr, is_constexpr=is_constexpr)
 
     # workgroup { x: ..., y: ..., z: ... } case (from grammar tree)
     expressions = []
@@ -724,6 +741,7 @@ def _is_overflow_check(stmt_tree):
 def transform_declaration(stmt_tree):
     """Transform a declaration tree into Declaration AST."""
     is_const = stmt_tree.data == "const_decl"
+    is_constexpr = stmt_tree.data == "constexpr_decl"
     var_type = None
     name = ""
     init_expr = None
@@ -761,7 +779,7 @@ def transform_declaration(stmt_tree):
             # Could be the variable name token directly
             name = child.value
 
-    return Declaration(is_const, var_type or Int(), name, init_expr)
+    return Declaration(is_const, var_type or Int(), name, init_expr, is_constexpr=is_constexpr)
 
 
 def transform_statement(stmt_tree):
@@ -1342,7 +1360,7 @@ def transform_statement(stmt_tree):
         return If(condition, body_stmts)
 
     # declaration;
-    if data == "decl" or data == "const_decl":
+    if data == "decl" or data == "const_decl" or data == "constexpr_decl":
         decl = transform_declaration(stmt_tree)
         return decl
 
@@ -1437,7 +1455,14 @@ def transform(t: Tree) -> Program:
     )
 
     param_type_map = {}
-    for decl_tree in t.children[2].children:
+    # Handle new grammar: parfor_parameters now contains a decl_list wrapper
+    decls_node = t.children[2].children[0]
+    if isinstance(decls_node, Tree) and decls_node.data == "decl_list":
+        decl_trees = decls_node.children
+    else:
+        decl_trees = [decls_node]
+    
+    for decl_tree in decl_trees:
         var_name = ""
         if isinstance(decl_tree, Tree):
             for dc in decl_tree.children:
@@ -1456,6 +1481,24 @@ def transform(t: Tree) -> Program:
         param_type_map[var_name] = transform_declaration(decl_tree)
 
     p.params = [param_type_map.get(n) for n in param_names]
+
+    # Collect constexpr parameter declarations for type resolution
+    param_constexpr_defines = []
+    if hasattr(decls_node, 'children'):
+        for decl_tree in decls_node.children:
+            if isinstance(decl_tree, Tree) and decl_tree.data == "constexpr_decl":
+                init_expr = None
+                name = ""
+                for child in decl_tree.children:
+                    if isinstance(child, Token) and child.type == "IDENT":
+                        name = child.value
+                    elif isinstance(child, Tree) and child.data == "expression":
+                        init_expr = transform_expression(child)
+                if init_expr is not None:
+                    # Convert AST expression to string representation
+                    expr_str = _ast_to_str(init_expr)
+                    param_constexpr_defines.append((name, expr_str))
+    p._param_constexpr_defines = param_constexpr_defines
 
     # Store triangular bound expressions and names (for RLLM-style push constants)
     if isinstance(limit_result, tuple) and len(limit_result) == 3:

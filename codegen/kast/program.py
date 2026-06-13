@@ -28,6 +28,8 @@ class Program(AstNode):
         use_cooperative_matrix2=False,
         cooperative_matrix2_chunk_size=8,
         _source_filename="",
+        _constexpr_defines=None,
+        _param_constexpr_defines=None,
     ):
         self.header = header
         # Loop variables from OFFLOAD_PARFOR_x_PARAM (e.g. ['i'] or ['i', 'j'])
@@ -56,6 +58,10 @@ class Program(AstNode):
         self.use_cooperative_matrix2 = use_cooperative_matrix2
         self.cooperative_matrix2_chunk_size = cooperative_matrix2_chunk_size
         self._source_filename = _source_filename
+        # constexpr defines extracted from kernel body [(name, expr), ...]
+        self._constexpr_defines = _constexpr_defines or []
+        # constexpr defines from parameter declarations (for type resolution)
+        self._param_constexpr_defines = _param_constexpr_defines or []
 
     @property
     def loop_var(self):

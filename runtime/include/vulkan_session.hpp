@@ -24,7 +24,6 @@
 #include <cstdio>
 
 #include <vulkan/vulkan_core.h>
-#include <gtest/gtest.h>
 
 // Forward declarations for functions implemented in test_vulkan_helpers.cc
 std::string vk_result_str(VkResult rc);
@@ -330,6 +329,7 @@ public:
         si.pCommandBuffers = &m_cmd_buf;
         check_vk(vkQueueSubmit(get_queue(), 1, &si, VK_NULL_HANDLE), "VkComputeSession submit");
         check_vk(vkDeviceWaitIdle(get_device()), "VkComputeSession wait idle");
+        check_vk(vkResetCommandPool(get_device(), m_cmd_pool, 0), "VkComputeSession reset cmd pool");
     }
 
 private:
@@ -479,7 +479,6 @@ public:
         if (this != &other)
         {
             destroy_resources();
-            m_session = other.m_session;
             buf_ = other.buf_;
             mem_ = other.mem_;
             mapped_ = other.mapped_;
@@ -635,6 +634,18 @@ public:
     size_t count() const { return std::is_array_v<T> ? std::extent_v<T> : 1; }
 };
 
+class VDynamicHostBuffer : public VBaseHostBuffer
+{
+public:
+    VDynamicHostBuffer(VulkanSession& session, VkDeviceSize size_bytes)
+        : VBaseHostBuffer(session, size_bytes)
+    {}
+
+    const char* typed_buffer_name() const override { return "VDynamicHostBuffer"; }
+    uint8_t* bytes() { return VBaseHostBuffer::get(); }
+    const uint8_t* bytes() const { return VBaseHostBuffer::get(); }
+};
+
 class VBaseDeviceBuffer
 {
 public:
@@ -676,7 +687,6 @@ public:
         if (this != &other)
         {
             destroy_resources();
-            m_session = other.m_session;
             buf_ = other.buf_;
             mem_ = other.mem_;
             size_ = other.size_;
@@ -891,4 +901,14 @@ public:
     {
         VBaseDeviceBuffer::read(context, dst, count, src_offset, dst_offset);
     }
+};
+
+class VDynamicDeviceBuffer : public VBaseDeviceBuffer
+{
+public:
+    VDynamicDeviceBuffer(VulkanSession& session, VkDeviceSize size_bytes)
+        : VBaseDeviceBuffer(session, size_bytes)
+    {}
+
+    const char* typed_buffer_name() const override { return "VDynamicDeviceBuffer"; }
 };

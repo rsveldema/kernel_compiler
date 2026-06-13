@@ -4,7 +4,6 @@ Produces RLLM-style GLSL with:
 - std430 SSBOs using compile-time sized arrays for matrix types with known dimensions
 - push_constant block for all scalar params and triangular bounds
 - Proper variable initialization from gl_GlobalInvocationID and rllm_push
-- Triangular guard at start of main() for 3D triangular loops
 """
 
 
@@ -17,17 +16,44 @@ from ..kast.type import *
 from ..kast.expression import *
 from ..kast.statement import *
 from ..kast.workgroup import WorkgroupProperties
+import re
+
+_IDENT_RE = re.compile(r"^[A-Za-z_]\w*$")
+_GLSL_RESERVED = {"None", "static_cast"}
 
 
-def _extract_size_from_expr(expr: Expression) -> int:
+def _is_push_identifier(value: str | None) -> bool:
+    return bool(value and _IDENT_RE.match(value) and value not in _GLSL_RESERVED)
+
+
+def parse_literal(s: str) -> Expression:
+    """Convert a literal string to an AST Number expression."""
+    s = s.strip()
+    if s.isdigit():
+        stripped = s.lstrip("0") or "0"
+        return Number(stripped)
+    return Number(s)
+
+
+def _extract_size_from_expr(expr: Expression, constants: dict[str, str] | None = None) -> int:
     assert expr is not None
+    if constants is None:
+        constants = {}
 
     if isinstance(expr, Number):
         return int(expr.value)
 
+    if isinstance(expr, Identifier):
+        val_str = constants.get(expr.name)
+        if val_str is not None:
+            return _extract_size_from_expr(parse_literal(val_str), constants)
+        return -1
+
     if isinstance(expr, BinaryExpr):
-        lv = _extract_size_from_expr(expr.left)
-        rv = _extract_size_from_expr(expr.right)
+        lv = _extract_size_from_expr(expr.left, constants)
+        rv = _extract_size_from_expr(expr.right, constants)
+        if lv < 0 or rv < 0:
+            return -1
         match expr.op:
             case "+":
                 return lv + rv
@@ -36,12 +62,12 @@ def _extract_size_from_expr(expr: Expression) -> int:
             case "*":
                 return lv * rv
             case "/":
-                return lv / rv
+                return lv // rv
             case _:
                 assert False, f"no binary operator for constant folding: {expr.op}"
 
     if isinstance(expr, LimitExpr):
-        return _extract_size_from_expr(expr.max_val)
+        return _extract_size_from_expr(expr.max_val, constants)
 
     assert False, f"cannot constant fold: {prettyprint(expr)}"
     # s = self._to_str(expr)
@@ -50,29 +76,30 @@ def _extract_size_from_expr(expr: Expression) -> int:
     # return None
 
 
-def _compute_matrix_size(ty: Type) -> int:
+def _compute_matrix_size(ty: Type, constants: dict[str, str] | None = None) -> int:
     parts = 1
     if isinstance(ty, (FixedSizeLevelsRowsColsMatrix, FlexibleRowsColsLevelsMatrix, FixedSizeObjVectorMatrix)):
         for attr in ("level_expr", "row_size_expr", "col_size_expr"):
             expr = getattr(ty, attr, None)
             if expr:
-                s = _extract_size_from_expr(expr)
-                if s:
+                s = _extract_size_from_expr(expr, constants)
+                if s > 0:
                     parts *= s
         return parts
     elif isinstance(ty, (FixedSizeMatrix, FlexibleSizeMatrix, FlexibleRowsColsMatrix)):
         for attr in ("row_size_expr", "col_size_expr"):
             expr = getattr(ty, attr, None)
             if expr:
-                s = _extract_size_from_expr(expr)
-                if s:
+                s = _extract_size_from_expr(expr, constants)
+                if s > 0:
                     parts *= s
         return parts
     elif isinstance(ty, FixedSizeVector):
         if ty.size_expr:
-            s = _extract_size_from_expr(ty.size_expr)
-            if s:
-                s
+            s = _extract_size_from_expr(ty.size_expr, constants)
+            if s > 0:
+                parts *= s
+                return parts
         return -1
     return -1
 
@@ -89,6 +116,69 @@ class VulkanKernelVisitor(Visitor):
         self._push_constant_map: dict[str, bool] = {}
         self._triangular_upper_bound_name: str | None = None
         self._uses_reduction_chunks: bool = False
+        self._constexpr_defines: list[tuple[str, str]] = []
+        self._constexpr_map: dict[str, str] = {}
+
+
+    def _resolve_constexpr_value(self, expr_str: str) -> str | None:
+        """Try to resolve an expression string to a plain literal using existing constexpr_map values.
+        
+        Returns the resolved value as a string (e.g., "36") or None if it can't be resolved.
+        Handles simple numeric literals and binary expressions with operator splitting.
+        """
+        expr_str = expr_str.strip()
+        # Already a plain literal?
+        if re.match(r'^\d+$', expr_str):
+            return expr_str
+        
+        # Strip outer parentheses for evaluation
+        stripped = expr_str
+        while len(stripped) > 1 and stripped[0] == '(' and stripped[-1] == ')':
+            stripped = stripped[1:-1].strip()
+        
+        if stripped == expr_str:
+            return None
+        
+        # Try splitting on binary operators (left-to-right, outermost level)
+        depth = 0
+        for op in ['+', '-', '*', '/']:
+            i = len(stripped) - 2  # Don't match last char in case of trailing paren
+            while i > 0:
+                if stripped[i] == ')':
+                    depth += 1
+                elif stripped[i] == '(':
+                    depth -= 1
+                elif depth == 0 and stripped[i] == op and i + 1 < len(stripped):
+                    # Check it's a standalone operator (not part of >, <, etc.)
+                    before_ok = stripped[i-1].isspace() if i > 0 else True
+                    after_ok = stripped[i+1].isspace() if i + 1 < len(stripped) else False
+                    if before_ok and after_ok:
+                        left_str = stripped[:i].strip()
+                        right_str = stripped[i+1:].strip()
+                        lv = self._resolve_constexpr_value(left_str)
+                        rv = self._resolve_constexpr_value(right_str)
+                        if lv is not None and rv is not None:
+                            try:
+                                if op == '+':
+                                    return str(int(lv) + int(rv))
+                                elif op == '-':
+                                    return str(int(lv) - int(rv))
+                                elif op == '*':
+                                    return str(int(lv) * int(rv))
+                                elif op == '/':
+                                    result = int(lv) // int(rv) if int(rv) != 0 else None
+                                    return str(result) if result is not None else None
+                            except (ValueError, OverflowError):
+                                pass
+                        break
+                i -= 1
+        
+        # Check for size_t(...) cast - unwrap to inner expression
+        if stripped.startswith('size_t(') and stripped.endswith(')'):
+            inner = stripped[7:-1].strip()
+            return self._resolve_constexpr_value(inner)
+        
+        return None
 
     def _is_shared_memory_multi_arg(self, node: Program) -> bool:
         if not getattr(node, "use_shared_memory_tiling", False):
@@ -117,6 +207,12 @@ class VulkanKernelVisitor(Visitor):
         self._indent_level -= 1
 
     def result(self) -> str:
+        # Emit constexpr defines as preprocessor directives at the top of the shader.
+        defines = []
+        for name, expr in self._constexpr_defines:
+            defines.append(f"#define {name} {expr}")
+        if defines:
+            return "\n".join(defines) + "\n" + "\n".join(self._lines) + "\n"
         return "\n".join(self._lines) + "\n"
 
     # ── type helpers (GLSL) ────────────────────────────────────────────
@@ -222,7 +318,11 @@ class VulkanKernelVisitor(Visitor):
         name = node.name
         if name in self._push_constant_map:
             return f"rllm_push.{name}"
+        # Check constexpr map for constant-folded values
+        if name in self._constexpr_map:
+            return self._constexpr_map[name]
         return name or "unknown"
+
 
     def _visit_expr_child(self, node):
         """Helper for visiting expression children (returns '?' for None)."""
@@ -388,6 +488,11 @@ class VulkanKernelVisitor(Visitor):
         return "\n".join(lines) + "\n"
 
     def visit_declaration(self, node: Declaration) -> str:
+        # constexpr declarations are emitted as preprocessor defines, not GLSL variables.
+        if node.is_constexpr and node.init_expr is not None:
+            expr_str = self._to_str(node.init_expr)
+            self._constexpr_defines.append((node.name, expr_str))
+            return ""
         prefix = "const " if node.is_const else ""
         var_type = self._to_str(node.var_type) if node.var_type else "float"
         init_str = ""
@@ -428,6 +533,11 @@ class VulkanKernelVisitor(Visitor):
         return f"OVERFLOW_CHECK_ADD({lvalue}, {operand});"
 
     def visit_shared_decl(self, node: SharedDecl) -> str:
+        # constexpr shared declarations are emitted as preprocessor defines.
+        if node.is_constexpr and node.init_expr is not None:
+            expr_str = self._to_str(node.init_expr)
+            self._constexpr_defines.append((node.name, expr_str))
+            return ""
         prefix = "const " if node.is_const else ""
         var_type = self._to_str(node.var_type) if node.var_type else "float"
         init_str = ""
@@ -657,7 +767,7 @@ class VulkanKernelVisitor(Visitor):
             else []
         )
         is_triangular = len(triangular_bounds_raw) >= 2
-        if is_triangular and not triangular_bounds_raw[1].lstrip("-").isdigit():
+        if is_triangular and _is_push_identifier(triangular_bounds_raw[1]) and not triangular_bounds_raw[1].lstrip("-").isdigit():
             self._triangular_upper_bound_name = triangular_bounds_raw[1]
 
         for param in node.params:
@@ -690,7 +800,7 @@ class VulkanKernelVisitor(Visitor):
             return s.lstrip("-").isdigit() if s else False
 
         for tb in triangular_bounds_raw:
-            if not _is_literal(tb) and tb not in {
+            if _is_push_identifier(tb) and not _is_literal(tb) and tb not in {
                 f[0] for f in self._push_constant_fields
             }:
                 self._push_constant_fields.append((tb, "int"))
@@ -716,6 +826,33 @@ class VulkanKernelVisitor(Visitor):
             self._pop()
             self._emit("} rllm_push;")
 
+        # ── Build constant map from constexpr declarations ──
+        # Collect constexpr params first (so they're available for SSBO type resolution)
+        constexpr_map = {}
+        
+        # Add param-level constexpr defines (for unresolved identifier resolution in types)
+        has_attr = hasattr(node, "_param_constexpr_defines")
+        if has_attr:
+            for name, expr in node._param_constexpr_defines:
+                constexpr_map[name] = expr
+        
+        # Then merge with body-level constexpr defines
+        for name, expr in self._constexpr_defines:
+            if name not in constexpr_map:
+                constexpr_map[name] = expr
+        
+        # Resolve body-level constexpr values that may reference other constexpr names
+        for name in list(constexpr_map.keys()):
+            val = constexpr_map[name]
+            if not re.match(r'^\d+$', val):
+                resolved = self._resolve_constexpr_value(val)
+                if resolved is not None:
+                    constexpr_map[name] = resolved
+        
+        # Store the fully-resolved map on the visitor for body expression constant folding
+        self._constexpr_map = {k: v for k, v in constexpr_map.items() if re.match(r'^\d+$', v)}
+
+        
         # ── Emit SSBO buffers with compile-time sized arrays ──
         for param in all_matrix_params:
             vt = param.var_type
@@ -723,7 +860,7 @@ class VulkanKernelVisitor(Visitor):
             is_3d = hasattr(vt, "level_expr") and vt.level_expr is not None
             inner = self._glsl_elem_type(vt)
 
-            size = _compute_matrix_size(vt)
+            size = _compute_matrix_size(vt, constexpr_map)
             if size >= 2147483648:
                 size_str = f" /* too large for int: {size} */ "
             elif size > 0:
@@ -732,8 +869,8 @@ class VulkanKernelVisitor(Visitor):
                 size_str = " /* unknown */ "
 
             if is_obj_vector_matrix:
-                levels = _extract_size_from_expr(vt.level_expr)
-                flat_size = _extract_size_from_expr(vt.row_size_expr) * _extract_size_from_expr(vt.col_size_expr)
+                levels = _extract_size_from_expr(vt.level_expr, constexpr_map)
+                flat_size = _extract_size_from_expr(vt.row_size_expr, constexpr_map) * _extract_size_from_expr(vt.col_size_expr, constexpr_map)
                 flat_size_str = "" if flat_size >= 2147483648 else str(flat_size)
                 for level in range(levels):
                     self._emit(
@@ -821,22 +958,10 @@ class VulkanKernelVisitor(Visitor):
 
         # 3. Triangular guard (if applicable)
         if is_triangular and triangular_bounds_raw and len(triangular_bounds_raw) >= 2:
-            lower_name = triangular_bounds_raw[0]
-            upper_name = triangular_bounds_raw[1]
-
             parts = []
-            if node.loop_vars:
-                first_var = node.loop_vars[0]
-                if _is_literal(lower_name):
-                    parts.append(f"{first_var} >= {lower_name}")
-                else:
-                    parts.append(f"{first_var} >= rllm_push.{lower_name}")
-
-            for var in node.loop_vars[1:]:
-                if _is_literal(upper_name):
-                    parts.append(f"{var} >= {upper_name}")
-                else:
-                    parts.append(f"{var} >= rllm_push.{upper_name}")
+            for idx, var in enumerate(node.loop_vars):
+                bound_name = f"rllm_bound_{'xyz'[idx]}"
+                parts.append(f"{var} >= rllm_push.{bound_name}")
 
             self._emit(f"if ({' || '.join(parts)}) return;")
 

@@ -3,7 +3,9 @@
 program: header parfor_space parfor_parameters body
 
 
-parfor_parameters: "PARAMETERS" declaration ("," declaration)* (";")?
+parfor_parameters: "PARAMETERS" decl_list
+
+decl_list: declaration ((";" | ",") declaration)* ";"?
 
 header: "PROGRAM" "(" string ")" workgroup_properties*
 
@@ -65,18 +67,19 @@ increment: IDENT INC_OP -> inc_postfix | INC_OP IDENT -> inc_prefix
 INC_OP: "++" | "--"
 
 declaration: "const" type IDENT ("=" expression)? -> const_decl
+| "constexpr" type IDENT "=" expression -> constexpr_decl
 | type IDENT  ("=" expression)? -> decl
 
 TYPE_LITERAL: "int" | "size_t" | "float" | "float" | "float16" | "PositionIndex" | "TokenID" | "EmbeddingDimension" | "HeadsIndex" | "TempStorage" | "FFDimension" | "HeadDimension" | "RmsNormPartialSumIndex" | "MultiTokenPredictionIndex" | "NeuronConnectionIndex" | "ConflictIndex"
 
-type: FSV "<" type "," expression ">" "&"
-    | FRM "<" type "," expression "," expression ">" "&"
-    | FSM "<" type "," expression "," expression ">" "&"
-    | FLEXSM "<" type "," expression "," expression ">" "&"
-    | FSLRMC "<" type "," expression "," expression "," expression ">" "&"
-    | FRCLM "<" type "," expression "," expression "," expression ">" "&"
-    | FRCM "<" type "," expression "," expression ">" "&"
-    | FSOV "<" (FSM | FLEXSM) "<" type "," expression "," expression ">" "," expression ">" "&"
+type: FSV "<" type "," expression ">" ("&")?
+    | FRM "<" type "," expression "," expression ">" ("&")?
+    | FSM "<" type "," expression "," expression ">" ("&")?
+    | FLEXSM "<" type "," expression "," expression ">" ("&")?
+    | FSLRMC "<" type "," expression "," expression "," expression ">" ("&")?
+    | FRCLM "<" type "," expression "," expression "," expression ">" ("&")?
+    | FRCM "<" type "," expression "," expression ">" ("&")?
+    | FSOV "<" (FSM | FLEXSM) "<" type "," expression "," expression ">" "," expression ">" ("&")?
     | TYPE_LITERAL
 
 

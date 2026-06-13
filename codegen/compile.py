@@ -138,7 +138,7 @@ if __name__ == "__main__":
         metavar="OUTPUT_SPV",
         help="Generate and compile Vulkan shader to SPIR-V",
     )
-    _parser.add_argument("--rllm-dispatch-stub", metavar="OUTPUT_H", help="Generate an RLLM ComputeKernel dispatch wrapper header")
+    _parser.add_argument("--rllm-dispatch-stub", metavar="OUTPUT_H", help="Generate an RLLM Vulkan dispatch wrapper header")
     _parser.add_argument("--rllm-spv-path", metavar="REL_SPV", help="SPIR-V path embedded in the RLLM dispatch wrapper")
     _parser.add_argument(
         "--no-optimize",

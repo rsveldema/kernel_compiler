@@ -525,6 +525,7 @@ class ResolveArrayIndicesVisitor(Expression):
             use_cooperative_matrix2=getattr(node, 'use_cooperative_matrix2', False),
             cooperative_matrix2_chunk_size=getattr(node, 'cooperative_matrix2_chunk_size', 8),
             _source_filename=getattr(node, '_source_filename', ''),
+            _param_constexpr_defines=getattr(node, '_param_constexpr_defines', []),
         )
 
 

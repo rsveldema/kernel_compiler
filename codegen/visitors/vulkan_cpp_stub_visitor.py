@@ -11,6 +11,15 @@ from typing import Dict, List, Tuple
 from .. import kast as ast
 from .visitor import Visitor
 
+import re
+
+_IDENT_RE = re.compile(r"^[A-Za-z_]\w*$")
+_CPP_RESERVED = {"None", "static_cast"}
+
+
+def _is_push_identifier(value: str | None) -> bool:
+    return bool(value and _IDENT_RE.match(value) and value not in _CPP_RESERVED)
+
 
 class VulkanCppStubVisitor(Visitor):
     """Transforms the parsed AST into a C++ stub for calling the Vulkan kernel."""
@@ -64,8 +73,14 @@ class VulkanCppStubVisitor(Visitor):
     def visit_flexible_rows_matrix(self, node: ast.FlexibleRowsMatrix) -> str:
         return ""  # handled in visit_program
 
+    def visit_flexible_size_matrix(self, node: ast.FlexibleSizeMatrix) -> str:
+        return ""  # handled in visit_program
+
     def visit_fixed_size_matrix(self, node: ast.FixedSizeMatrix) -> str:
         return ""
+
+    def visit_fixed_size_obj_vector_matrix(self, node: ast.FixedSizeObjVectorMatrix) -> str:
+        return ""  # handled in visit_program
 
     def visit_expression(self, node: ast.Expression) -> str:
         return node.accept(self)
@@ -173,9 +188,12 @@ class VulkanCppStubVisitor(Visitor):
             ty,
             (
                 ast.FlexibleRowsMatrix,
+                ast.FlexibleSizeMatrix,
+                ast.FlexibleRowsColsMatrix,
                 ast.FixedSizeMatrix,
                 ast.FlexibleRowsColsLevelsMatrix,
                 ast.FixedSizeLevelsRowsColsMatrix,
+                ast.FixedSizeObjVectorMatrix,
                 ast.FixedSizeVector,
             ),
         )
@@ -200,7 +218,7 @@ class VulkanCppStubVisitor(Visitor):
             for p in parts:
                 total *= int(p)
             return str(total)
-        elif isinstance(ty, (ast.FlexibleRowsMatrix, ast.FixedSizeMatrix)):
+        elif isinstance(ty, (ast.FlexibleRowsMatrix, ast.FlexibleSizeMatrix, ast.FlexibleRowsColsMatrix, ast.FixedSizeMatrix, ast.FixedSizeObjVectorMatrix)):
             parts = []
             for attr in ("row_size_expr", "col_size_expr"):
                 expr = getattr(ty, attr, None)
@@ -238,7 +256,7 @@ class VulkanCppStubVisitor(Visitor):
                 ("Y", self._number_literal(getattr(ty, "row_size_expr", None))),
                 ("Z", self._number_literal(getattr(ty, "col_size_expr", None))),
             ]
-        elif isinstance(ty, (ast.FlexibleRowsMatrix, ast.FixedSizeMatrix)):
+        elif isinstance(ty, (ast.FlexibleRowsMatrix, ast.FlexibleSizeMatrix, ast.FlexibleRowsColsMatrix, ast.FixedSizeMatrix, ast.FixedSizeObjVectorMatrix)):
             dims = [
                 ("X", self._number_literal(getattr(ty, "row_size_expr", None))),
                 ("Y", self._number_literal(getattr(ty, "col_size_expr", None))),
@@ -275,7 +293,7 @@ class VulkanCppStubVisitor(Visitor):
         self._namespace_name = f"rllm_{src_stem}"
 
         # Classify params
-        buffer_params: List[Tuple[ast.Declaration, str]] = []
+        buffer_params: List[Tuple[ast.Declaration, str, str]] = []
         scalar_params: List[ast.Declaration] = []
 
         is_triangular = len(getattr(node, "triangular_bounds_raw", [])) >= 2
@@ -286,9 +304,15 @@ class VulkanCppStubVisitor(Visitor):
 
             vt = param.var_type
             if self._is_matrix_type(vt):
-                sname = f"RllmBuffer_{param.name}"
-                self._buffer_structs[param.name] = sname
-                buffer_params.append((param, sname))
+                if isinstance(vt, ast.FixedSizeObjVectorMatrix):
+                    levels = int(vt.level_expr.value) if isinstance(vt.level_expr, ast.Number) else 1
+                    for level in range(levels):
+                        sname = f"RllmBuffer_{param.name}_{level}"
+                        buffer_params.append((param, sname, f"{param.name}_{level}"))
+                else:
+                    sname = f"RllmBuffer_{param.name}"
+                    self._buffer_structs[param.name] = sname
+                    buffer_params.append((param, sname, param.name))
             else:
                 scalar_params.append(param)
 
@@ -331,13 +355,23 @@ class VulkanCppStubVisitor(Visitor):
         # Add buffer params as runtime device buffers. The generated structs
         # above document SSBO layout, but runtime-sized buffers may be smaller
         # than the maximum static type for flexible kernels.
-        for param, sname in buffer_params:
+        for param, sname, arg_name in buffer_params:
             const_prefix = "const " if getattr(param, "is_const", False) else ""
-            method_params.append(f"        {const_prefix}VBaseDeviceBuffer& {param.name}")
+            method_params.append(f"        {const_prefix}VBaseDeviceBuffer& {arg_name}")
 
         # Build push constant field names (deduplicated)
         pc_field_names = set()
         all_pc_fields = []
+
+        if "rllm_bound_x" not in pc_field_names:
+            pc_field_names.add("rllm_bound_x")
+            all_pc_fields.append(type("", (), {"name": "rllm_bound_x", "var_type": ast.Int()})())
+        if has_2d and "rllm_bound_y" not in pc_field_names:
+            pc_field_names.add("rllm_bound_y")
+            all_pc_fields.append(type("", (), {"name": "rllm_bound_y", "var_type": ast.Int()})())
+        if has_3d and "rllm_bound_z" not in pc_field_names:
+            pc_field_names.add("rllm_bound_z")
+            all_pc_fields.append(type("", (), {"name": "rllm_bound_z", "var_type": ast.Int()})())
 
         for param in scalar_params:
             if param.name not in pc_field_names:
@@ -348,18 +382,18 @@ class VulkanCppStubVisitor(Visitor):
             for tb in getattr(node, "triangular_bounds_raw", []):
                 if tb is None:
                     continue
-                if tb not in pc_field_names and not tb.lstrip("-").isdigit():
+                if _is_push_identifier(tb) and tb not in pc_field_names and not tb.lstrip("-").isdigit():
                     pc_field_names.add(tb)
                     # Create a synthetic field for triangular bounds
                     all_pc_fields.append(
                         type(
                             "",
                             (),
-                            {"name": tb, "is_const": True, "var_type": ast.Int()},
+                            {"name": tb, "var_type": ast.Int()},
                         )()
                     )
 
-        if is_triangular or scalar_params:
+        if all_pc_fields:
             method_params.append(
                 f"        const {self._kernel_name}_PushConstants& push_constants"
             )
@@ -377,13 +411,21 @@ class VulkanCppStubVisitor(Visitor):
         self._emit("")
 
         # Buffer structs (matching SSBO layout)
-        for param, sname in buffer_params:
+        emitted_struct_names = set()
+        emitted_dim_constants = set()
+        for param, sname, _arg_name in buffer_params:
+            if sname in emitted_struct_names:
+                continue
+            emitted_struct_names.add(sname)
             vt = param.var_type
             size_str = self._compute_matrix_size(vt)
             dim_constants = self._buffer_dimension_constants(param.name, vt)
             for cname, cvalue in dim_constants:
+                if cname in emitted_dim_constants:
+                    continue
+                emitted_dim_constants.add(cname)
                 self._emit(f"inline constexpr uint32_t {cname} = {cvalue};")
-            if dim_constants:
+            if any(cname in emitted_dim_constants for cname, _ in dim_constants):
                 self._emit("")
 
             self._emit(f"struct {sname} {{")
@@ -400,9 +442,8 @@ class VulkanCppStubVisitor(Visitor):
             self._push()
 
             for field in all_pc_fields:
-                ctype = "int32_t"  # All scalar params are int-sized
-                is_const = "const " if getattr(field, "is_const", False) else ""
-                self._emit(f"    {is_const}{ctype} {field.name};")
+                ctype = "float" if isinstance(getattr(field, "var_type", None), ast.Float) else "int32_t"
+                self._emit(f"    {ctype} {field.name};")
 
             self._pop()
             self._emit("};")
@@ -450,8 +491,8 @@ class VulkanCppStubVisitor(Visitor):
             self._emit("VkDescriptorSet desc_set = kernel_.desc_set();")
             self._emit(f"VkDescriptorBufferInfo buffer_infos[{len(buffer_params)}]{{}};")
             self._emit(f"VkWriteDescriptorSet writes[{len(buffer_params)}]{{}};")
-            for i, (param, _sname) in enumerate(buffer_params):
-                self._emit(f"buffer_infos[{i}].buffer = {param.name}.get();")
+            for i, (_param, _sname, arg_name) in enumerate(buffer_params):
+                self._emit(f"buffer_infos[{i}].buffer = {arg_name}.get();")
                 self._emit(f"buffer_infos[{i}].offset = 0;")
                 self._emit(f"buffer_infos[{i}].range = VK_WHOLE_SIZE;")
                 self._emit(f"writes[{i}].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;")

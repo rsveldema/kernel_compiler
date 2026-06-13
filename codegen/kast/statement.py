@@ -92,8 +92,10 @@ class Declaration(Statement):
         var_type: Type,
         name: str,
         init_expr: Expression | None = None,
+        is_constexpr: bool = False,
     ):
         self.is_const = is_const
+        self.is_constexpr = is_constexpr
         self.var_type = var_type
         self.name = name
         self.init_expr = init_expr
@@ -132,8 +134,10 @@ class SharedDecl(Statement):
         var_type: Type,
         name: str,
         init_expr: Expression | None = None,
+        is_constexpr: bool = False,
     ):
         self.is_const = is_const
+        self.is_constexpr = is_constexpr
         self.var_type = var_type
         self.name = name
         self.init_expr = init_expr
