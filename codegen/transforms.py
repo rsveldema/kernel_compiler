@@ -40,6 +40,30 @@ def _is_type_name(token_val):
     """Check if a token value is a known type name (not just any IDENT)."""
     return token_val in _TYPE_NAMES
 
+
+def _extract_op_token_from_tree(tree):
+    """Extract an operator Token from a possibly deeply nested Tree structure.
+
+    The grammar nests operators like: binary_operator -> arith_operator -> Token('*')
+    This unwraps until it finds a Token or can't go deeper.
+    Returns the Token value if found, otherwise None.
+    """
+    current = tree
+    while isinstance(current, Tree) and len(current.children) == 1:
+        child = current.children[0]
+        if isinstance(child, Token):
+            return child.value
+        if isinstance(child, Tree):
+            current = child
+        else:
+            break
+    # Reached a Tree with children or non-Tree terminal
+    if isinstance(current, Tree) and len(current.children) == 1:
+        child = current.children[0]
+        if isinstance(child, Token):
+            return child.value
+    return None
+
 # ── extractors ─────────────────────────────────────────────────────
 
 
@@ -271,11 +295,11 @@ def transform_expression(expr_tree):
         elif (
             len(children) == 3
             and isinstance(children[1], Tree)
-            and len(children[1].children) == 1
         ):
-            inner = children[1].children[0]
-            if isinstance(inner, Token):
-                op_val = inner.value
+            # Unwrap nested operator tokens (e.g. binary_operator -> arith_operator -> Token('*'))
+            token_val = _extract_op_token_from_tree(children[1])
+            if token_val is not None:
+                op_val = token_val
 
         if op_val is not None:
             left = transform_expression(children[0])
