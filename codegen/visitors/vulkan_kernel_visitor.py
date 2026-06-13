@@ -12,11 +12,11 @@ from codegen.visitors.pretty_printer import prettyprint
 
 from .visitor import Visitor
 
-from ..ast.program import *
-from ..ast.type import *
-from ..ast.expression import *
-from ..ast.statement import *
-from ..ast.workgroup import WorkgroupProperties
+from ..kast.program import *
+from ..kast.type import *
+from ..kast.expression import *
+from ..kast.statement import *
+from ..kast.workgroup import WorkgroupProperties
 
 
 def _extract_size_from_expr(expr: Expression) -> int:

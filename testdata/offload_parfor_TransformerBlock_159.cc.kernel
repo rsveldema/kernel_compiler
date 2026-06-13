@@ -1,0 +1,24 @@
+PROGRAM("TransformerBlock.cc:159")
+
+OFFLOAD_PARFOR_1D_PARAM(t, limit<16384>(x.num_rows()), (x, y))
+
+PARAMETERS
+        const flexible_rows_matrix<rlmm_float, 16384, 1024>& x,
+        flexible_rows_matrix<rlmm_float, 16384, 1024>& y
+
+BEGIN
+        constexpr float eps = 1e-6f;
+        constexpr float fd = 1024;
+
+        float sq = 0.f;
+        RLLM_OMP_SIMD_REDUCTION_PLUS(sq)
+        for (const int i : limit<1024>())
+        {
+            const rlmm_float val = x[t, i];
+            sq += val * val;
+        }
+        const float inv = 1.0f / std::sqrt(sq / fd + eps);
+        for (const int i : limit<1024>())
+            y[t, i] = x[t, i] * inv;
+
+END_PROGRAM

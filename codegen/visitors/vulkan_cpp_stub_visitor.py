@@ -8,7 +8,7 @@ Generates compilable C++ header with:
 """
 
 from typing import Dict, List, Tuple
-from .. import ast
+from .. import kast as ast
 from .visitor import Visitor
 
 
@@ -20,6 +20,7 @@ class VulkanCppStubVisitor(Visitor):
         self._indent_level: int = 0
         self._buffer_structs: Dict[str, str] = {}  # name -> struct_name
         self._kernel_name: str = ""
+        self._namespace_name: str = ""
 
     # ── helpers ────────────────────────────────────────────────────────
 
@@ -237,6 +238,7 @@ class VulkanCppStubVisitor(Visitor):
         self._buffer_structs = {}
         self._kernel_name = ""
 
+        self._namespace_name = ""
         # Determine kernel name from header
         basename = "kernel"
         if node.header:
@@ -245,6 +247,7 @@ class VulkanCppStubVisitor(Visitor):
         # Use source filename stem + header basename to ensure unique dispatch names
         src_stem = getattr(node, "_source_filename", "").rsplit("/", 1)[-1].rsplit(".", 1)[0].replace("-", "_") if hasattr(node, "_source_filename") and node._source_filename else "kernel"
         self._kernel_name = f"{src_stem}_{basename}" if basename != "kernel" else src_stem
+        self._namespace_name = f"rllm_{src_stem}"
 
         # Classify params
         buffer_params: List[Tuple[ast.Declaration, str]] = []
@@ -301,10 +304,11 @@ class VulkanCppStubVisitor(Visitor):
             method_params.append("        uint32_t dispatch_rows")
 
         # Add buffer params as runtime device buffers. The generated structs
-        # above document SSBO layout, but callers should pass actual buffers.
+        # above document SSBO layout, but runtime-sized buffers may be smaller
+        # than the maximum static type for flexible kernels.
         for param, sname in buffer_params:
             const_prefix = "const " if getattr(param, "is_const", False) else ""
-            method_params.append(f"        {const_prefix}VDeviceBuffer<{sname}>& {param.name}")
+            method_params.append(f"        {const_prefix}VBaseDeviceBuffer& {param.name}")
 
         # Build push constant field names (deduplicated)
         pc_field_names = set()
@@ -341,6 +345,8 @@ class VulkanCppStubVisitor(Visitor):
         self._emit("#include <string>")
         self._emit("#include <vulkan/vulkan_core.h>")
         self._emit('#include "vulkan_session.hpp"')
+        self._emit("")
+        self._emit(f"namespace {self._namespace_name} {{")
         self._emit("")
 
         # Buffer structs (matching SSBO layout)
@@ -447,4 +453,6 @@ class VulkanCppStubVisitor(Visitor):
         self._pop()
         self._emit("};")
 
+
+        self._emit("}")
         return self.result()

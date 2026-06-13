@@ -4,8 +4,8 @@ import sys as _sys_mod
 import os
 
 # Ensure project root is on path so 'import codegen' works, and remove the
-# script's own directory so stdlib imports (e.g. ast, logging) don't resolve to
-# our local packages first.  Python adds the script directory to sys.path[0] at
+# script's own directory so stdlib imports don't resolve to local packages first.
+# Python adds the script directory to sys.path[0] at
 # startup; we must neutralise it before any standard-library imports run.
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in _sys_mod.path:
@@ -25,7 +25,7 @@ import subprocess
 import logging
 
 from codegen.parser import parser
-from codegen.ast.program import Program
+from codegen.kast.program import Program
 from codegen.transforms import transform
 from codegen.visitors.pretty_printer import prettyprint
 from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor

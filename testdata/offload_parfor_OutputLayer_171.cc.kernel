@@ -1,0 +1,34 @@
+PROGRAM("OutputLayer.cc:171")
+
+OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TokenID>(), (inputs, values, temp_values))
+
+PARAMETERS
+        const fixed_size_vector<rlmm_float, TokenID>& inputs,
+        fixed_size_vector<rlmm_float, TokenID>& values,
+        fixed_size_vector<rlmm_float, TempStorage>& temp_values
+
+BEGIN
+        {
+            const uint lid = gl_LocalInvocationIndex;
+            const bool in_bounds = (gl_LocalInvocationID.y == 0u) && (int(i) < rllm_push.rllm_bound_x);
+            const float max_val = temp_values[0];
+            float exp_value = 0.0f;
+            if (in_bounds)
+            {
+                exp_value = exp(inputs[i] - max_val);
+                values[i] = exp_value;
+            }
+            workgroup_sum[lid] = exp_value;
+            barrier();
+            for (uint stride = (gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z) >> 1u; stride > 0u;
+                 stride >>= 1u)
+            {
+                if (lid < stride)
+                    workgroup_sum[lid] += workgroup_sum[lid + stride];
+                barrier();
+            }
+            if (lid == 0u)
+                atomicAdd(temp_values[1], workgroup_sum[0]);
+        }
+
+END_PROGRAM

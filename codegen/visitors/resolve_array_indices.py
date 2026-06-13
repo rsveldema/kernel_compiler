@@ -16,11 +16,11 @@ from __future__ import annotations
 
 from typing import Dict
 
-from codegen.ast.program import *
-from codegen.ast.expression import *
-from codegen.ast.statement import *
-from codegen.ast.type import *
-from codegen.ast.workgroup import WorkgroupProperties
+from codegen.kast.program import *
+from codegen.kast.expression import *
+from codegen.kast.statement import *
+from codegen.kast.type import *
+from codegen.kast.workgroup import WorkgroupProperties
 
 
 class ResolveArrayIndicesVisitor(Expression):

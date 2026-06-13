@@ -1,0 +1,16 @@
+PROGRAM("vecmath.cc:588")
+
+OFFLOAD_PARFOR_2D_PARAM(t, f, grid, (gate_pre, up_pre, ffn_act))
+
+PARAMETERS
+        const flexible_rows_matrix<rlmm_float, 16384, FFDimension>& gate_pre,
+        const flexible_rows_matrix<rlmm_float, 16384, FFDimension>& up_pre,
+        flexible_rows_matrix<rlmm_float, 16384, FFDimension>& ffn_act,
+        int seq_len
+
+BEGIN
+        const float g = gate_pre[t, f];
+        const float silu = g / (1.0f + std::exp(-g));
+        ffn_act[t, f] = silu * up_pre[t, f];
+
+END_PROGRAM

@@ -1,0 +1,24 @@
+PROGRAM("vecmath.cc:193")
+
+OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (W, vel, grad, lr))
+
+PARAMETERS
+        fixed_size_matrix<rlmm_float_small, 1024, FFDimension>& W,
+        fixed_size_matrix<rlmm_float, 1024, FFDimension>& vel,
+        const fixed_size_matrix<rlmm_float, 1024, FFDimension>& grad,
+        float lr
+
+BEGIN
+        const float g = math::clamp(grad[r, c], -1.000000, 1.000000);
+        vel[r, c] = math::clamp(
+            0.900000 * vel[r, c] + lr * g,
+            -0.100000,
+            0.100000
+        );
+        W[r, c] = math::clamp(
+            W[r, c] + vel[r, c],
+            -2.000000,
+            2.000000
+        );
+
+END_PROGRAM

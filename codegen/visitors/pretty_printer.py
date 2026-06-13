@@ -1,8 +1,8 @@
 """Pretty-printing visitor for AST nodes."""
 
-from codegen.ast.ast_node import AstNode
+from codegen.kast.ast_node import AstNode
 
-from .. import ast
+from .. import kast as ast
 from .visitor import Visitor
 
 

@@ -1,0 +1,12 @@
+PROGRAM("vecmath.cc:66")
+
+OFFLOAD_PARFOR_2D_PARAM(r, c, grid, (dst, value))
+
+PARAMETERS
+        flexible_rows_matrix<rlmm_float, 16384, 1024>& dst,
+        rlmm_float value
+
+BEGIN
+        dst[r, c] = value;
+
+END_PROGRAM

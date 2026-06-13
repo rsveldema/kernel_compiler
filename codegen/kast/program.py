@@ -1,6 +1,6 @@
 """Program AST node for code generation."""
 
-from codegen.ast.ast_node import AstNode
+from codegen.kast.ast_node import AstNode
 
 
 class Program(AstNode):

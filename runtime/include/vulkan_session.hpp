@@ -11,11 +11,14 @@
 #pragma once
 
 #include <algorithm>
+#include <cassert>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 #include <cstdlib>
 #include <cstdio>
@@ -281,6 +284,7 @@ public:
 public:
     VkDevice get_device() const { return m_session.get_device(); }
     VkQueue get_queue() const { return m_session.get_queue(); }
+    VkCommandPool command_pool() const { return m_cmd_pool; }
 
 private:
     /* Create command pool and allocate one primary command buffer */
@@ -288,6 +292,7 @@ private:
     {
         VkCommandPoolCreateInfo cpci{};
         cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        cpci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
         cpci.queueFamilyIndex = m_session.get_queue_family_index();
 
         check_vk(vkCreateCommandPool(get_device(), &cpci, nullptr, &m_cmd_pool), "VkComputeSession cmd pool");
@@ -495,6 +500,8 @@ public:
     const uint8_t* get() const { return mapped_; }
     VkDeviceSize size() const { return size_; }
     uint32_t mem_type_idx() const { return mem_type_idx_; }
+    VulkanSession& session() { return m_session; }
+    const VulkanSession& session() const { return m_session; }
 
 private:
     friend class VBaseDeviceBuffer;
@@ -559,21 +566,35 @@ template <typename T>
 class VHostBuffer : public VBaseHostBuffer
 {
 public:
-    VHostBuffer(VulkanSession& session, size_t count)
-        : VBaseHostBuffer(session, static_cast<VkDeviceSize>(count) * sizeof(T)),
-          count_(count)
+    using value_type = std::conditional_t<std::is_array_v<T>, std::remove_extent_t<T>, T>;
+
+    explicit VHostBuffer(VulkanSession& session)
+        : VBaseHostBuffer(session, sizeof(T))
     {
     }
 
-    T* get() { return reinterpret_cast<T*>(VBaseHostBuffer::get()); }
-    const T* get() const { return reinterpret_cast<const T*>(VBaseHostBuffer::get()); }
-    T get(size_t index) const { return get()[index]; }
-    void set(size_t index, T value) { get()[index] = value; }
-    void fill(T value) { std::fill_n(get(), count_, value); }
-    size_t count() const { return count_; }
-
-private:
-    size_t count_ = 0;
+    value_type* get() { return reinterpret_cast<value_type*>(VBaseHostBuffer::get()); }
+    const value_type* get() const { return reinterpret_cast<const value_type*>(VBaseHostBuffer::get()); }
+    value_type get(size_t index) const { return get()[index]; }
+    void set(size_t index, value_type value) { get()[index] = value; }
+    template <typename U>
+    void fill(U value)
+    {
+        if constexpr (std::is_array_v<T>)
+        {
+            std::fill_n(get(), count(), value);
+        }
+        else if constexpr (requires(T& item) { item.data; })
+        {
+            using data_type = std::remove_reference_t<decltype(std::declval<T&>().data)>;
+            std::fill_n(get()->data, std::extent_v<data_type>, value);
+        }
+        else
+        {
+            *get() = value;
+        }
+    }
+    size_t count() const { return std::is_array_v<T> ? std::extent_v<T> : 1; }
 };
 
 class VBaseDeviceBuffer
@@ -640,37 +661,41 @@ public:
     VkDeviceSize size() const { return size_; }
     uint32_t mem_type_idx() const { return mem_type_idx_; }
 
-    void write(VBaseHostBuffer& src, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
+    void write(VulkanComputeContext& context, VBaseHostBuffer& src, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
     {
+        assert(src_offset <= src.size());
+        assert(dst_offset <= size_);
         if (count == VK_WHOLE_SIZE)
             count = src.size() - src_offset;
+        else
+            assert(count <= src.size() - src_offset);
+        assert(count <= size_ - dst_offset);
         src.flush();
-        copy_buffer(src.vk_buffer(), buf_, src_offset, dst_offset, count);
+        copy_buffer(context.command_pool(), src.vk_buffer(), buf_, src_offset, dst_offset, count);
     }
 
-    void read(VBaseHostBuffer& dst, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
+    void read(VulkanComputeContext& context, VBaseHostBuffer& dst, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
     {
+        assert(src_offset <= size_);
+        assert(dst_offset <= dst.size());
         if (count == VK_WHOLE_SIZE)
             count = dst.size() - dst_offset;
-        copy_buffer(buf_, dst.vk_buffer(), src_offset, dst_offset, count);
+        else
+            assert(count <= size_ - src_offset);
+        assert(count <= dst.size() - dst_offset);
+        copy_buffer(context.command_pool(), buf_, dst.vk_buffer(), src_offset, dst_offset, count);
         dst.invalidate();
     }
 
 private:
     void copy_buffer(
+        VkCommandPool cmd_pool,
         VkBuffer src,
         VkBuffer dst,
         VkDeviceSize src_offset,
         VkDeviceSize dst_offset,
         VkDeviceSize count)
     {
-        VkCommandPool cmd_pool = VK_NULL_HANDLE;
-        VkCommandPoolCreateInfo cpci{};
-        cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        cpci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-        cpci.queueFamilyIndex = m_session.get_queue_family_index();
-        check_vk(vkCreateCommandPool(m_session.get_device(), &cpci, nullptr, &cmd_pool), "VBaseDeviceBuffer::copy cmd pool");
-
         VkCommandBuffer cmd_buf = VK_NULL_HANDLE;
         VkCommandBufferAllocateInfo cai{};
         cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -748,7 +773,6 @@ private:
         check_vk(vkDeviceWaitIdle(m_session.get_device()), "VBaseDeviceBuffer::copy wait idle");
 
         vkFreeCommandBuffers(m_session.get_device(), cmd_pool, 1, &cmd_buf);
-        vkDestroyCommandPool(m_session.get_device(), cmd_pool, nullptr);
     }
 
     void destroy_resources()
@@ -773,13 +797,18 @@ template <typename T>
 class VDeviceBuffer : public VBaseDeviceBuffer
 {
 public:
-    explicit VDeviceBuffer(VulkanSession& session)
-        : VBaseDeviceBuffer(session, sizeof(T))
+    explicit VDeviceBuffer(VHostBuffer<T>& host)
+        : VBaseDeviceBuffer(host.session(), host.size())
     {
     }
 
-    VDeviceBuffer(VulkanSession& session, VkDeviceSize size_bytes)
-        : VBaseDeviceBuffer(session, size_bytes)
+    void write(VulkanComputeContext& context, VHostBuffer<T>& src, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
     {
+        VBaseDeviceBuffer::write(context, src, count, src_offset, dst_offset);
+    }
+
+    void read(VulkanComputeContext& context, VHostBuffer<T>& dst, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
+    {
+        VBaseDeviceBuffer::read(context, dst, count, src_offset, dst_offset);
     }
 };

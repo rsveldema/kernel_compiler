@@ -1,0 +1,13 @@
+PROGRAM("OutputLayer.cc:118")
+
+OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TempStorage>(), (temp_values))
+
+PARAMETERS
+        fixed_size_vector<rlmm_float, TempStorage>& temp_values
+
+BEGIN
+        if (gl_GlobalInvocationID.y != 0u)
+            return;
+        temp_values[i] = (i == 0) ? -3.402823e38f : 0.0f;
+
+END_PROGRAM

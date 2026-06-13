@@ -1,0 +1,20 @@
+PROGRAM("TransformerBlock.cc:125")
+
+OFFLOAD_PARFOR_1D_PARAM(t, limit<16384>(x.num_rows()), (row_sums, inv_rms))
+
+PARAMETERS
+        const flexible_rows_matrix<rlmm_float, 16384, 1024>& x,
+        flexible_rows_matrix<rlmm_float, 16384, 1024>& y,
+        fixed_size_vector<rlmm_float, RmsNormPartialSumIndex>& row_sums,
+        fixed_size_vector<rlmm_float, 16384>& inv_rms
+
+BEGIN
+            constexpr float eps = 1e-6f;
+            constexpr float fd = 1024;
+            constexpr int partial_sum_count = 1024;
+            float sq = 0.0f;
+            for (int part = 0; part < partial_sum_count; ++part)
+                sq += row_sums[(t * partial_sum_count) + part];
+            inv_rms[t] = 1.0f / std::sqrt(sq / fd + eps);
+
+END_PROGRAM

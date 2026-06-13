@@ -1,13 +1,13 @@
 """Optimization passes for Program AST."""
 
-from codegen.ast.program import Program
-from codegen.ast.statement import (
+from codegen.kast.program import Program
+from codegen.kast.statement import (
     ForLoopWithConditionAndIncrement,
     Assignment,
     Condition,
 )
-from codegen.ast.expression import BinaryExpr, Identifier, Number
-from codegen.ast.workgroup import WorkgroupProperties
+from codegen.kast.expression import BinaryExpr, Identifier, Number
+from codegen.kast.workgroup import WorkgroupProperties
 
 
 BLOCK_SIZE = 8

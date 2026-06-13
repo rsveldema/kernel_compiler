@@ -1,0 +1,14 @@
+PROGRAM("TransformerBlock.cc:136")
+
+OFFLOAD_PARFOR_2D_PARAM(t, i, normalize_grid, (x, y, inv_rms))
+
+PARAMETERS
+        const flexible_rows_matrix<rlmm_float, 16384, 1024>& x,
+        flexible_rows_matrix<rlmm_float, 16384, 1024>& y,
+        fixed_size_vector<rlmm_float, RmsNormPartialSumIndex>& row_sums,
+        fixed_size_vector<rlmm_float, 16384>& inv_rms
+
+BEGIN
+            y[t, i] = x[t, i] * inv_rms[t];
+
+END_PROGRAM

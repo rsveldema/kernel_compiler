@@ -1,0 +1,16 @@
+PROGRAM("OutputLayer.cc:60")
+
+OFFLOAD_PARFOR_1D_PARAM(v, enum_iterator<TokenID>(), (h_last, W, inputs))
+
+PARAMETERS
+        const fixed_size_vector<rlmm_float, 1024>& h_last,
+        const fixed_size_matrix<rlmm_float_small, TokenID, 1024>& W,
+        fixed_size_vector<rlmm_float, TokenID>& inputs
+
+BEGIN
+        float sum = 0.f;
+        for (const int d : limit<1024>())
+            sum += h_last[d] * W[v, d];
+        inputs[v] = sum;
+
+END_PROGRAM

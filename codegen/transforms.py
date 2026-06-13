@@ -6,10 +6,10 @@ parse() and a thin transform wrapper.
 
 from lark import Tree, Token
 from .visitors.resolve_array_indices import resolve_array_indices
-from .ast.program import *
-from .ast.expression import *
-from .ast.type import *
-from .ast.statement import *
+from .kast.program import *
+from .kast.expression import *
+from .kast.type import *
+from .kast.statement import *
 
 # ── helpers ────────────────────────────────────────────────────────
 
