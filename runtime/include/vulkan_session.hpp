@@ -43,13 +43,16 @@ struct VulkanDimension
 class VulkanSession
 {
 public:
-    explicit VulkanSession(bool enable_cooperative_matrix2 = false);
+    explicit VulkanSession(
+        bool enable_cooperative_matrix2 = false,
+        const char* preferred_device_name = nullptr);
 
     bool has_device() const { return m_instance != VK_NULL_HANDLE && m_device != VK_NULL_HANDLE; }
     VkDevice get_device() const { return m_device; }
     VkQueue get_queue() const { return m_queue; }
     uint32_t get_queue_family_index() const { return m_queue_fi; }
     VkPhysicalDevice get_phys_device() const { return m_phys_dev; }
+    VkDeviceSize maxMemoryAllocationSize() const { return m_max_memory_allocation_size; }
     bool shader_buffer_float32_atomic_add_enabled() const { return m_shader_buffer_float32_atomic_add_enabled; }
     bool cooperative_matrix2_enabled() const { return m_coopmat2_enabled; }
     const std::string& cooperative_matrix2_unavailable_reason() const { return m_coopmat2_unavailable_reason; }
@@ -77,6 +80,7 @@ protected:
     VkDevice m_device = VK_NULL_HANDLE;
     VkQueue m_queue = VK_NULL_HANDLE;
     uint32_t m_queue_fi = 0xFFFFFFFFu;
+    VkDeviceSize m_max_memory_allocation_size = 0;
     bool m_shader_buffer_float32_atomic_add_enabled = false;
     bool m_coopmat2_enabled = false;
     std::string m_coopmat2_unavailable_reason;
@@ -491,10 +495,12 @@ public:
         return *this;
     }
 
-    ~VBaseHostBuffer()
+    virtual ~VBaseHostBuffer()
     {
         destroy_resources();
     }
+
+    virtual const char* typed_buffer_name() const = 0;
 
     uint8_t* get() { return mapped_; }
     const uint8_t* get() const { return mapped_; }
@@ -573,6 +579,7 @@ public:
     {
     }
 
+    const char* typed_buffer_name() const override { return "VHostBuffer"; }
     value_type* get() { return reinterpret_cast<value_type*>(VBaseHostBuffer::get()); }
     const value_type* get() const { return reinterpret_cast<const value_type*>(VBaseHostBuffer::get()); }
     value_type get(size_t index) const { return get()[index]; }
@@ -592,6 +599,37 @@ public:
         else
         {
             *get() = value;
+        }
+    }
+    template <typename U>
+    void fill(U value, size_t count)
+    {
+        fill_at(value, 0, count);
+    }
+    template <typename U>
+    void fill_at(U value, size_t offset, size_t count)
+    {
+        if constexpr (std::is_array_v<T>)
+        {
+            assert(offset <= this->count());
+            assert(count <= this->count() - offset);
+            std::fill_n(get() + offset, count, value);
+        }
+        else if constexpr (requires(T& item) { item.data; })
+        {
+            using data_type = std::remove_reference_t<decltype(std::declval<T&>().data)>;
+            using element_type = std::remove_extent_t<data_type>;
+            const size_t capacity = static_cast<size_t>(size() / sizeof(element_type));
+            assert(offset <= capacity);
+            assert(count <= capacity - offset);
+            std::fill_n(get()->data + offset, count, value);
+        }
+        else
+        {
+            assert(offset <= 1);
+            assert(count <= 1 - offset);
+            if (count == 1)
+                *get() = value;
         }
     }
     size_t count() const { return std::is_array_v<T> ? std::extent_v<T> : 1; }
@@ -652,10 +690,12 @@ public:
         return *this;
     }
 
-    ~VBaseDeviceBuffer()
+    virtual ~VBaseDeviceBuffer()
     {
         destroy_resources();
     }
+
+    virtual const char* typed_buffer_name() const = 0;
 
     VkBuffer get() const { return buf_; }
     VkDeviceSize size() const { return size_; }
@@ -689,6 +729,44 @@ public:
 
 private:
     void copy_buffer(
+        VkCommandPool cmd_pool,
+        VkBuffer src,
+        VkBuffer dst,
+        VkDeviceSize src_offset,
+        VkDeviceSize dst_offset,
+        VkDeviceSize count)
+    {
+        const VkDeviceSize max_copy_bytes = copy_chunk_size_bytes();
+        VkDeviceSize copied = 0;
+        while (copied < count)
+        {
+            const VkDeviceSize chunk = std::min(max_copy_bytes, count - copied);
+            copy_buffer_chunk(
+                cmd_pool,
+                src,
+                dst,
+                src_offset + copied,
+                dst_offset + copied,
+                chunk);
+            copied += chunk;
+        }
+    }
+
+    VkDeviceSize copy_chunk_size_bytes() const
+    {
+        constexpr VkDeviceSize default_copy_chunk_bytes = 16ull * 1024ull * 1024ull;
+        const char* env = std::getenv("RLLM_VULKAN_COPY_CHUNK_MB");
+        if (!env || !*env)
+            return default_copy_chunk_bytes;
+
+        char* end = nullptr;
+        const auto mb = std::strtoull(env, &end, 10);
+        if (end == env || mb == 0)
+            return default_copy_chunk_bytes;
+        return static_cast<VkDeviceSize>(mb) * 1024ull * 1024ull;
+    }
+
+    void copy_buffer_chunk(
         VkCommandPool cmd_pool,
         VkBuffer src,
         VkBuffer dst,
@@ -801,6 +879,8 @@ public:
         : VBaseDeviceBuffer(host.session(), host.size())
     {
     }
+
+    const char* typed_buffer_name() const override { return "VDeviceBuffer"; }
 
     void write(VulkanComputeContext& context, VHostBuffer<T>& src, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
     {

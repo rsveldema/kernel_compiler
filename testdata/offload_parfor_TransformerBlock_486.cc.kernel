@@ -1,0 +1,24 @@
+PROGRAM("TransformerBlock.cc:486")
+
+OFFLOAD_PARFOR_3D_PARAM(hi, i, d_head, dq_grid, (d_Q, d_raw, K, head_scale, seq_len, d_raw_rows, d_raw_cols))
+
+PARAMETERS
+        flexible_rows_matrix< float , 16384, 1024>& d_Q ,
+        fixed_size_levels_rows_cols_matrix< float , 8, 16384, 16384>& d_raw ,
+        const flexible_rows_matrix< float , 16384, 1024>& K ,
+        const float head_scale ,
+        const int seq_len ,
+         const int d_raw_rows ,
+         const int d_raw_cols
+
+BEGIN
+        {
+            const int hi_int = (hi);
+            const int d = hi_int * (128) + int(d_head);
+            float sum_q = 0.f;
+            for (const int j : limit<16384>(inc(i)))
+                sum_q += d_raw[hi, i, j] * head_scale * K[j, d];
+            d_Q[i, d] = sum_q;
+        }
+
+END_PROGRAM

@@ -3,13 +3,13 @@ PROGRAM("OutputLayer.cc:76")
 OFFLOAD_PARFOR_1D_PARAM(d, limit<1024>(), (delta, dh_last, W))
 
 PARAMETERS
-        const fixed_size_vector<rlmm_float, TokenID>& delta,
-        fixed_size_vector<rlmm_float, 1024>& dh_last,
-        const fixed_size_matrix<rlmm_float_small, TokenID, 1024>& W
+        const fixed_size_vector< float ,  int >& delta,
+        fixed_size_vector< float , 1024>& dh_last,
+        const fixed_size_matrix< float16 ,  int , 1024>& W
 
 BEGIN
         float sum = dh_last[d];
-        for (const int v : enum_iterator<TokenID>())
+        for (const int v : limit<598>())
             sum += delta[v] * W[v, d];
         dh_last[d] = sum;
 

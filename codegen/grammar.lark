@@ -3,7 +3,7 @@
 program: header parfor_space parfor_parameters body
 
 
-parfor_parameters: "PARAMETERS" declaration ("," declaration)*
+parfor_parameters: "PARAMETERS" declaration ("," declaration)* (";")?
 
 header: "PROGRAM" "(" string ")" workgroup_properties*
 
@@ -13,6 +13,7 @@ workgroup_properties: "workgroup" "{" "x" ":" expression "," "y" ":" expression 
 parfor_space: "OFFLOAD_PARFOR_1D_PARAM" "(" IDENT "," expression "," parfor_parameters_list ")" 
 | "OFFLOAD_PARFOR_2D_PARAM" "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" 
 | "OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM" "(" IDENT "," IDENT "," IDENT "," expression "," expression "," parfor_parameters_list ")" 
+| "OFFLOAD_PARFOR_3D_PARAM" "(" IDENT "," IDENT "," IDENT "," expression "," parfor_parameters_list ")" 
 
 parfor_parameters_list: "(" parameter ("," parameter)* ")"
 parameter: IDENT
@@ -25,16 +26,29 @@ statement: for_statement
 | assignment ";"
 | "OVERFLOW_CHECK_ADD" "(" lhs "," expression ")" ";"
 | block
+| return_statement
+| atomic_op
+
+
+atomic_op: "atomicAdd" "(" expression "," expression ")" ";"
+
+
+return_statement: RETURN ";"
+RETURN: "return"
+
 
 for_statement: "for" "(" for_loop_var ";" condition ";" increment ")" (block | statement)
 |              "for" "(" "const" type IDENT ":" expression ")" (block | statement)
 
-if_statement: "if" "(" condition ")" statement ("else" statement)?
+if_statement: "if" "(" condition ")" statement else_statement?
+
+else_statement: "else" statement
+
 
 for_loop_var:  ("const")? type IDENT "=" expression 
 
 // in the AST becomes <expr> <op> <expr>
-condition: IDENT compare_operator expression
+condition: lhs compare_operator expression
 
 compare_operator: LT | GT | LTE | GTE | EQ | NEQ
 LT: "<"
@@ -50,13 +64,14 @@ INC_OP: "++" | "--"
 declaration: "const" type IDENT ("=" expression)? -> const_decl
 | type IDENT  ("=" expression)? -> decl
 
-TYPE_LITERAL: "int" | "size_t" | "float" | "rlmm_float" | "rlmm_float_small" | "PositionIndex"
+TYPE_LITERAL: "int" | "size_t" | "float" | "float" | "float16" | "PositionIndex"
 
 type: FSV "<" type "," expression ">" "&"
     | FRM "<" type "," expression "," expression ">" "&"
     | FSM "<" type "," expression "," expression ">" "&"
     | FSLRMC "<" type "," expression "," expression "," expression ">" "&"
     | FRCLM "<" type "," expression "," expression "," expression ">" "&"
+    | FRCM "<" type "," expression "," expression ">" "&"
     | TYPE_LITERAL
 
 
@@ -68,22 +83,40 @@ ASSIGN_OP: "=" | "+=" | "-=" | "*=" | "/="
 assign_operator: ASSIGN_OP
 
 DOT: "."
-field_access: IDENT ( array_index )? ( DOT IDENT)?
+field_access: IDENT ( DOT IDENT)? ( array_index | call_args )? 
 
 array_index:  "[" expression ("," expression)* "]"
 
+call_args: "("  (expression ("," expression)*)?   ")"
+
 lhs: field_access
 
-expression: base_expr (arith_operator expression)?
+expression: base_expr (binary_operator expression)?  ternary_trailer?
 
-ARITH_OP: "*" | "/" | "+" | "-"
-arith_operator: ARITH_OP
+ternary_trailer: "?" expression ":" expression
 
-base_expr: limit_expr | number_term | field_access | type "(" expression ")" | "!" expression | inc_call | "(" expression ")"
+binary_operator: arith_operator | compare_operator
+
+ARITH_OP: "*" | "/" | "+" | "&" | "%" 
+arith_operator: ARITH_OP | NEG
+
+NEG: "-"
+
+base_expr: limit_expr | number_term | field_access | type "(" expression ")" | unary_expression | inc_call | "(" expression ")"
+
+unary_expression: unary_operator expression
+
+unary_operator: UNARY_OP | NEG
+
+UNARY_OP: "!" | "~"
 
 inc_call: "inc" "(" expression ")"
 
-limit_expr: "limit" "<" expression ">" "(" expression ")"
+limit_expr: "limit" "<" expression ">" "(" limit_args? ")"
+
+// end or start-end
+limit_args: expression ("," expression)?
+
 number_term: NUMBER -> number
 
 // Type name terminals (must come before CNAME to prevent it from matching them)
@@ -92,6 +125,9 @@ FRM: "flexible_rows_matrix"
 FSM: "fixed_size_matrix"
 FSLRMC: "fixed_size_levels_rows_cols_matrix"
 FRCLM: "flexible_rows_cols_levels_matrix"
+FRCM: "flexible_rows_cols_matrix"
+
+ 
 
 // Define the Comment Terminals
 COMMENT: "//" /[^\n]/* | "/*" /.*?/ "*/"  
@@ -103,7 +139,7 @@ COMMENT: "//" /[^\n]/* | "/*" /.*?/ "*/"
 
 string : ESCAPED_STRING
 
-NUMBER: /([0-9]+\.[0-9]*|\.[0-9]+|[0-9]+)[fF]?/
+NUMBER: /([0-9]+\.[0-9]*|\.[0-9]+|[0-9]+)(e[+-]?[0-9]*)?[fFu]?/
 
 
 %import common.ESCAPED_STRING

@@ -3,16 +3,16 @@ PROGRAM("vecmath.cc:266")
 OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A, B1, C1, B2, C2))
 
 PARAMETERS
-        const flexible_rows_matrix<rlmm_float, 16384, 1024>& A,
-        const fixed_size_matrix<rlmm_float_small, FFDimension, 1024>& B1,
-        flexible_rows_matrix<rlmm_float, 16384, FFDimension>& C1,
-        const fixed_size_matrix<rlmm_float_small, FFDimension, 1024>& B2,
-        flexible_rows_matrix<rlmm_float, 16384, FFDimension>& C2
+        const flexible_rows_matrix< float , 16384, 1024>& A,
+        const fixed_size_matrix< float16 , FFDimension, 1024>& B1,
+        flexible_rows_matrix< float , 16384, FFDimension>& C1,
+        const fixed_size_matrix< float16 , FFDimension, 1024>& B2,
+        flexible_rows_matrix< float , 16384, FFDimension>& C2
 
 BEGIN
             float sum1 = 0.f;
             float sum2 = 0.f;
-            for (size_t l_idx = 0; l_idx < 1024; ++l_idx)
+            for (size_t l_idx = 0; l_idx < (1024); ++l_idx)
             {
                 const int k = int(l_idx);
                 const float a = A[i, k];
@@ -24,7 +24,7 @@ BEGIN
                 OVERFLOW_CHECK_ADD(sum2, term2);
                 sum2 += term2;
             }
-            C1[i, j] = sum1;
-            C2[i, j] = sum2;
+            C1[i, j] = (sum1);
+            C2[i, j] = (sum2);
 
 END_PROGRAM

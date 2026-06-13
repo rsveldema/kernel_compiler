@@ -1,0 +1,22 @@
+PROGRAM("TransformerBlock.cc:227")
+
+OFFLOAD_PARFOR_3D_PARAM(hi, i, j, score_grid, (attn_w, Q, K))
+
+PARAMETERS
+        flexible_rows_cols_levels_matrix< float , 8, 16384, 16384>& attn_w ,
+        const flexible_rows_matrix< float , 16384, 1024>& Q ,
+        const flexible_rows_matrix< float , 16384, 1024>& K
+
+BEGIN
+        {
+            const int hi_int = (hi);
+            const int h_start = hi_int * 128;
+            const int h_end = (hi_int + 1) * 128;
+            float dot = 0.f;
+            for (int d = h_start; d < h_end; ++d)
+                dot += Q[i, d] * K[j, d];
+            const float score = dot * (1.0f / sqrt(128.0f));
+            attn_w[hi, i, j] = score;
+        }
+
+END_PROGRAM

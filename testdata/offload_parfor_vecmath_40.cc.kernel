@@ -8,6 +8,6 @@ PARAMETERS
         int length
 
 BEGIN
-        dst[i] = value;
+        dst[(i)] = value;
 
 END_PROGRAM

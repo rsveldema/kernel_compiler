@@ -224,6 +224,31 @@ class VulkanCppStubVisitor(Visitor):
             return str(val)
         return "1"
 
+    def _number_literal(self, expr) -> str | None:
+        if expr and isinstance(expr, ast.Number):
+            return str(int(expr.value))
+        return None
+
+    def _buffer_dimension_constants(self, name: str, ty) -> List[Tuple[str, str]]:
+        if isinstance(
+            ty, (ast.FixedSizeLevelsRowsColsMatrix, ast.FlexibleRowsColsLevelsMatrix)
+        ):
+            dims = [
+                ("X", self._number_literal(getattr(ty, "level_expr", None))),
+                ("Y", self._number_literal(getattr(ty, "row_size_expr", None))),
+                ("Z", self._number_literal(getattr(ty, "col_size_expr", None))),
+            ]
+        elif isinstance(ty, (ast.FlexibleRowsMatrix, ast.FixedSizeMatrix)):
+            dims = [
+                ("X", self._number_literal(getattr(ty, "row_size_expr", None))),
+                ("Y", self._number_literal(getattr(ty, "col_size_expr", None))),
+            ]
+        elif isinstance(ty, ast.FixedSizeVector):
+            dims = [("X", self._number_literal(getattr(ty, "size_expr", None)))]
+        else:
+            dims = []
+        return [(f"{name}_{axis}", value) for axis, value in dims if value is not None]
+
     def visit_workgroup_properties(self, node: ast.WorkgroupProperties) -> dict:
         return {
             "x": self._to_str(node.x_expr) if node.x_expr else "8",
@@ -353,6 +378,11 @@ class VulkanCppStubVisitor(Visitor):
         for param, sname in buffer_params:
             vt = param.var_type
             size_str = self._compute_matrix_size(vt)
+            dim_constants = self._buffer_dimension_constants(param.name, vt)
+            for cname, cvalue in dim_constants:
+                self._emit(f"inline constexpr uint32_t {cname} = {cvalue};")
+            if dim_constants:
+                self._emit("")
 
             self._emit(f"struct {sname} {{")
             self._push()

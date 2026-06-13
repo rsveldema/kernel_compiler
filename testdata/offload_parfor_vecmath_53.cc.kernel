@@ -3,11 +3,11 @@ PROGRAM("vecmath.cc:53")
 OFFLOAD_PARFOR_1D_PARAM(i, limit<16384>(length), (dst, value))
 
 PARAMETERS
-        fixed_size_vector<rlmm_float, 16384>& dst,
-        rlmm_float value,
+        fixed_size_vector< float , 16384>& dst,
+         float  value,
         int length
 
 BEGIN
-        dst[i] = value;
+        dst[(i)] = value;
 
 END_PROGRAM

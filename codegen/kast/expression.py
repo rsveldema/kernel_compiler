@@ -60,9 +60,19 @@ class FieldAccess(Expression):
 
 
 class LimitExpr(Expression):
-    def __init__(self, max_val: Expression, body: Expression):
+    """
+    LimitExpr works as a Range expression for a given type. 
+    The Type is limited by max_val but values can range from start-end within that range.    
+    """ 
+
+    def __init__(self, max_val: Expression, e1: Expression, e2: Expression|None = None):
         self.max_val = max_val
-        self.body = body
+        if e2 is None:
+            self.start = Number(0)
+            self.end = e1
+        else:
+            self.start = e1
+            self.end = e2 
 
     def accept(self, visitor):
         return visitor.visit_limit_expr(self)

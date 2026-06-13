@@ -1,0 +1,19 @@
+PROGRAM("OutputLayer.cc:153")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<598>(), (inputs, values, temp_values))
+
+PARAMETERS
+        const fixed_size_vector< float ,  int >& inputs,
+        fixed_size_vector< float ,  int >& values,
+        fixed_size_vector< float , 2>& temp_values
+
+BEGIN
+        {
+            const float max_val = temp_values[0];
+            float exp_value = exp(inputs[i] - max_val);            
+            values[i] = exp_value;
+            
+            atomicAdd(temp_values[1], exp_value);
+        }
+
+END_PROGRAM

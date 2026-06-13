@@ -7,6 +7,8 @@
 #include <cstring>
 #include <algorithm>
 #include <chrono>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -59,11 +61,11 @@ TEST_F(VulkanTestBase, single_assign_correctness)
 static void write_multi_arg_descriptors(
     VulkanComputeKernel& kernel,
     VkDevice device,
-    std::vector<VBaseDeviceBuffer>& bufs)
+    const std::vector<VBaseDeviceBuffer*>& bufs)
 {
     std::vector<VkDescriptorBufferInfo> dbis(bufs.size());
     for (uint32_t i = 0; i < bufs.size(); ++i) {
-        dbis[i].buffer = bufs[i].get();
+        dbis[i].buffer = bufs[i]->get();
         dbis[i].offset = 0;
         dbis[i].range  = VK_WHOLE_SIZE;
 
@@ -76,18 +78,6 @@ static void write_multi_arg_descriptors(
         wds.pBufferInfo       = &dbis[i];
         vkUpdateDescriptorSets(device, 1, &wds, 0, nullptr);
     }
-}
-
-static void download_buffer(
-    VulkanSession& session,
-    VulkanComputeContext& context,
-    VBaseDeviceBuffer& src,
-    void* dst)
-{
-    const VkDeviceSize size_bytes = src.size();
-    VBaseHostBuffer host(session, size_bytes);
-    src.read(context, host);
-    memcpy(dst, host.get(), static_cast<size_t>(size_bytes));
 }
 
 static double dispatch_multi_arg_once(
@@ -108,11 +98,11 @@ static double dispatch_multi_arg_once(
     return std::chrono::duration<double, std::milli>(end - start).count();
 }
 
-static std::vector<float> read_float_buffer(VulkanSession& session, VulkanComputeContext& context, VBaseDeviceBuffer& buf)
+template <typename T>
+static std::vector<float> read_float_buffer(VulkanComputeContext& context, VDeviceBuffer<T>& buf, VHostBuffer<T>& host)
 {
-    const VkDeviceSize size_bytes = buf.size();
+    const VkDeviceSize size_bytes = host.size();
     std::vector<float> actual(static_cast<size_t>(size_bytes / sizeof(float)));
-    VBaseHostBuffer host(session, size_bytes);
     buf.read(context, host);
     memcpy(actual.data(), host.get(), static_cast<size_t>(size_bytes));
     return actual;
@@ -127,12 +117,12 @@ static bool selected_device_is_llvmpipe(VulkanSession& session)
 
 TEST_F(VulkanTestBase, host_device_buffer_copy_bandwidth)
 {
-    constexpr VkDeviceSize size_bytes = 64ull * 1024ull * 1024ull;
+    constexpr size_t size_bytes = 64ull * 1024ull * 1024ull;
     constexpr int iterations = 5;
 
-    VBaseHostBuffer upload(get_session(), size_bytes);
-    VBaseHostBuffer download(get_session(), size_bytes);
-    VBaseDeviceBuffer device(get_session(), size_bytes);
+    VHostBuffer<uint8_t[size_bytes]> upload(get_session());
+    VHostBuffer<uint8_t[size_bytes]> download(get_session());
+    VDeviceBuffer<uint8_t[size_bytes]> device(upload);
     VulkanComputeContext copy_context(get_session());
 
     for (VkDeviceSize i = 0; i < size_bytes; ++i) {
@@ -253,6 +243,7 @@ TEST_F(VulkanTestBase, multi_arg_shared_memory_tiling_is_faster)
     VHostBuffer<float[ROWS * COLS]> a3(get_session());
     VHostBuffer<float[COLS * COLS]> b3(get_session());
     VHostBuffer<float[ROWS * COLS]> c(get_session());
+    VHostBuffer<float[ROWS * COLS]> readback(get_session());
     a1.fill(1.0f);
     b1.fill(2.0f);
     a2.fill(3.0f);
@@ -260,33 +251,41 @@ TEST_F(VulkanTestBase, multi_arg_shared_memory_tiling_is_faster)
     a3.fill(5.0f);
     b3.fill(6.0f);
     c.fill(0.0f);
-    std::vector<VBaseDeviceBuffer> bufs;
-    bufs.emplace_back(get_session(), a1.size());
-    bufs.emplace_back(get_session(), b1.size());
-    bufs.emplace_back(get_session(), a2.size());
-    bufs.emplace_back(get_session(), b2.size());
-    bufs.emplace_back(get_session(), a3.size());
-    bufs.emplace_back(get_session(), b3.size());
-    bufs.emplace_back(get_session(), c.size());
+    VDeviceBuffer<float[ROWS * COLS]> a1_buf(a1);
+    VDeviceBuffer<float[COLS * COLS]> b1_buf(b1);
+    VDeviceBuffer<float[ROWS * COLS]> a2_buf(a2);
+    VDeviceBuffer<float[COLS * COLS]> b2_buf(b2);
+    VDeviceBuffer<float[ROWS * COLS]> a3_buf(a3);
+    VDeviceBuffer<float[COLS * COLS]> b3_buf(b3);
+    VDeviceBuffer<float[ROWS * COLS]> c_buf(c);
+    std::vector<VBaseDeviceBuffer*> bufs{
+        &a1_buf,
+        &b1_buf,
+        &a2_buf,
+        &b2_buf,
+        &a3_buf,
+        &b3_buf,
+        &c_buf,
+    };
     VulkanComputeContext transfer_context(get_session());
-    bufs[0].write(transfer_context, a1);
-    bufs[1].write(transfer_context, b1);
-    bufs[2].write(transfer_context, a2);
-    bufs[3].write(transfer_context, b2);
-    bufs[4].write(transfer_context, a3);
-    bufs[5].write(transfer_context, b3);
+    a1_buf.write(transfer_context, a1);
+    b1_buf.write(transfer_context, b1);
+    a2_buf.write(transfer_context, a2);
+    b2_buf.write(transfer_context, b2);
+    a3_buf.write(transfer_context, a3);
+    b3_buf.write(transfer_context, b3);
 
     VulkanComputeKernel unoptimized(get_session(), TESTDATA_DIR "/multi-arg-noopt.glsl", 0, bufs.size());
     write_multi_arg_descriptors(unoptimized, get_device(), bufs);
 
     const VulkanDimension unoptimized_dims{ROWS, COLS, 1};
 
-    (void)dispatch_multi_arg_once(unoptimized, get_session(), bufs[6], c, unoptimized_dims);
-    const auto sequential_actual = read_float_buffer(get_session(), transfer_context, bufs[6]);
+    (void)dispatch_multi_arg_once(unoptimized, get_session(), c_buf, c, unoptimized_dims);
+    const auto sequential_actual = read_float_buffer(transfer_context, c_buf, readback);
 
     double best_unoptimized = 1.0e30;
     for (int i = 0; i < 3; ++i) {
-        best_unoptimized = std::min(best_unoptimized, dispatch_multi_arg_once(unoptimized, get_session(), bufs[6], c, unoptimized_dims));
+        best_unoptimized = std::min(best_unoptimized, dispatch_multi_arg_once(unoptimized, get_session(), c_buf, c, unoptimized_dims));
     }
 
     const uint32_t chunk_sizes[] = {1, 2, 4, 8, 16, 32, 64};
@@ -303,8 +302,8 @@ TEST_F(VulkanTestBase, multi_arg_shared_memory_tiling_is_faster)
             (1024 + chunk_size - 1) / chunk_size,
         };
 
-        (void)dispatch_multi_arg_once(shared, get_session(), bufs[6], c, shared_dims);
-        const auto shared_actual = read_float_buffer(get_session(), transfer_context, bufs[6]);
+        (void)dispatch_multi_arg_once(shared, get_session(), c_buf, c, shared_dims);
+        const auto shared_actual = read_float_buffer(transfer_context, c_buf, readback);
 
         ASSERT_EQ(shared_actual.size(), sequential_actual.size());
         for (uint32_t i = 0; i < shared_actual.size(); ++i) {
@@ -314,7 +313,7 @@ TEST_F(VulkanTestBase, multi_arg_shared_memory_tiling_is_faster)
 
         double best_chunk = 1.0e30;
         for (int i = 0; i < 3; ++i) {
-            best_chunk = std::min(best_chunk, dispatch_multi_arg_once(shared, get_session(), bufs[6], c, shared_dims));
+            best_chunk = std::min(best_chunk, dispatch_multi_arg_once(shared, get_session(), c_buf, c, shared_dims));
         }
 
         const double speedup = best_unoptimized / best_chunk;
@@ -374,6 +373,7 @@ TEST_F(VulkanTestBase, multi_arg_cooperative_matrix2_correctness)
     VHostBuffer<float[ROWS * COLS]> a3(coop_session);
     VHostBuffer<float[COLS * COLS]> b3(coop_session);
     VHostBuffer<float[ROWS * COLS]> c(coop_session);
+    VHostBuffer<float[ROWS * COLS]> readback(coop_session);
     a1.fill(1.0f);
     b1.fill(2.0f);
     a2.fill(3.0f);
@@ -381,21 +381,29 @@ TEST_F(VulkanTestBase, multi_arg_cooperative_matrix2_correctness)
     a3.fill(5.0f);
     b3.fill(6.0f);
     c.fill(0.0f);
-    std::vector<VBaseDeviceBuffer> bufs;
-    bufs.emplace_back(coop_session, a1.size());
-    bufs.emplace_back(coop_session, b1.size());
-    bufs.emplace_back(coop_session, a2.size());
-    bufs.emplace_back(coop_session, b2.size());
-    bufs.emplace_back(coop_session, a3.size());
-    bufs.emplace_back(coop_session, b3.size());
-    bufs.emplace_back(coop_session, c.size());
+    VDeviceBuffer<float[ROWS * COLS]> a1_buf(a1);
+    VDeviceBuffer<float[COLS * COLS]> b1_buf(b1);
+    VDeviceBuffer<float[ROWS * COLS]> a2_buf(a2);
+    VDeviceBuffer<float[COLS * COLS]> b2_buf(b2);
+    VDeviceBuffer<float[ROWS * COLS]> a3_buf(a3);
+    VDeviceBuffer<float[COLS * COLS]> b3_buf(b3);
+    VDeviceBuffer<float[ROWS * COLS]> c_buf(c);
+    std::vector<VBaseDeviceBuffer*> bufs{
+        &a1_buf,
+        &b1_buf,
+        &a2_buf,
+        &b2_buf,
+        &a3_buf,
+        &b3_buf,
+        &c_buf,
+    };
     VulkanComputeContext transfer_context(coop_session);
-    bufs[0].write(transfer_context, a1);
-    bufs[1].write(transfer_context, b1);
-    bufs[2].write(transfer_context, a2);
-    bufs[3].write(transfer_context, b2);
-    bufs[4].write(transfer_context, a3);
-    bufs[5].write(transfer_context, b3);
+    a1_buf.write(transfer_context, a1);
+    b1_buf.write(transfer_context, b1);
+    a2_buf.write(transfer_context, a2);
+    b2_buf.write(transfer_context, b2);
+    a3_buf.write(transfer_context, a3);
+    b3_buf.write(transfer_context, b3);
 
     VulkanComputeKernel kernel(
         coop_session,
@@ -407,11 +415,11 @@ TEST_F(VulkanTestBase, multi_arg_cooperative_matrix2_correctness)
     (void)dispatch_multi_arg_once(
         kernel,
         coop_session,
-        bufs[6],
+        c_buf,
         c,
         VulkanDimension{(ROWS + 8 - 1) / 8, (COLS + 8 - 1) / 8, 1});
 
-    const auto actual = read_float_buffer(coop_session, transfer_context, bufs[6]);
+    const auto actual = read_float_buffer(transfer_context, c_buf, readback);
     ASSERT_EQ(actual.size(), ROWS * COLS);
     for (uint32_t i = 0; i < actual.size(); ++i) {
         EXPECT_NEAR(actual[i], expected_val, 1.0f)
@@ -423,59 +431,126 @@ TEST_F(VulkanTestBase, multi_arg_cooperative_matrix2_correctness)
 
 TEST_F(VulkanTestBase, triangular1_correctness)
 {
-    constexpr uint32_t H   = 8;
-    constexpr uint32_t W   = 32;
-    constexpr uint32_t D   = 32;
+    VulkanSession triangular_session(false, "llvmpipe");
+    if (!triangular_session.has_device()) {
+        GTEST_SKIP() << "no Vulkan device available for triangular1 test";
+    }
+    if (!selected_device_is_llvmpipe(triangular_session)) {
+        GTEST_SKIP() << "llvmpipe Vulkan device is not available for triangular1 test";
+    }
 
-    float expected_val = 1.0f - static_cast<float>(D); /* 1 - 32 = -31 */
+    static_assert(rllm_triangular1::d_scores_X == rllm_triangular1::d_raw_X);
+    static_assert(rllm_triangular1::d_scores_Y == rllm_triangular1::d_raw_Y);
+    static_assert(rllm_triangular1::d_scores_Z == rllm_triangular1::d_raw_Z);
+    static_assert(rllm_triangular1::d_scores_X == rllm_triangular1::attn_w_X);
+    static_assert(rllm_triangular1::d_scores_Y == rllm_triangular1::attn_w_Y);
+    static_assert(rllm_triangular1::d_scores_Z == rllm_triangular1::attn_w_Z);
 
-    constexpr size_t elem_count = static_cast<size_t>(H) * W * D;
+    constexpr uint32_t test_seq_len = std::min(rllm_triangular1::d_scores_Y, 32u);
+    constexpr VkDeviceSize row_size_bytes =
+        static_cast<VkDeviceSize>(test_seq_len) * sizeof(float);
+    constexpr VkDeviceSize declared_level_stride_bytes =
+        static_cast<VkDeviceSize>(rllm_triangular1::d_scores_Z) *
+        static_cast<VkDeviceSize>(rllm_triangular1::d_raw_Z) *
+        sizeof(float);
+    constexpr VkDeviceSize declared_row_stride_bytes =
+        static_cast<VkDeviceSize>(rllm_triangular1::d_raw_Z) * sizeof(float);
+    constexpr uint32_t test_level_count = std::min(rllm_triangular1::d_scores_X, 1u);
+    static_assert(test_level_count > 0);
+    constexpr VkDeviceSize d_scores_size_bytes = sizeof(rllm_triangular1::RllmBuffer_d_scores);
+    constexpr VkDeviceSize d_raw_size_bytes = sizeof(rllm_triangular1::RllmBuffer_d_raw);
+    constexpr VkDeviceSize attn_w_size_bytes = sizeof(rllm_triangular1::RllmBuffer_attn_w);
+    ASSERT_GE(triangular_session.maxMemoryAllocationSize(), d_scores_size_bytes)
+        << "maxMemoryAllocationSize must cover RllmBuffer_d_scores";
+    ASSERT_GE(triangular_session.maxMemoryAllocationSize(), d_raw_size_bytes)
+        << "maxMemoryAllocationSize must cover RllmBuffer_d_raw";
+    ASSERT_GE(triangular_session.maxMemoryAllocationSize(), attn_w_size_bytes)
+        << "maxMemoryAllocationSize must cover RllmBuffer_attn_w";
+    float expected_val = 1.0f - static_cast<float>(test_seq_len);
 
-    constexpr VkDeviceSize size_bytes = elem_count * sizeof(float);
-    VBaseHostBuffer d_scores_h(get_session(), size_bytes);
-    VBaseHostBuffer d_raw_h(get_session(), size_bytes);
-    VBaseHostBuffer attn_w_h(get_session(), size_bytes);
-    std::fill_n(reinterpret_cast<float*>(d_scores_h.get()), elem_count, 1.0f);
-    std::fill_n(reinterpret_cast<float*>(d_raw_h.get()), elem_count, 0.0f);
-    std::fill_n(reinterpret_cast<float*>(attn_w_h.get()), elem_count, 1.0f);
-    VBaseDeviceBuffer d_scores_buf(get_session(), size_bytes);
-    VBaseDeviceBuffer d_raw_buf(get_session(), size_bytes);
-    VBaseDeviceBuffer attn_w_buf(get_session(), size_bytes);
-    VulkanComputeContext ctx(get_session());
-    d_scores_buf.write(ctx, d_scores_h);
-    d_raw_buf.write(ctx, d_raw_h);
-    attn_w_buf.write(ctx, attn_w_h);
+    std::unique_ptr<VHostBuffer<rllm_triangular1::RllmBuffer_d_scores>> d_scores_h;
+    std::unique_ptr<VHostBuffer<rllm_triangular1::RllmBuffer_d_raw>> d_raw_h;
+    std::unique_ptr<VHostBuffer<rllm_triangular1::RllmBuffer_attn_w>> attn_w_h;
+    try {
+        d_scores_h = std::make_unique<VHostBuffer<rllm_triangular1::RllmBuffer_d_scores>>(triangular_session);
+        d_raw_h = std::make_unique<VHostBuffer<rllm_triangular1::RllmBuffer_d_raw>>(triangular_session);
+        attn_w_h = std::make_unique<VHostBuffer<rllm_triangular1::RllmBuffer_attn_w>>(triangular_session);
+    } catch (const std::runtime_error& e) {
+        GTEST_SKIP() << "selected Vulkan device cannot allocate declared triangular buffers: " << e.what();
+    }
+    for (uint32_t hi = 0; hi < test_level_count; ++hi) {
+        for (uint32_t i = 0; i < test_seq_len; ++i) {
+            const size_t offset =
+                static_cast<size_t>(hi) * rllm_triangular1::d_scores_Z * rllm_triangular1::d_raw_Z +
+                static_cast<size_t>(i) * rllm_triangular1::d_raw_Z;
+            d_scores_h->fill_at(1.0f, offset, test_seq_len);
+            d_raw_h->fill_at(0.0f, offset, test_seq_len);
+            attn_w_h->fill_at(1.0f, offset, test_seq_len);
+        }
+    }
 
+    std::unique_ptr<VDeviceBuffer<rllm_triangular1::RllmBuffer_d_scores>> d_scores_buf;
+    std::unique_ptr<VDeviceBuffer<rllm_triangular1::RllmBuffer_d_raw>> d_raw_buf;
+    std::unique_ptr<VDeviceBuffer<rllm_triangular1::RllmBuffer_attn_w>> attn_w_buf;
+    try {
+        d_scores_buf = std::make_unique<VDeviceBuffer<rllm_triangular1::RllmBuffer_d_scores>>(*d_scores_h);
+        d_raw_buf = std::make_unique<VDeviceBuffer<rllm_triangular1::RllmBuffer_d_raw>>(*d_raw_h);
+        attn_w_buf = std::make_unique<VDeviceBuffer<rllm_triangular1::RllmBuffer_attn_w>>(*attn_w_h);
+    } catch (const std::runtime_error& e) {
+        GTEST_SKIP() << "selected Vulkan device cannot allocate declared triangular device buffers: " << e.what();
+    }
     rllm_triangular1::triangular1_TransformerBlock_PushConstants pc{
-        static_cast<int32_t>(W),
-        static_cast<int32_t>(H),
-        static_cast<int32_t>(W),
-        static_cast<int32_t>(H),
-        static_cast<int32_t>(D),
+        static_cast<int32_t>(test_seq_len),
+        static_cast<int32_t>(rllm_triangular1::d_scores_X),
+        static_cast<int32_t>(rllm_triangular1::d_scores_Z),
+        static_cast<int32_t>(rllm_triangular1::d_raw_X),
+        static_cast<int32_t>(rllm_triangular1::d_raw_Z),
     };
 
     rllm_triangular1::Triangular1TransformerBlockKernel kernel(
-        get_session(),
+        triangular_session,
         TESTDATA_DIR "/triangular1.glsl");
+
+    VulkanComputeContext ctx(triangular_session);
+    for (uint32_t hi = 0; hi < test_level_count; ++hi) {
+        for (uint32_t i = 0; i < test_seq_len; ++i) {
+            const VkDeviceSize offset =
+                static_cast<VkDeviceSize>(hi) * declared_level_stride_bytes +
+                static_cast<VkDeviceSize>(i) * declared_row_stride_bytes;
+            d_scores_buf->write(ctx, *d_scores_h, row_size_bytes, offset, offset);
+            d_raw_buf->write(ctx, *d_raw_h, row_size_bytes, offset, offset);
+            attn_w_buf->write(ctx, *attn_w_h, row_size_bytes, offset, offset);
+        }
+    }
 
     kernel.dispatch(
         ctx,
-        H,
-        W,
-        D,
-        d_scores_buf,
-        d_raw_buf,
-        attn_w_buf,
+        test_level_count,
+        test_seq_len,
+        test_seq_len,
+        *d_scores_buf,
+        *d_raw_buf,
+        *attn_w_buf,
         pc);
 
     /* Read back d_raw (buffer index 1) */
-    std::vector<float> actual(elem_count);
-    download_buffer(get_session(), ctx, d_raw_buf, actual.data());
+    for (uint32_t hi = 0; hi < test_level_count; ++hi) {
+        for (uint32_t i = 0; i < test_seq_len; ++i) {
+            const VkDeviceSize offset =
+                static_cast<VkDeviceSize>(hi) * declared_level_stride_bytes +
+                static_cast<VkDeviceSize>(i) * declared_row_stride_bytes;
+            d_raw_buf->read(ctx, *d_raw_h, row_size_bytes, offset, offset);
+        }
+    }
+    const float* actual = d_raw_h->get()->data;
 
-    for (uint32_t hi = 0; hi < H; ++hi) {
-        for (uint32_t i = 0; i < W; ++i) {
-            for (uint32_t j = 0; j < D; ++j) {
-                uint32_t idx = (hi * W + i) * D + j;
+    for (uint32_t hi = 0; hi < test_level_count; ++hi) {
+        for (uint32_t i = 0; i < test_seq_len; ++i) {
+            for (uint32_t j = 0; j < test_seq_len; ++j) {
+                size_t idx =
+                    static_cast<size_t>(hi) * rllm_triangular1::d_scores_Z * rllm_triangular1::d_raw_Z +
+                    static_cast<size_t>(i) * rllm_triangular1::d_raw_Z +
+                    j;
                 EXPECT_NEAR(actual[idx], expected_val, 1.0f)
                     << "triangular1 d_raw[" << hi << "," << i << "," << j << "]";
             }

@@ -3,13 +3,13 @@ PROGRAM("vecmath.cc:420")
 OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A1, B1, A2, B2, A3, B3, C))
 
 PARAMETERS
-        const flexible_rows_matrix<rlmm_float, 16384, 1024>& A1,
-        const fixed_size_matrix<rlmm_float_small, 1024, 1024>& B1,
-        const flexible_rows_matrix<rlmm_float, 16384, 1024>& A2,
-        const fixed_size_matrix<rlmm_float_small, 1024, 1024>& B2,
-        const flexible_rows_matrix<rlmm_float, 16384, 1024>& A3,
-        const fixed_size_matrix<rlmm_float_small, 1024, 1024>& B3,
-        flexible_rows_matrix<rlmm_float, 16384, 1024>& C
+        const flexible_rows_matrix<float, 16384, 1024>& A1,
+        const fixed_size_matrix<float16, 1024, 1024>& B1,
+        const flexible_rows_matrix<float, 16384, 1024>& A2,
+        const fixed_size_matrix<float16, 1024, 1024>& B2,
+        const flexible_rows_matrix<float, 16384, 1024>& A3,
+        const fixed_size_matrix<float16, 1024, 1024>& B3,
+        flexible_rows_matrix<float, 16384, 1024>& C
 
 BEGIN
             float sum1 = 0.f;

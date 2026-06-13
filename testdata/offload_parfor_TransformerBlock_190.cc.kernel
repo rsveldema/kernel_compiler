@@ -1,0 +1,23 @@
+PROGRAM("TransformerBlock.cc:190")
+
+OFFLOAD_PARFOR_2D_PARAM(t, f, gate_range, (gate_pre, up_pre, d_ffn_act, d_gate_pre, d_up_pre))
+
+PARAMETERS
+        int seq,
+        const flexible_rows_matrix< float , 16384, FFDimension>& gate_pre,
+        const flexible_rows_matrix< float , 16384, FFDimension>& up_pre,
+        const flexible_rows_matrix< float , 16384, FFDimension>& d_ffn_act,
+        flexible_rows_matrix< float , 16384, FFDimension>& d_gate_pre,
+        flexible_rows_matrix< float , 16384, FFDimension>& d_up_pre
+
+BEGIN
+        const  float  g = gate_pre[t, f];
+        const  float  sg = 1.0f / (1.0f +  exp (-g)); // sigma(g)
+        const  float  silu = g * sg;
+        // silu'(g) = sigma(g) * (1 + g * (1 - sigma(g)))
+        // Avoids exp(-g)*sigma(g) which gives inf*0=NaN for g < -88 in float32.
+        const  float  dsilu_dg = sg * (1.0f + g * (1.0f - sg));
+        d_gate_pre[t, f] = d_ffn_act[t, f] * up_pre[t, f] * dsilu_dg;
+        d_up_pre[t, f] = d_ffn_act[t, f] * silu;
+
+END_PROGRAM

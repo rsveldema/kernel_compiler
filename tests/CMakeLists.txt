@@ -14,6 +14,20 @@ find_package(Vulkan REQUIRED)
 
 enable_testing()
 
+file(GLOB OFFLOAD_PARFOR_PARSE_TESTS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_offload_parfor_*_cc.py")
+foreach(parse_test IN LISTS OFFLOAD_PARFOR_PARSE_TESTS)
+    get_filename_component(parse_test_name "${parse_test}" NAME_WE)
+    add_test(
+        NAME "${parse_test_name}"
+        COMMAND ${Python3_EXECUTABLE} "${parse_test}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    )
+    set_tests_properties("${parse_test_name}" PROPERTIES
+        ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}:$ENV{PYTHONPATH}"
+    )
+endforeach()
+
 
 # Vulkan kernels: generate headers and GLSL via compile.py
 set(GENERATED_KERNEL_SRCS)

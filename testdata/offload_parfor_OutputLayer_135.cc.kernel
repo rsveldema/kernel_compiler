@@ -1,0 +1,12 @@
+PROGRAM("OutputLayer.cc:135")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<598>(), (inputs, temp_values))
+
+PARAMETERS
+        const fixed_size_vector< float ,  int >& inputs,
+        fixed_size_vector< float , 2>& temp_values
+
+BEGIN
+            temp_values[0] = atomicMax(temp_values[0], inputs[i]);
+
+END_PROGRAM

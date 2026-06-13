@@ -1,11 +1,11 @@
 PROGRAM("OutputLayer.cc:60")
 
-OFFLOAD_PARFOR_1D_PARAM(v, enum_iterator<TokenID>(), (h_last, W, inputs))
+OFFLOAD_PARFOR_1D_PARAM(v, limit<598>(), (h_last, W, inputs))
 
 PARAMETERS
-        const fixed_size_vector<rlmm_float, 1024>& h_last,
-        const fixed_size_matrix<rlmm_float_small, TokenID, 1024>& W,
-        fixed_size_vector<rlmm_float, TokenID>& inputs
+        const fixed_size_vector< float , 1024>& h_last,
+        const fixed_size_matrix< float16 ,  int , 1024>& W,
+        fixed_size_vector< float ,  int >& inputs
 
 BEGIN
         float sum = 0.f;

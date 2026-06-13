@@ -17,12 +17,12 @@
 std::string vk_result_str(VkResult rc);
 void        check_vk(VkResult rc, const char* label);
 
-VulkanSession::VulkanSession(bool enable_cooperative_matrix2)
+VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* preferred_device_name)
 {
     VkApplicationInfo ai{};
     ai.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     ai.pApplicationName = "kernel_compiler_tests";
-    ai.apiVersion = enable_cooperative_matrix2 ? VK_API_VERSION_1_4 : VK_API_VERSION_1_0;
+    ai.apiVersion = enable_cooperative_matrix2 ? VK_API_VERSION_1_4 : VK_API_VERSION_1_1;
     ai.pEngineName = "kernel_compiler";
     ai.engineVersion = VK_MAKE_VERSION(1, 0, 0);
 
@@ -55,10 +55,10 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2)
         return;
     }
 
-    // Select device by VULKAN_DEVICE env var. By default, prefer a non-llvmpipe
+    // Select device by explicit preference, then VULKAN_DEVICE env var. By default, prefer a non-llvmpipe
     // device when the loader exposes one, but still fall back to llvmpipe-only setups.
     m_phys_dev = devs[0]; /* fallback */
-    const char *chosen = getenv("VULKAN_DEVICE");
+    const char *chosen = preferred_device_name ? preferred_device_name : getenv("VULKAN_DEVICE");
     if (chosen)
     {
         for (auto &dev : devs)
@@ -86,6 +86,14 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2)
             }
         }
     }
+
+    VkPhysicalDeviceMaintenance3Properties maintenance3_props{};
+    maintenance3_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES;
+    VkPhysicalDeviceProperties2 props2{};
+    props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    props2.pNext = &maintenance3_props;
+    vkGetPhysicalDeviceProperties2(m_phys_dev, &props2);
+    m_max_memory_allocation_size = maintenance3_props.maxMemoryAllocationSize;
 
     /* Get queue family */
     uint32_t qfc = 0;

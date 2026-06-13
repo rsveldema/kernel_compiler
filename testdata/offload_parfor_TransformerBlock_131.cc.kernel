@@ -1,0 +1,31 @@
+PROGRAM("TransformerBlock.cc:131")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<16384>(T), (x, T))
+
+PARAMETERS
+        flexible_rows_cols_matrix< float , 16384, 16384>& x,
+        int T
+
+BEGIN
+         float  max_val = x[i, 0];
+        for (const int j : limit<16384>(inc(0), inc(i)))
+            max_val =  max (max_val, x[i, j]);
+         float  sum_exp = 0.f;
+        // Compute and sum the exponentials for the active [T × T] block of the row; leave the rest of the row as-is
+        // to avoid unnecessary writes.
+        for (const int j : limit<16384>(inc(i)))
+        {
+            x[i, j] = ( exp (x[i, j] - max_val));
+            sum_exp += x[i, j];
+        }
+        const  float  inv = 1.0f / sum_exp;
+        // scale the active [T × T] block of the row; leave the rest of the row as-is to avoid unnecessary writes
+        for (const int j : limit<16384>(inc(i)))
+            x[i, j] *= (inv);
+
+        // clear from the active [T × T] block to the end of the row
+        // to avoid stale values affecting the backward pass
+        for (const int j : limit<16384>(inc(i), T))
+            x[i, j] = (0.f);
+
+END_PROGRAM

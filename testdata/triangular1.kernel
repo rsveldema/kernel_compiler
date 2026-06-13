@@ -3,14 +3,14 @@ PROGRAM("TransformerBlock.cc:552")
 OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(hi, i, j, 8, seq_len, (d_scores, d_raw, attn_w, seq_len, d_scores_rows, d_scores_cols, d_raw_rows, d_raw_cols))
 
 PARAMETERS
-        fixed_size_levels_rows_cols_matrix<rlmm_float, 8, 16384, 16384>& d_scores ,
-        fixed_size_levels_rows_cols_matrix<rlmm_float, 8, 16384, 16384>& d_raw ,
+        fixed_size_levels_rows_cols_matrix<float, 8, 16384, 16384>& d_scores ,
+        fixed_size_levels_rows_cols_matrix<float, 8, 16384, 16384>& d_raw ,
         const int seq_len ,
          const int d_scores_rows ,
          const int d_scores_cols ,
          const int d_raw_rows ,
          const int d_raw_cols ,
-        const flexible_rows_cols_levels_matrix<rlmm_float, 8, 16384, 16384>& attn_w
+        const flexible_rows_cols_levels_matrix<float, 8, 16384, 16384>& attn_w
 
 BEGIN
         {

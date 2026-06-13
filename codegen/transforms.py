@@ -244,7 +244,9 @@ def transform_expression(expr_tree):
     # Direct limit_expr
     if expr_tree.data == "limit_expr":
         max_val = transform_expression(expr_tree.children[0])
-        body = transform_expression(expr_tree.children[1])
+        body = max_val
+        if (len(expr_tree.children) > 1):
+            body = transform_expression(expr_tree.children[1])
         return LimitExpr(max_val, body)
 
     # 'expression' wrapper with binary ops

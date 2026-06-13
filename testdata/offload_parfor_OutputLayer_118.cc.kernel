@@ -1,9 +1,9 @@
 PROGRAM("OutputLayer.cc:118")
 
-OFFLOAD_PARFOR_1D_PARAM(i, enum_iterator<TempStorage>(), (temp_values))
+OFFLOAD_PARFOR_1D_PARAM(i, limit<2>(), (temp_values))
 
 PARAMETERS
-        fixed_size_vector<rlmm_float, TempStorage>& temp_values
+        fixed_size_vector< float , 2>& temp_values
 
 BEGIN
         if (gl_GlobalInvocationID.y != 0u)

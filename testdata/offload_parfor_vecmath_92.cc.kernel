@@ -3,9 +3,9 @@ PROGRAM("vecmath.cc:92")
 OFFLOAD_PARFOR_1D_PARAM(d, limit<1024>(), (src, row, dst))
 
 PARAMETERS
-        const flexible_rows_matrix<rlmm_float, 16384, 1024>& src,
+        const flexible_rows_matrix< float , 16384, 1024>& src,
         int row,
-        fixed_size_vector<rlmm_float, 1024>& dst
+        fixed_size_vector< float , 1024>& dst
 
 BEGIN
         dst[d] = src[row, d];

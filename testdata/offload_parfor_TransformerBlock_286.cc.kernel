@@ -1,0 +1,21 @@
+PROGRAM("TransformerBlock.cc:286")
+
+OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(hi, i, j, (8), static_cast<PositionIndex>(active_seq_len), (attn_concat, attn_w, V, active_seq_len))
+
+PARAMETERS
+        flexible_rows_cols_levels_matrix< float , 8, 16384, 16384>& attn_w ,
+        const flexible_rows_matrix< float , 16384, 1024>& V ,
+        flexible_rows_matrix< float , 16384, 1024>& attn_concat ,
+        int active_seq_len;
+
+BEGIN
+        {
+            const int hi_int = (hi);
+            const int h_start = hi_int * 128;
+            const int h_end = (hi_int + 1) * 128;
+            const float w = attn_w[hi, i, j];
+            for (int d = h_start; d < h_end; ++d)
+                atomicAdd((attn_concat[i, d]), (w * V[j, d]));
+        }
+
+END_PROGRAM

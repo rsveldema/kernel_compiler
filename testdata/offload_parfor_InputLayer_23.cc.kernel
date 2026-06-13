@@ -3,18 +3,18 @@ PROGRAM("InputLayer.cc:23")
 OFFLOAD_PARFOR_2D_PARAM(pos, di, grid, (tokens, embeddings, h, model_dim))
 
 PARAMETERS
-        const InputLine& tokens,
-        const fixed_size_matrix<rlmm_float_small, TokenID, 1024>& embeddings,
-        flexible_rows_matrix<rlmm_float, 16384, 1024>& h,
+        const fixed_size_vector< int , 16384>& tokens,
+        const fixed_size_matrix< float16 ,  int , 1024>& embeddings,
+        flexible_rows_matrix< float , 16384, 1024>& h,
         float model_dim
 
 BEGIN
-        const int tok = tokens[pos];
-        const int di_int = di;
+        const int tok = (tokens[pos]);
+        const int di_int = (di);
         const float emb_val = embeddings[tok, di];
-        const float freq = 1.0f / std::pow(10000.0f, di_int & ~1 / model_dim);
-        const float pos_f = pos;
-        const float pe = (di_int % 2 == 0) ? std::sin(pos_f * freq) : std::cos(pos_f * freq);
-        h[pos, di] = emb_val + pe;
+        const float freq = 1.0f /  pow (10000.0f, (di_int & ~1) / model_dim);
+        const float pos_f = (pos);
+        const float pe = (di_int % 2 == 0) ?  sin (pos_f * freq) :  cos (pos_f * freq);
+        h[pos, di] = (emb_val + pe);
 
 END_PROGRAM
