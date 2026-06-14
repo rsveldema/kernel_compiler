@@ -548,6 +548,8 @@ class ResolveArrayIndicesVisitor(Expression):
             cooperative_matrix2_chunk_size=getattr(node, 'cooperative_matrix2_chunk_size', 8),
             _source_filename=getattr(node, '_source_filename', ''),
             _param_constexpr_defines=getattr(node, '_param_constexpr_defines', []),
+            parallelized=getattr(node, 'parallelized', False),
+            workgroup_count=getattr(node, 'workgroup_count', 1),
         )
 
 

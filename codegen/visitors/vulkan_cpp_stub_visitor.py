@@ -570,8 +570,20 @@ class VulkanCppStubVisitor(Visitor):
             y_dim = "1"
             z_dim = str(getattr(node, "reduction_chunks", 1))
 
+        # Check for workgroup partitioning (performed by the parallelization pass).
+        # When parallelized with K > 1, dispatch dimensions are adjusted so that
+        # total work items cover the iteration space. Each thread handles one element.
+        parallelized = getattr(node, "parallelized", False)
+        wg_count = getattr(node, "workgroup_count", 1)
+
         self._emit("ComputeKernelRegistry::ScopedActiveKernel active_kernel(*this);")
         self._emit("VkCommandBuffer command_buffer = context.begin_command_buffer();")
+        
+        if parallelized and wg_count > 1:
+            # Emit a loop that dispatches the kernel once per workgroup.
+            self._emit(f"for (uint32_t _wg = 0; _wg < {wg_count}; ++_wg) {{")
+            self._push()
+        
         if buffer_params:
             self._emit("VkDescriptorSet desc_set = kernel_.desc_set();")
             self._emit(f"VkDescriptorBufferInfo buffer_infos[{len(buffer_params)}]{{}};")
@@ -598,7 +610,17 @@ class VulkanCppStubVisitor(Visitor):
                 "kernel_.pipeline_layout(), 0, 1, &desc_set, 0, nullptr);"
             )
         self._emit("vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, kernel_.pipeline());")
-        self._emit(f"vkCmdDispatch(command_buffer, {x_dim}, {y_dim}, {z_dim});")
+        if parallelized and wg_count > 1:
+            # Partitioning across K workgroups: each workgroup handles ceil(N/K) iterations.
+            # We dispatch with x_dim = ceil(rows / (local_size_x * K)) so that the total
+            # work items (x_dim * local_size_x * K) >= rows. The shader uses gl_WorkGroupID.x
+            # combined with gl_LocalInvocationID.x to compute a global index per thread.
+            _rows = f"dispatch_rows"
+            _total_wg = f"(({_rows} + {wg_x} - 1) / {wg_x})"
+            _x_dim_for_partitioned = f"(({_total_wg} + {wg_count} - 1) / {wg_count})"
+            self._emit(f"vkCmdDispatch(command_buffer, {_x_dim_for_partitioned}, {y_dim}, {z_dim});")
+        else:
+            self._emit(f"vkCmdDispatch(command_buffer, {x_dim}, {y_dim}, {z_dim});")
         self._emit("context.submit_and_wait();")
 
         self._pop()

@@ -32,6 +32,7 @@ from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
 from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
 from codegen.visitors.rllm_vulkan_dispatch_stub_visitor import RllmVulkanDispatchStubVisitor
 from codegen.optim import perform_blocking, perform_cooperative_matrix2
+from codegen.workgroup_partitioning import perform_parallelize
 
 log = logging.getLogger(__name__)
 
@@ -46,12 +47,16 @@ def optimize(
     enable_optimizations: bool = True,
     chunk_size: int = 8,
     optimization_pass: str = "shared-memory",
+    enable_parallelization: bool = False,
 ) -> Program:
     if enable_optimizations:
         if optimization_pass == "coopmat2":
             program = perform_cooperative_matrix2(program, chunk_size)
         else:
             program = perform_blocking(program, chunk_size)
+    # Apply workgroup partitioning pass when enabled.
+    if enable_parallelization:
+        program = perform_parallelize(program)
     from codegen.visitors.resolve_array_indices import resolve_array_indices
     program = resolve_array_indices(program)
     return program
@@ -62,13 +67,14 @@ def compile(
     enable_optimizations: bool = True,
     chunk_size: int = 8,
     optimization_pass: str = "shared-memory",
+    enable_parallelization: bool = False,
 ) -> Program:
     print(f"--------------- parsing: {filename} -----------------")
     text = read_file(filename)
     ret = parser.parse(text)
     program = transform(ret)
     program._source_filename = filename
-    program = optimize(program, enable_optimizations, chunk_size, optimization_pass)
+    program = optimize(program, enable_optimizations, chunk_size, optimization_pass, enable_parallelization)
     return program
 
 
@@ -81,8 +87,9 @@ def generate_vulkan(
     rllm_dispatch_stub: str | None = None,
     rllm_spv_path: str | None = None,
     use_bfloat16: bool = False,
+    enable_parallelization: bool = False,
 ) -> None:
-    program = compile(filename, enable_optimizations, chunk_size, optimization_pass)
+    program = compile(filename, enable_optimizations, chunk_size, optimization_pass, enable_parallelization)
     visitor = VulkanKernelVisitor(use_bfloat16=use_bfloat16)
     shader = program.accept(visitor)
     with open(output, "w") as f:
@@ -121,9 +128,10 @@ def compile_vulkan(
     rllm_dispatch_stub: str | None = None,
     rllm_spv_path: str | None = None,
     use_bfloat16: bool = False,
+    enable_parallelization: bool = False,
 ) -> None:
     glsl_path = input_file.rsplit(".", 1)[0] + ".glsl"
-    generate_vulkan(input_file, glsl_path, enable_optimizations, chunk_size, optimization_pass, rllm_dispatch_stub, rllm_spv_path, use_bfloat16=use_bfloat16)
+    generate_vulkan(input_file, glsl_path, enable_optimizations, chunk_size, optimization_pass, rllm_dispatch_stub, rllm_spv_path, use_bfloat16=use_bfloat16, enable_parallelization=enable_parallelization)
     cmd = [
         "glslc", "-fshader-stage=compute", "-o", output_spv,
         "--target-env=vulkan1.4" if optimization_pass == "coopmat2" else "--target-env=vulkan1.2", glsl_path,
@@ -173,9 +181,16 @@ if __name__ == "__main__":
         action="store_true",
         help="Use the VK_NV_cooperative_matrix2 optimization pass",
     )
+    _parser.add_argument(
+        "--parallelize",
+        action="store_true",
+        default=False,
+        help="Enable workgroup partitioning parallelization pass",
+    )
     args = _parser.parse_args()
     enable_optimizations = not args.no_optimize
     use_bfloat16 = getattr(args, "bfloat16", False)
+    enable_parallelization = getattr(args, "parallelize", False)
     optimization_pass = "coopmat2" if args.coopmat2 else "shared-memory"
     if args.chunk_size <= 0:
         _parser.error("--chunk-size must be positive")
@@ -184,7 +199,7 @@ if __name__ == "__main__":
         if not args.file:
             _parser.error("--vulkan and --compile require an input FILE argument")
         if args.vulkan:
-            generate_vulkan(args.file, args.vulkan, enable_optimizations, args.chunk_size, optimization_pass, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16)
+            generate_vulkan(args.file, args.vulkan, enable_optimizations, args.chunk_size, optimization_pass, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16, enable_parallelization=enable_parallelization)
         elif args.compile:
             compile_vulkan(args.file, args.compile, enable_optimizations, args.chunk_size, optimization_pass, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16)
     else:

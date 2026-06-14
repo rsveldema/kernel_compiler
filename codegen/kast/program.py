@@ -28,6 +28,10 @@ class Program(AstNode):
         shared_memory_chunk_size=1,
         use_cooperative_matrix2=False,
         cooperative_matrix2_chunk_size=8,
+        # Set by perform_parallelize() for workgroup partitioning
+        parallelized=False,
+        workgroup_count=1,
+        workgroup_size=1,
         _source_filename="",
         _constexpr_defines=None,
         _param_constexpr_defines=None,
@@ -64,6 +68,10 @@ class Program(AstNode):
         self._constexpr_defines = _constexpr_defines or []
         # constexpr defines from parameter declarations (for type resolution)
         self._param_constexpr_defines = _param_constexpr_defines or []
+        # Set by perform_parallelize() for workgroup partitioning
+        self.parallelized = parallelized
+        self.workgroup_count = workgroup_count
+        self.workgroup_size = workgroup_size
 
     @property
     def loop_var(self):

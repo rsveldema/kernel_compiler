@@ -9,6 +9,9 @@ from codegen.kast.statement import (
 from codegen.kast.expression import BinaryExpr, Identifier, Number
 from codegen.kast.workgroup import WorkgroupProperties
 
+# Import parallelization pass from its own module
+from codegen.workgroup_partitioning import perform_parallelize, DEFAULT_WORKGROUPS
+
 
 BLOCK_SIZE = 8
 
@@ -32,10 +35,9 @@ def perform_blocking(program: Program, chunk_size: int = BLOCK_SIZE) -> Program:
     program.use_shared_memory_tiling = blocked and program.space_dim == 2
     program.shared_memory_chunk_size = chunk_size if program.use_shared_memory_tiling else 1
     program.reduction_chunk_size = chunk_size if program.use_shared_memory_tiling else 0
+    program.reduction_chunks = 1
     if program.use_shared_memory_tiling and reduction_bound:
         program.reduction_chunks = (reduction_bound + chunk_size - 1) // chunk_size
-    else:
-        program.reduction_chunks = 1
     if blocked and not program.workgroups:
         y_size = BLOCK_SIZE if program.space_dim >= 2 else 1
         program.workgroups.append(
@@ -73,6 +75,9 @@ def perform_cooperative_matrix2(program: Program, chunk_size: int = BLOCK_SIZE) 
             )
         )
     return program
+
+
+# ── Helpers for blocking passes ────────────────────────────────────
 
 
 def _can_block_loop(loop, program):

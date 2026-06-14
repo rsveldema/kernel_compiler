@@ -19,6 +19,106 @@ from ..kast.workgroup import WorkgroupProperties
 import math
 import re
 
+
+
+class _ReplacementVisitor(Visitor):
+    """Walk an expression tree and replace identifier names with new expressions."""
+
+    def __init__(self, replacements):
+        self.replacements = replacements
+
+    def visit_identifier(self, node):
+        name = getattr(node, "name", None)
+        if name is not None and name in self.replacements:
+            return prettyprint(self.replacements[name])
+        return name
+
+
+def _substitute_in_expr(expr, replacements):
+    """Recursively replace identifier names in an expression tree."""
+    if expr is None:
+        return None
+
+    # Recurse into children first
+    for attr in ("left", "right"):
+        child = getattr(expr, attr, None)
+        if hasattr(child, "accept") and child is not None:
+            setattr(expr, attr, _substitute_in_expr(child, replacements))
+    
+    for attr in ("lhs", "rhs"):
+        child = getattr(expr, attr, None)
+        if hasattr(child, "accept") and child is not None:
+            setattr(expr, attr, _substitute_in_expr(child, replacements))
+
+    base = getattr(expr, "base", None)
+    if hasattr(base, "accept") and base is not None:
+        expr.base = _substitute_in_expr(base, replacements)
+
+    callee = getattr(expr, "callee", None)
+    if hasattr(callee, "accept") and callee is not None:
+        expr.callee = _substitute_in_expr(callee, replacements)
+
+    args = getattr(expr, "args", [])
+    new_args = []
+    for arg in (args or []):
+        if hasattr(arg, "accept"):
+            new_args.append(_substitute_in_expr(arg, replacements))
+        else:
+            new_args.append(arg)
+    expr.args = new_args
+
+    condition = getattr(expr, "condition", None)
+    if hasattr(condition, "accept"):
+        setattr(expr, "condition", _substitute_in_expr(condition, replacements))
+    
+    true_expr = getattr(expr, "true_expr", None)
+    if hasattr(true_expr, "accept"):
+        expr.true_expr = _substitute_in_expr(true_expr, replacements)
+
+    false_expr = getattr(expr, "false_expr", None)
+    if hasattr(false_expr, "accept"):
+        expr.false_expr = _substitute_in_expr(false_expr, replacements)
+
+    operand = getattr(expr, "operand", None)
+    if hasattr(operand, "accept") and operand is not None:
+        setattr(expr, "operand", _substitute_in_expr(operand, replacements))
+
+    return expr
+
+
+def _substitute_variables(stmts, replacements):
+    """Replace loop variable identifiers in statement bodies."""
+    for stmt in (stmts or []):
+        if not hasattr(stmt, "accept"):
+            continue
+
+        def visit(node):
+            if node is None:
+                return
+
+            # Handle lvalue and rvalue of assignments/conditions
+            for attr in ("lvalue",):
+                child = getattr(node, attr, None)
+                if hasattr(child, "accept"):
+                    visit(child)
+            
+            for attr in ("rhs", "lhs", "init_expr"):
+                child = getattr(node, attr, None)
+                if hasattr(child, "accept"):
+                    visit(child)
+
+            # Recurse into rvalue for assignments
+            rvalue = getattr(node, "rvalue", None)
+            if hasattr(rvalue, "accept"):
+                visit(rvalue)
+
+            # Recurse into body_stmts for control flow nodes
+            body = getattr(node, "body_stmts", [])
+            for s in (body or []):
+                visit(s)
+
+        visit(stmt)
+
 _IDENT_RE = re.compile(r"^[A-Za-z_]\w*$")
 _GLSL_RESERVED = {"None", "static_cast"}
 
@@ -879,6 +979,215 @@ class VulkanKernelVisitor(Visitor):
                 result.append(stmt)
         return result
 
+
+    def _find_loop_var_metadata(self, var_name):
+        """Find parallelization metadata for a loop variable."""
+        for stmt in getattr(self, "_parallel_loop_vars", []):
+            lv_name = getattr(stmt, "loop_var_name", "")
+            if lv_name == var_name:
+                offset = getattr(stmt, "_parallel_offset_var", f"{var_name}_offset")
+                global_var = f"global_{var_name}"
+                bound = str(getattr(
+                    getattr(stmt, "_parallel_upper_bound", None), "value", 0
+                ))
+                return (offset, global_var, bound)
+        return None
+
+
+    def _emit_parallel_stmt(self, stmt, node):
+        """Emit a single body statement for a parallelized program.
+
+        Handles variable substitution and early-exit guards for loops.
+        """
+        if not hasattr(stmt, "accept"):
+            return ""
+
+        sub_map = getattr(self, "_parallel_global_vars", {})
+        wg_size = getattr(node, 'workgroup_size', 8)
+        parallelized = getattr(node, 'parallelized', False)
+
+        # For parallelized programs, loops whose variables are tracked by
+        # _parallel_global_vars are NOT emitted as loop constructs. Instead
+        # their body statements are processed with variable substitution so that
+        # all references to loop variables resolve to the global indices computed
+        # from gl_GlobalInvocationID and workgroup partitioning.
+        if parallelized:
+            return self._emit_parallel_body_stmt(stmt, node)
+
+        # ── Non-parallelized path: emit normally with substitution. ───────
+
+        if isinstance(stmt, ForLoopWithConditionAndIncrement):
+            cond = getattr(stmt, "condition", None)
+            lv_name = self._get_loop_var_from_cond(stmt, cond)
+
+            if lv_name and lv_name in sub_map:
+                global_var = sub_map[lv_name]
+
+                old_bound = None
+                if hasattr(cond, "rhs") and isinstance(cond.rhs, Number):
+                    old_bound = cond.rhs.value
+                    cond.rhs.value = wg_size
+
+                if hasattr(cond, "lhs"):
+                    lvalue = getattr(cond, "lhs", None)
+                    if isinstance(lvalue, Identifier):
+                        lvalue.name = global_var
+
+                stmt.accept(self)  # Emit the modified for-loop with bound change
+
+                if old_bound is not None and hasattr(cond, "rhs"):
+                    cond.rhs.value = old_bound
+
+                return ""
+
+            # Non-parallelizable loop variable – just substitute and emit.
+            self._substitute_stmt(stmt, sub_map)
+            return stmt.accept(self)
+
+        if isinstance(stmt, ForLoopRange):
+            lv_name = getattr(stmt, "loop_var_name", "")
+
+            if lv_name and lv_name in sub_map:
+                global_var = sub_map[lv_name]
+
+                ie = getattr(stmt, "init_expr", None)
+                old_max_val = None
+                if hasattr(ie, "max_val") and isinstance(ie.max_val, Number):
+                    old_max_val = ie.max_val.value
+                    ie.max_val.value = wg_size
+
+                self._substitute_stmt(stmt, sub_map)
+                result = stmt.accept(self)
+
+                if old_max_val is not None and hasattr(ie, "max_val") and isinstance(ie.max_val, Number):
+                    ie.max_val.value = old_max_val
+
+                return result
+
+            self._substitute_stmt(stmt, sub_map)
+            return stmt.accept(self)
+
+        # Non-loop statement: just substitute identifiers in expressions.
+        self._substitute_stmt(stmt, sub_map)
+        return stmt.accept(self)
+
+    def _emit_parallel_body_stmt(self, stmt, node):
+        """Process a body statement for a parallelized program.
+
+        For parallelized programs where iteration is handled by gl_GlobalInvocationID
+        and workgroup partitioning, loop constructs in the original AST are not emitted
+        as loops. Instead their body statements are processed with variable substitution
+        so that all references to loop variables use their global indices.
+        """
+        if not hasattr(stmt, "accept"):
+            return ""
+
+        sub_map = getattr(self, "_parallel_global_vars", {})
+        parallelized = getattr(node, 'parallelized', False)
+        workgroup_count = getattr(node, 'workgroup_count', 1)
+
+        # If the statement is a ForLoop/ForLoopRange whose variable is in sub_map,
+        # process its body statements directly (not as a loop construct).
+        if parallelized:
+            if isinstance(stmt, ForLoopWithConditionAndIncrement):
+                cond = getattr(stmt, "condition", None)
+                lv_name = self._get_loop_var_from_cond(stmt, cond)
+                if lv_name and lv_name in sub_map:
+                    parts = []
+                    for inner_stmt in (getattr(stmt, "body_stmts", []) or []):
+                        self._substitute_stmt(inner_stmt, sub_map)
+                        r = inner_stmt.accept(self)
+                        if isinstance(r, str):
+                            parts.append(r.rstrip())
+                    return "\n".join(parts)
+            elif isinstance(stmt, ForLoopRange):
+                lv_name = getattr(stmt, "loop_var_name", "")
+                if lv_name and lv_name in sub_map:
+                    parts = []
+                    for inner_stmt in (getattr(stmt, "body_stmts", []) or []):
+                        self._substitute_stmt(inner_stmt, sub_map)
+                        r = inner_stmt.accept(self)
+                        if isinstance(r, str):
+                            parts.append(r.rstrip())
+                    return "\n".join(parts)
+
+        # Default: substitute identifiers in expressions and emit the statement normally.
+        self._substitute_stmt(stmt, sub_map)
+        return stmt.accept(self)
+
+    def _get_loop_var_from_cond(self, stmt, cond):
+        """Extract loop variable name from a ForLoopWithConditionAndIncrement."""
+        lv = getattr(stmt, "loop_var_name", "")
+        if lv:
+            return lv
+        if isinstance(cond, Condition):
+            lhs = getattr(cond, "lhs", None)
+            if isinstance(lhs, Identifier):
+                return lhs.name
+        return ""
+
+    def _substitute_stmt(self, stmt, sub_map):
+        """Substitute loop variable identifiers in a statement's expression tree."""
+        if not hasattr(stmt, "accept"):
+            return
+        
+        # lvalue (for assignments)
+        lvalue = getattr(stmt, "lvalue", None)
+        if isinstance(lvalue, Expression):
+            self._substitute_expr(lvalue, sub_map)
+
+        rvalue = getattr(stmt, "rvalue", None)
+        if isinstance(rvalue, Expression):
+            self._substitute_expr(rvalue, sub_map)
+
+        lhs = getattr(stmt, "lhs", None)
+        if isinstance(lhs, Expression):
+            self._substitute_expr(lhs, sub_map)
+
+        rhs = getattr(stmt, "rhs", None)
+        if isinstance(rhs, Expression):
+            self._substitute_expr(rhs, sub_map)
+
+        init_expr = getattr(stmt, "init_expr", None)
+        if isinstance(init_expr, Expression):
+            self._substitute_expr(init_expr, sub_map)
+
+    def _substitute_expr(self, expr, sub_map):
+        """Substitute loop variable identifiers in an expression tree."""
+        if expr is None:
+            return
+        
+        lhs = getattr(expr, "lhs", None)
+        if isinstance(lhs, Identifier) and lhs.name in sub_map:
+            lhs.name = sub_map[lhs.name]
+        
+        rhs = getattr(expr, "rhs", None)
+        if isinstance(rhs, Identifier) and rhs.name in sub_map:
+            rhs.name = sub_map[rhs.name]
+
+        base = getattr(expr, "base", None)
+        if isinstance(base, Identifier) and base.name in sub_map:
+            base.name = sub_map[base.name]
+
+        lvalue = getattr(expr, "lvalue", None)
+        if isinstance(lvalue, Identifier) and lvalue.name in sub_map:
+            lvalue.name = sub_map[lvalue.name]
+
+        # Recurse into children
+        for child_attr in ("left", "right", "operand"):
+            child = getattr(expr, child_attr, None)
+            if isinstance(child, Expression):
+                self._substitute_expr(child, sub_map)
+
+        # Handle ArrayAccess indices (e.g., dst[i] -> dst[global_i])
+        indices = getattr(expr, "indices", [])
+        for idx in range(len(indices)):
+            ind = indices[idx]
+            if isinstance(ind, Identifier):
+                self._substitute_expr(ind, sub_map)
+
+
+
     def visit_program(self, node: Program) -> str:
         self._lines = []
         self._indent_level = 0
@@ -1089,15 +1398,47 @@ class VulkanKernelVisitor(Visitor):
         if getattr(node, "tiled", False):
             self._emit_tile_vars(node)
 
-        # 1. Initialize loop variables from gl_GlobalInvocationID
-        if node.space_dim >= 1 and node.loop_vars:
+        # ── Parallelized initialization ──
+        parallelized = getattr(node, 'parallelized', False)
+        if parallelized and node.space_dim >= 1 and node.loop_vars:
+            wg_size = getattr(node, 'workgroup_size', 8)
+            workgroup_count = getattr(node, 'workgroup_count', 1)
+            
+            # Compute global index for each loop variable using stride pattern.
+            # For workgroup_count=1 (no partitioning), use gl_GlobalInvocationID.x/y/z directly.
+            # For workgroup_count > 1 (partitioned across K workgroups), combine
+            # gl_WorkGroupID.x with gl_LocalInvocationID.x to create a unique global index per thread.
+            self._parallel_global_vars = {}
             for idx, var_name in enumerate(node.loop_vars):
-                coord = "xyz"[idx]
-                if getattr(node, 'tiled', False) and hasattr(self, '_tile_var_name') and self._tile_var_name.get(idx):
-                    tvn = self._tile_var_name[idx]
-                    self._emit(f"int {tvn} = int(gl_GlobalInvocationID.{coord});")
+                if workgroup_count > 1:
+                    # Partitioned: each workgroup handles ceil(N / K) iterations sequentially.
+                    global_var = f"global_{var_name}"
+                    self._emit(
+                        f"const int {global_var} = int(gl_WorkGroupID.x) * {workgroup_count} "
+                        f"+ int(gl_LocalInvocationID.x);"
+                    )
                 else:
-                    self._emit(f"int {var_name} = int(gl_GlobalInvocationID.{coord});")
+                    # Non-partitioned: use gl_GlobalInvocationID component directly.
+                    dim_idx = min(idx, 2)
+                    dim = ['x', 'y', 'z'][dim_idx]
+                    global_var = f"global_{var_name}"
+                    self._emit(f"const int {global_var} = int(gl_GlobalInvocationID.{dim});")
+                
+                # Create an alias so that the original loop variable name is available in scope
+                # for triangular guards and other code that references i, j etc. directly.
+                self._emit(f"const int {var_name} = {global_var};")
+                self._parallel_global_vars[var_name] = global_var
+
+        # -- Implicit loop variable initialization --
+        if not parallelized and node.loop_vars:
+            self._parallel_global_vars = {}
+            for idx, var_name in enumerate(node.loop_vars):
+                dim_idx = min(idx, 2)
+                dim = ['x', 'y', 'z'][dim_idx]
+                global_var = f'global_{var_name}'
+                self._emit(f'const int {global_var} = int(gl_GlobalInvocationID.{dim});')
+                self._emit(f'const int {var_name} = {global_var};')
+                self._parallel_global_vars[var_name] = global_var
 
         # 2. Initialize params from push constants
         for name, vtype in self._push_constant_fields:
@@ -1119,11 +1460,16 @@ class VulkanKernelVisitor(Visitor):
 
             self._emit(f"if ({' || '.join(parts)}) return;")
 
-        # 4. Body statements - just emit directly (no double-emission)
         old_indent = self._indent_level
         self._indent_level += 1
 
-        if getattr(node, 'tiled', False):
+        if getattr(node, 'parallelized', False) and node.space_dim >= 1 and node.loop_vars:
+            # For parallelized programs, process each body statement with variable substitution
+            for stmt in (node.body_stmts or []):
+                result = self._emit_parallel_stmt(stmt, node)
+                if isinstance(result, str):
+                    self._emit(result.rstrip())
+        elif getattr(node, 'tiled', False):
             # When tiling is applied, tile loops should come from gl_GlobalInvocationID.x/y
             # Skip explicit tile loop constructs and flatten their content into main() body
             body_stmts = self._flatten_tiled_body(node.body_stmts)
