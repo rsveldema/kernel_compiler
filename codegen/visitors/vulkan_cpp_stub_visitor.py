@@ -71,7 +71,16 @@ class VulkanCppStubVisitor(Visitor):
         self._buffer_structs: Dict[str, str] = {}  # name -> struct_name
         self._kernel_name: str = ""
         self._namespace_name: str = ""
+        self._display_name: str = ""
+        self._space_dim: int = 1
 
+
+    def _cpp_dimension(self) -> str:
+        mapping = {1: "OneD", 2: "TwoD", 3: "ThreeD"}
+        return mapping.get(self._space_dim, "OneD")
+
+    def _cpp_type(self) -> str:
+        return self._kernel_type
     # ── helpers ────────────────────────────────────────────────────────
 
     def _emit(self, line: str = "") -> None:
@@ -335,6 +344,16 @@ class VulkanCppStubVisitor(Visitor):
         # Determine kernel name from header
         basename = "kernel"
         if node.header:
+            # Extract display name (class:lineno) from PROGRAM("ClassName.cc:N") for demangling
+            hdr_raw = node.header.strip('"')
+            colon_idx = hdr_raw.rfind(":")
+            if colon_idx >= 0:
+                raw_class = hdr_raw[:colon_idx]
+                dot_idx = raw_class.rfind(".")
+                if dot_idx > 0:
+                    raw_class = raw_class[:dot_idx]
+                lineno_str = hdr_raw[colon_idx + 1:]
+                self._display_name = f"{raw_class}:{lineno_str}"
             parts = node.header.replace('"', "").split("/")
             basename = parts[-1].rsplit(".", 1)[0] if "." in parts[-1] else parts[-1]
         # Use source filename stem + header basename to ensure unique dispatch names
@@ -347,6 +366,7 @@ class VulkanCppStubVisitor(Visitor):
         scalar_params: List[ast.Declaration] = []
 
         is_triangular = len(getattr(node, "triangular_bounds_raw", [])) >= 2
+        has_matrix_params = False
 
         for param in node.params:
             if not isinstance(param, ast.Declaration):
@@ -359,9 +379,11 @@ class VulkanCppStubVisitor(Visitor):
                     for level in range(levels):
                         sname = f"RllmBuffer_{param.name}_{level}"
                         buffer_params.append((param, sname, f"{param.name}_{level}"))
+                    has_matrix_params = True
                 else:
                     sname = f"RllmBuffer_{param.name}"
                     self._buffer_structs[param.name] = sname
+                    has_matrix_params = True
                     buffer_params.append((param, sname, param.name))
             else:
                 scalar_params.append(param)
@@ -369,6 +391,14 @@ class VulkanCppStubVisitor(Visitor):
         # Collect dispatch dimensions
         has_2d = node.space_dim >= 2 and len(node.loop_vars) >= 2
         has_3d = node.space_dim >= 3 and len(node.loop_vars) >= 3
+
+        self._space_dim = node.space_dim
+        if is_triangular:
+            self._kernel_type: str = "Triangular"
+        elif has_matrix_params:
+            self._kernel_type: str = "Matrix"
+        else:
+            self._kernel_type: str = "Vector"
         rows_param_name = node.loop_vars[0] if node.loop_vars else "dispatch_rows"
         cols_param_name = node.loop_vars[1] if has_2d else None
         levels_param_name = node.loop_vars[2] if has_3d else None
@@ -507,7 +537,9 @@ class VulkanCppStubVisitor(Visitor):
         self._emit("public:")
         self._push()
         self._emit(f"{class_name}(VulkanSession& session, const std::string& glsl_file)")
-        self._emit(f"    : AbstractKernel(\"{self._namespace_name}::{class_name}\")")
+        kernel_name_str = '\"' + self._namespace_name + '::' + class_name + '|' + self._display_name + '", '
+        kernel_type_str = 'KernelDimension::' + self._cpp_dimension() + ', KernelType::' + self._cpp_type()
+        self._emit('    : AbstractKernel(' + kernel_name_str + kernel_type_str + ')')
         self._emit(f"    , kernel_(session, glsl_file, {push_size}, {len(buffer_params)})")
         self._emit("{")
         self._emit("}")

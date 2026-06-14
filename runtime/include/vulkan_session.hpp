@@ -131,11 +131,19 @@ private:
     std::vector<AbstractKernel*> m_kernels;
 };
 
+enum class KernelDimension { OneD, TwoD, ThreeD };
+enum class KernelType { Vector, Matrix, Triangular };
+
 class AbstractKernel
 {
 public:
-    explicit AbstractKernel(std::string kernel_name)
+    explicit AbstractKernel(
+        std::string kernel_name,
+        KernelDimension dimension = KernelDimension::OneD,
+        KernelType type = KernelType::Vector)
         : m_kernel_name(std::move(kernel_name))
+        , m_dimension(dimension)
+        , m_type(type)
     {
         ComputeKernelRegistry::instance().registerKernel(*this);
     }
@@ -143,6 +151,63 @@ public:
     virtual ~AbstractKernel() = default;
 
     const std::string& kernelName() const { return m_kernel_name; }
+
+    KernelDimension dimension() const { return m_dimension; }
+    KernelType type() const { return m_type; }
+
+    static const char* dimensionStr(KernelDimension dim) {
+        switch (dim) {
+            case KernelDimension::OneD:   return "1D";
+            case KernelDimension::TwoD:   return "2D";
+            case KernelDimension::ThreeD: return "3D";
+            default: return "?";
+        }
+    }
+
+    static const char* typeStr(KernelType type) {
+        switch (type) {
+            case KernelType::Vector:      return "vector";
+            case KernelType::Matrix:      return "matrix";
+            case KernelType::Triangular:  return "triangular";
+            default: return "?";
+        }
+    }
+
+    // Demangle the kernel name into "{class}:{lineno}" format for display.
+    // Mangled names have the format: "{namespace}::{class}|{display}"
+    // where |{display} is an optional appended '{class}:{lineno}'.
+    static std::string demangleKernelName(const std::string& mangled) {
+        size_t sep = mangled.find('|');
+        if (sep != std::string::npos)
+            return mangled.substr(sep + 1);
+        // Fallback: extract "{class}:{lineno}" from the class name portion
+        size_t double_colon = mangled.find("::");
+        if (double_colon == std::string::npos)
+            return mangled;
+        std::string cls = mangled.substr(double_colon + 2);
+        // Find last digit-run suffix as lineno
+        size_t last_digit_start = std::string::npos;
+        for (size_t i = cls.size(); i > 0; --i) {
+            if (!isdigit(cls[i - 1])) {
+                last_digit_start = i;
+                break;
+            }
+        }
+        if (last_digit_start == std::string::npos || last_digit_start >= cls.size())
+            return cls + ":?";
+        // Strip trailing class name prefix that matches the stem
+        size_t stem_end = 0;
+        for (size_t i = last_digit_start; i > 0; --i) {
+            if (isupper(cls[i - 1]) || isdigit(cls[i - 1])) {
+                stem_end = i;
+            } else {
+                break;
+            }
+        }
+        std::string name_part = cls.substr(stem_end, last_digit_start - stem_end);
+        std::string line_part = cls.substr(last_digit_start);
+        return name_part + ":" + line_part;
+    }
 
     void recordHostToDevice(size_t bytes)
     {
@@ -174,6 +239,8 @@ public:
 
 private:
     std::string m_kernel_name;
+    KernelDimension m_dimension;
+    KernelType m_type;
     mutable std::mutex m_mutex;
     VStatistics m_statistics;
 };
