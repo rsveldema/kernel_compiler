@@ -503,11 +503,12 @@ class VulkanCppStubVisitor(Visitor):
         # Kernel wrapper class and dispatch method
         class_name = self._class_name(self._kernel_name)
         push_size = f"sizeof({self._kernel_name}_PushConstants)" if all_pc_fields else "0"
-        self._emit(f"class {class_name} {{")
+        self._emit(f"class {class_name} : public AbstractKernel {{")
         self._emit("public:")
         self._push()
         self._emit(f"{class_name}(VulkanSession& session, const std::string& glsl_file)")
-        self._emit(f"    : kernel_(session, glsl_file, {push_size}, {len(buffer_params)})")
+        self._emit(f"    : AbstractKernel(\"{self._namespace_name}::{class_name}\")")
+        self._emit(f"    , kernel_(session, glsl_file, {push_size}, {len(buffer_params)})")
         self._emit("{")
         self._emit("}")
         self._emit("")
@@ -537,6 +538,7 @@ class VulkanCppStubVisitor(Visitor):
             y_dim = "1"
             z_dim = str(getattr(node, "reduction_chunks", 1))
 
+        self._emit("ComputeKernelRegistry::ScopedActiveKernel active_kernel(*this);")
         self._emit("VkCommandBuffer command_buffer = context.begin_command_buffer();")
         if buffer_params:
             self._emit("VkDescriptorSet desc_set = kernel_.desc_set();")

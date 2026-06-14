@@ -616,9 +616,9 @@ def _resolve_nested_type(node):
         val = node.value
         if val in ("int", "size_t"):
             return Int(val)
-        elif val in ("float", "rlmm_float", "rlmm_float_small"):
+        elif val in ("float", "rlmm_float"):
             return Float()
-        elif val == "float16":
+        elif val in ("float16", "rlmm_float_small"):
             return Float16()
         return None
 
@@ -630,9 +630,9 @@ def _resolve_nested_type(node):
             val = token.value
             if val in ("int", "size_t"):
                 return Int(val)
-            elif val in ("float", "rlmm_float", "rlmm_float_small"):
+            elif val in ("float", "rlmm_float"):
                 return Float()
-            elif val == "float16":
+            elif val in ("float16", "rlmm_float_small"):
                 return Float16()
         # Handle compound types (multi-param matrix/vector types)
         if data == "type" and len(node.children) >= 2:
@@ -746,9 +746,9 @@ def _transform_type(type_tree, default_name="int"):
         name_val = first_child.value
         if name_val in ("int", "size_t"):
             return Int(name_val)
-        elif name_val in ("float", "rlmm_float", "rlmm_float_small"):
+        elif name_val in ("float", "rlmm_float"):
             return Float()
-        elif name_val == "float16":
+        elif name_val in ("float16", "rlmm_float_small"):
             return Float16()
         else:
             # Unknown scalar type - fall through to return None for explicit handling

@@ -22,14 +22,14 @@ class Int(Type):
 
 
 class Float(Type):
-    """Represents 'float', 'rlmm_float', or 'rlmm_float_small' types."""
+    """Represents 'float' or 'rlmm_float' types."""
 
     def accept(self, visitor):
         return visitor.visit_float(self)
 
 
 class Float16(Type):
-    """Represents 'float16' type."""
+    """Represents 'float16' or 'rlmm_float_small' types."""
 
     def accept(self, visitor):
         return visitor.visit_float16(self)

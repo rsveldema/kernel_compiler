@@ -164,6 +164,7 @@ class RllmVulkanDispatchStubVisitor(Visitor):
             "    static_cast<void>(sizeof...(ignored_args));\n"
             "    std::lock_guard<std::recursive_mutex> vulkan_lock(rllm::vulkan_runtime::mutex());\n"
             f"    static {namespace_name}::{class_name} kernel(rllm::vulkan_runtime::session(), std::string(RLLM_VULKAN_KERNEL_ROOT) + \"/{self._spv_path}\");\n"
+            "    ComputeKernelRegistry::ScopedActiveKernel active_kernel(kernel);\n"
             f"    const {namespace_name}::{push_name} push_constants{{\n"
             f"{push_body}\n"
             "    };\n"

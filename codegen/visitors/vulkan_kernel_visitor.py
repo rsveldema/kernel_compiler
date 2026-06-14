@@ -16,6 +16,7 @@ from ..kast.type import *
 from ..kast.expression import *
 from ..kast.statement import *
 from ..kast.workgroup import WorkgroupProperties
+import math
 import re
 
 _IDENT_RE = re.compile(r"^[A-Za-z_]\w*$")
@@ -120,6 +121,34 @@ class VulkanKernelVisitor(Visitor):
         self._constexpr_defines: list[tuple[str, str]] = []
         self._constexpr_map: dict[str, str] = {}
 
+    def _type_uses_float16(self, ty: Type | None) -> bool:
+        if ty is None:
+            return False
+        if isinstance(ty, Float16):
+            return True
+        elem_type = getattr(ty, "elem_type", None)
+        return self._type_uses_float16(elem_type)
+
+    def _program_uses_float16(self, node: Program) -> bool:
+        for param in node.params:
+            if isinstance(param, Declaration) and self._type_uses_float16(param.var_type):
+                return True
+        return False
+
+    def _array_root_identifier(self, node: Expression | None) -> str | None:
+        while isinstance(node, ArrayAccess):
+            node = node.base
+        if isinstance(node, Identifier):
+            return node.name
+        return None
+
+    def _lvalue_uses_float16_storage(self, node: Expression | None) -> bool:
+        root_name = self._array_root_identifier(node)
+        if root_name is None:
+            return False
+        mapped = self._ssbo_map.get(root_name)
+        return mapped is not None and self._type_uses_float16(mapped[1])
+
 
     def _resolve_constexpr_value(self, expr_str: str) -> str | None:
         """Try to resolve an expression string to a plain literal using existing constexpr_map values.
@@ -221,9 +250,7 @@ class VulkanKernelVisitor(Visitor):
     def _glsl_elem_type(self, ty) -> str:
         """Map an AST Type node to a GLSL element type string."""
         if hasattr(ty, "elem_type") and ty.elem_type is not None:
-            t = ty.elem_type
-            if isinstance(t, (Int, Float)):
-                return self._glsl_type_name(t)
+            return self._glsl_type_name(ty.elem_type)
         return self._glsl_type_name(ty) if ty else "float"
 
     def _glsl_type_name(self, ty) -> str:
@@ -233,6 +260,8 @@ class VulkanKernelVisitor(Visitor):
             return "uint64_t" if ty.name == "size_t" else "int"
         if isinstance(ty, Float):
             return "float"
+        if isinstance(ty, Float16):
+            return "bfloat_t" if self._use_bfloat16 else "float16_t"
         # Compound types (vectors/matrices) default to float for element type
         return "float"
 
@@ -241,6 +270,98 @@ class VulkanKernelVisitor(Visitor):
         if node is None:
             return ""
         return node.accept(self)
+
+    def _format_constant(self, value, value_type: str) -> str:
+        if value_type == "int":
+            return str(int(value))
+        formatted = f"{float(value):.9g}"
+        if "." not in formatted and "e" not in formatted.lower():
+            formatted += ".0"
+        return formatted
+
+    def _callee_name(self, node: Expression) -> str:
+        if isinstance(node, Identifier):
+            return node.name or ""
+        if isinstance(node, FieldAccess):
+            base = self._callee_name(node.base)
+            return f"{base}.{node.field}" if base else node.field
+        return self._to_str(node)
+
+    def _const_eval_expr(self, node: Expression):
+        if node is None:
+            return None
+
+        if isinstance(node, Number):
+            if isinstance(node.value, float):
+                return (float(node.value), "float")
+            return (int(node.value), "int")
+
+        if isinstance(node, Identifier):
+            if node.name in self._constexpr_map:
+                value = self._constexpr_map[node.name]
+                try:
+                    if "." in value or "e" in value.lower():
+                        return (float(value), "float")
+                    return (int(value), "int")
+                except ValueError:
+                    return None
+            return None
+
+        if isinstance(node, UnaryMinusExpr):
+            inner = self._const_eval_expr(node.operand)
+            if inner is None:
+                return None
+            value, value_type = inner
+            return (-value, value_type)
+
+        if isinstance(node, CastExpr):
+            inner = self._const_eval_expr(node.operand)
+            if inner is None:
+                return None
+            value, _value_type = inner
+            cast_type = node.cast_type.accept(self)
+            if cast_type == "float":
+                return (float(value), "float")
+            return (int(value), "int")
+
+        if isinstance(node, BinaryExpr):
+            left = self._const_eval_expr(node.left)
+            right = self._const_eval_expr(node.right)
+            if left is None or right is None:
+                return None
+            lv, lt = left
+            rv, rt = right
+            value_type = "float" if lt == "float" or rt == "float" else "int"
+            try:
+                if node.op == "+":
+                    value = lv + rv
+                elif node.op == "-":
+                    value = lv - rv
+                elif node.op == "*":
+                    value = lv * rv
+                elif node.op == "/":
+                    if rv == 0:
+                        return None
+                    value = (int(lv) // int(rv)) if value_type == "int" else (float(lv) / float(rv))
+                else:
+                    return None
+            except (ValueError, OverflowError, ZeroDivisionError):
+                return None
+            return (value, value_type)
+
+        if isinstance(node, CallExpr):
+            callee = self._callee_name(node.callee)
+            if callee in {"sqrt", "std.sqrt", "std::sqrt"} and len(node.args) == 1:
+                arg = self._const_eval_expr(node.args[0])
+                if arg is None:
+                    return None
+                value, _value_type = arg
+                if value < 0:
+                    return None
+                return (math.sqrt(float(value)), "float")
+            return None
+
+        return None
 
     # ── expression visitors ────────────────────────────────────────────
 
@@ -300,6 +421,9 @@ class VulkanKernelVisitor(Visitor):
         return f"({cond} ? {true_val} : {false_val})"
 
     def visit_unary_minus_expr(self, node: UnaryMinusExpr) -> str:
+        folded = self._const_eval_expr(node)
+        if folded is not None:
+            return self._format_constant(*folded)
         operand = self._to_str(node.operand)
         return f"-{operand}"
 
@@ -363,6 +487,9 @@ class VulkanKernelVisitor(Visitor):
         return base
 
     def visit_call_expr(self, node: CallExpr) -> str:
+        folded = self._const_eval_expr(node)
+        if folded is not None:
+            return self._format_constant(*folded)
         callee = self._visit_expr_child(node.callee)
         args = ", ".join(self._visit_expr_child(arg) for arg in node.args)
         return f"{callee}({args})"
@@ -376,12 +503,18 @@ class VulkanKernelVisitor(Visitor):
         return f"limit<{max_val}>({end})"
 
     def visit_binary_expr(self, node: BinaryExpr) -> str:
+        folded = self._const_eval_expr(node)
+        if folded is not None:
+            return self._format_constant(*folded)
         left = self._visit_expr_child(node.left)
         right = self._visit_expr_child(node.right)
         op = node.op or "+"
         return f"({left} {op} {right})"
 
     def visit_cast_expr(self, node: CastExpr) -> str:
+        folded = self._const_eval_expr(node)
+        if folded is not None:
+            return self._format_constant(*folded)
         operand = self._visit_expr_child(node.operand)
         cast_type = node.cast_type.accept(self)
         return f"{cast_type}({operand})"
@@ -531,6 +664,11 @@ class VulkanKernelVisitor(Visitor):
             and isinstance(node.lvalue, ArrayAccess)
         ):
             return f"atomicAdd({lvalue}, {rvalue});"
+        if self._lvalue_uses_float16_storage(node.lvalue):
+            if node.assign_op == "=":
+                return f"{lvalue} = float16_t({rvalue});"
+            op = node.assign_op[0]
+            return f"{lvalue} = float16_t({lvalue} {op} ({rvalue}));"
         return f"{lvalue} {node.assign_op} {rvalue};"
 
     def visit_overflow_check(self, node: OverflowCheck) -> str:
@@ -753,6 +891,8 @@ class VulkanKernelVisitor(Visitor):
 
         self._emit("#version 450")
         self._emit("#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require")
+        if self._program_uses_float16(node):
+            self._emit("#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require")
         self._emit("#extension GL_KHR_shader_subgroup_arithmetic : require")
         self._emit("#extension GL_KHR_shader_subgroup_clustered : require")
         self._emit("#extension GL_EXT_shader_atomic_float : require")

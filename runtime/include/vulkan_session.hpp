@@ -37,6 +37,220 @@ struct VulkanDimension
     uint32_t z;
 };
 
+struct VStatistics
+{
+    std::string kernel_name;
+    size_t host_to_device = 0;
+    size_t device_to_host = 0;
+    size_t host_to_device_bytes = 0;
+    size_t device_to_host_bytes = 0;
+};
+
+class AbstractKernel;
+
+class ComputeKernelRegistry
+{
+public:
+    class ScopedActiveKernel
+    {
+    public:
+        explicit ScopedActiveKernel(AbstractKernel& kernel);
+        ~ScopedActiveKernel();
+
+        ScopedActiveKernel(const ScopedActiveKernel&) = delete;
+        ScopedActiveKernel& operator=(const ScopedActiveKernel&) = delete;
+
+    private:
+        AbstractKernel* m_previous = nullptr;
+    };
+
+    static ComputeKernelRegistry& instance()
+    {
+        static ComputeKernelRegistry registry;
+        return registry;
+    }
+
+    void registerKernel(AbstractKernel& kernel)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (std::find(m_kernels.begin(), m_kernels.end(), &kernel) == m_kernels.end())
+            m_kernels.push_back(&kernel);
+    }
+
+    void recordHostToDevice(AbstractKernel* kernel, size_t bytes);
+    void recordDeviceToHost(AbstractKernel* kernel, size_t bytes);
+
+    void recordHostToDevice(std::string_view kernel_name, size_t bytes);
+    void recordDeviceToHost(std::string_view kernel_name, size_t bytes);
+    void resetStatistics();
+
+    std::vector<VStatistics> getStatistics(int top_users)
+    {
+        std::vector<VStatistics> result;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        result.reserve(m_kernels.size());
+        for (const auto* kernel : m_kernels)
+            result.push_back(statisticsFor(*kernel));
+
+        std::sort(result.begin(), result.end(), [](const VStatistics& lhs, const VStatistics& rhs) {
+            const size_t lhs_count = lhs.host_to_device + lhs.device_to_host;
+            const size_t rhs_count = rhs.host_to_device + rhs.device_to_host;
+            if (lhs_count != rhs_count)
+                return lhs_count > rhs_count;
+
+            const size_t lhs_bytes = lhs.host_to_device_bytes + lhs.device_to_host_bytes;
+            const size_t rhs_bytes = rhs.host_to_device_bytes + rhs.device_to_host_bytes;
+            if (lhs_bytes != rhs_bytes)
+                return lhs_bytes > rhs_bytes;
+
+            return lhs.kernel_name < rhs.kernel_name;
+        });
+
+        if (top_users >= 0 && static_cast<size_t>(top_users) < result.size())
+            result.resize(static_cast<size_t>(top_users));
+        return result;
+    }
+
+    static AbstractKernel* activeKernel()
+    {
+        return activeKernelSlot();
+    }
+
+    static std::string_view activeKernelName();
+
+private:
+    static AbstractKernel*& activeKernelSlot()
+    {
+        thread_local AbstractKernel* kernel = nullptr;
+        return kernel;
+    }
+
+    VStatistics statisticsFor(const AbstractKernel& kernel) const;
+
+    std::mutex m_mutex;
+    std::vector<AbstractKernel*> m_kernels;
+};
+
+class AbstractKernel
+{
+public:
+    explicit AbstractKernel(std::string kernel_name)
+        : m_kernel_name(std::move(kernel_name))
+    {
+        ComputeKernelRegistry::instance().registerKernel(*this);
+    }
+
+    virtual ~AbstractKernel() = default;
+
+    const std::string& kernelName() const { return m_kernel_name; }
+
+    void recordHostToDevice(size_t bytes)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        ++m_statistics.host_to_device;
+        m_statistics.host_to_device_bytes += bytes;
+    }
+
+    void recordDeviceToHost(size_t bytes)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        ++m_statistics.device_to_host;
+        m_statistics.device_to_host_bytes += bytes;
+    }
+
+    void resetStatistics()
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_statistics = {};
+    }
+
+    VStatistics statistics() const
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        VStatistics stats = m_statistics;
+        stats.kernel_name = m_kernel_name;
+        return stats;
+    }
+
+private:
+    std::string m_kernel_name;
+    mutable std::mutex m_mutex;
+    VStatistics m_statistics;
+};
+
+inline ComputeKernelRegistry::ScopedActiveKernel::ScopedActiveKernel(AbstractKernel& kernel)
+    : m_previous(activeKernelSlot())
+{
+    activeKernelSlot() = &kernel;
+}
+
+inline ComputeKernelRegistry::ScopedActiveKernel::~ScopedActiveKernel()
+{
+    activeKernelSlot() = m_previous;
+}
+
+inline void ComputeKernelRegistry::recordHostToDevice(AbstractKernel* kernel, size_t bytes)
+{
+    if (kernel != nullptr)
+        kernel->recordHostToDevice(bytes);
+}
+
+inline void ComputeKernelRegistry::recordDeviceToHost(AbstractKernel* kernel, size_t bytes)
+{
+    if (kernel != nullptr)
+        kernel->recordDeviceToHost(bytes);
+}
+
+inline void ComputeKernelRegistry::recordHostToDevice(std::string_view kernel_name, size_t bytes)
+{
+    if (kernel_name.empty())
+        return;
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (auto* kernel : m_kernels)
+    {
+        if (kernel->kernelName() == kernel_name)
+        {
+            kernel->recordHostToDevice(bytes);
+            return;
+        }
+    }
+}
+
+inline void ComputeKernelRegistry::recordDeviceToHost(std::string_view kernel_name, size_t bytes)
+{
+    if (kernel_name.empty())
+        return;
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (auto* kernel : m_kernels)
+    {
+        if (kernel->kernelName() == kernel_name)
+        {
+            kernel->recordDeviceToHost(bytes);
+            return;
+        }
+    }
+}
+
+inline void ComputeKernelRegistry::resetStatistics()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (auto* kernel : m_kernels)
+        kernel->resetStatistics();
+}
+
+inline std::string_view ComputeKernelRegistry::activeKernelName()
+{
+    const auto* kernel = activeKernel();
+    return kernel == nullptr ? std::string_view{} : std::string_view{kernel->kernelName()};
+}
+
+inline VStatistics ComputeKernelRegistry::statisticsFor(const AbstractKernel& kernel) const
+{
+    return kernel.statistics();
+}
+
 
 // ───────────── VulkanTestBase fixture (creates instance + device) ───
 
