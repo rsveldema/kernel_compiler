@@ -107,7 +107,8 @@ def _compute_matrix_size(ty: Type, constants: dict[str, str] | None = None) -> i
 class VulkanKernelVisitor(Visitor):
     """Transforms the parsed AST into a Vulkan GLSL compute shader string."""
 
-    def __init__(self):
+    def __init__(self, use_bfloat16: bool = False):
+        self._use_bfloat16 = use_bfloat16
         self._lines: list[str] = []
         self._indent_level: int = 0
         self._binding_counter: int = 0
@@ -253,6 +254,11 @@ class VulkanKernelVisitor(Visitor):
 
     def visit_float(self, node: Float) -> str:
         return "float"
+
+    def visit_float16(self, node: Float16) -> str:
+        if self._use_bfloat16:
+            return "bfloat_t"
+        return "float16_t"
 
     def visit_fixed_size_vector(self, node: FixedSizeVector) -> str:
         return self._glsl_elem_type(node)

@@ -70,7 +70,12 @@ declaration: "const" type IDENT ("=" expression)? -> const_decl
 | "constexpr" type IDENT "=" expression -> constexpr_decl
 | type IDENT  ("=" expression)? -> decl
 
-TYPE_LITERAL: "int" | "size_t" | "float" | "float" | "float16" | "PositionIndex" | "TokenID" | "EmbeddingDimension" | "HeadsIndex" | "TempStorage" | "FFDimension" | "HeadDimension" | "RmsNormPartialSumIndex" | "MultiTokenPredictionIndex" | "NeuronConnectionIndex" | "ConflictIndex"
+// Scalar type terminals (used in TYPE_LITERAL)
+INT_T:    "int"
+SIZE_T_T: "size_t"
+FLOAT_T:  "float"
+FLOAT16_T:"float16"
+TYPE_LITERAL: INT_T | SIZE_T_T | FLOAT_T | FLOAT16_T
 
 type: FSV "<" type "," expression ">" ("&")?
     | FRM "<" type "," expression "," expression ">" ("&")?

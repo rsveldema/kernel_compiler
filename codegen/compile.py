@@ -80,14 +80,15 @@ def generate_vulkan(
     optimization_pass: str = "shared-memory",
     rllm_dispatch_stub: str | None = None,
     rllm_spv_path: str | None = None,
+    use_bfloat16: bool = False,
 ) -> None:
     program = compile(filename, enable_optimizations, chunk_size, optimization_pass)
-    visitor = VulkanKernelVisitor()
+    visitor = VulkanKernelVisitor(use_bfloat16=use_bfloat16)
     shader = program.accept(visitor)
     with open(output, "w") as f:
         f.write(shader)
     print(f"Generated Vulkan shader -> {output}")
-    visitor = VulkanCppStubVisitor()
+    visitor = VulkanCppStubVisitor(use_bfloat16=use_bfloat16)
     stub = program.accept(visitor)
     stub_output = output.rsplit(".", 1)[0] + ".h"
     with open(stub_output, "w") as f:
@@ -109,9 +110,10 @@ def compile_vulkan(
     optimization_pass: str = "shared-memory",
     rllm_dispatch_stub: str | None = None,
     rllm_spv_path: str | None = None,
+    use_bfloat16: bool = False,
 ) -> None:
     glsl_path = input_file.rsplit(".", 1)[0] + ".glsl"
-    generate_vulkan(input_file, glsl_path, enable_optimizations, chunk_size, optimization_pass, rllm_dispatch_stub, rllm_spv_path)
+    generate_vulkan(input_file, glsl_path, enable_optimizations, chunk_size, optimization_pass, rllm_dispatch_stub, rllm_spv_path, use_bfloat16=use_bfloat16)
     cmd = [
         "glslc", "-fshader-stage=compute", "-o", output_spv,
         "--target-env=vulkan1.4" if optimization_pass == "coopmat2" else "--target-env=vulkan1.2", glsl_path,
@@ -141,6 +143,11 @@ if __name__ == "__main__":
     _parser.add_argument("--rllm-dispatch-stub", metavar="OUTPUT_H", help="Generate an RLLM Vulkan dispatch wrapper header")
     _parser.add_argument("--rllm-spv-path", metavar="REL_SPV", help="SPIR-V path embedded in the RLLM dispatch wrapper")
     _parser.add_argument(
+        "--bfloat16",
+        action="store_true",
+        help="Generate bfloat (16-bit) instead of float16 in Vulkan/C++ output",
+    )
+    _parser.add_argument(
         "--no-optimize",
         action="store_true",
         help="Disable optimization passes before code generation",
@@ -158,6 +165,7 @@ if __name__ == "__main__":
     )
     args = _parser.parse_args()
     enable_optimizations = not args.no_optimize
+    use_bfloat16 = getattr(args, "bfloat16", False)
     optimization_pass = "coopmat2" if args.coopmat2 else "shared-memory"
     if args.chunk_size <= 0:
         _parser.error("--chunk-size must be positive")
@@ -166,9 +174,9 @@ if __name__ == "__main__":
         if not args.file:
             _parser.error("--vulkan and --compile require an input FILE argument")
         if args.vulkan:
-            generate_vulkan(args.file, args.vulkan, enable_optimizations, args.chunk_size, optimization_pass, args.rllm_dispatch_stub, args.rllm_spv_path)
+            generate_vulkan(args.file, args.vulkan, enable_optimizations, args.chunk_size, optimization_pass, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16)
         elif args.compile:
-            compile_vulkan(args.file, args.compile, enable_optimizations, args.chunk_size, optimization_pass, args.rllm_dispatch_stub, args.rllm_spv_path)
+            compile_vulkan(args.file, args.compile, enable_optimizations, args.chunk_size, optimization_pass, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16)
     else:
         # Default: prettyprint all files
         for path in _sys_mod.argv[1:]:

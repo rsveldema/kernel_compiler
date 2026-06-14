@@ -20,6 +20,9 @@ class Visitor:
     def visit_float(self, node: _ast.Float):
         raise NotImplementedError
 
+    def visit_float16(self, node: _ast.Float16):
+        raise NotImplementedError
+
     def visit_fixed_size_vector(self, node: _ast.FixedSizeVector):
         raise NotImplementedError
 

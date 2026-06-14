@@ -20,11 +20,52 @@ _CPP_RESERVED = {"None", "static_cast"}
 def _is_push_identifier(value: str | None) -> bool:
     return bool(value and _IDENT_RE.match(value) and value not in _CPP_RESERVED)
 
+def type_to_cpp_string(ty, use_bfloat16: bool = False) -> str:
+    """Convert a Type AST node to its C++ string representation."""
+    if ty is None:
+        return "unknown_type"
+    if isinstance(ty, ast.Int):
+        return "int32_t"
+    if isinstance(ty, ast.Float):
+        return "float"
+    if isinstance(ty, ast.Float16):
+        return "bfloat_t" if use_bfloat16 else "float16_t"
+    if isinstance(ty, ast.FixedSizeVector) and ty.elem_type is not None:
+        elem = type_to_cpp_string(ty.elem_type, use_bfloat16)
+        size = ty.size_expr.accept(CastExprTypeConverter()) if hasattr(ty.size_expr, 'accept') else "?"
+        return f"{elem}[{size}]"
+    # For all other types (vectors/matrices) used as casts, fall back to unknown
+    return "unknown_type"
+
+
+# Minimal converter for size expressions inside type_to_cpp_string
+class CastExprTypeConverter(Visitor):
+    def _visit_expr_child(self, node):
+        if node is None:
+            return "?"
+        return node.accept(self)
+
+    def visit_number(self, node):
+        return str(node.value)
+
+    def visit_identifier(self, node):
+        return node.name or "?"
+
+    def visit_binary_expr(self, node):
+        left = self._visit_expr_child(node.left)
+        right = self._visit_expr_child(node.right)
+        op = node.op or "+"
+        return f"({left} {op} {right})"
+
+    def accept(self, visitor):
+        raise NotImplementedError
+
 
 class VulkanCppStubVisitor(Visitor):
     """Transforms the parsed AST into a C++ stub for calling the Vulkan kernel."""
 
-    def __init__(self):
+    def __init__(self, use_bfloat16: bool = False):
+        self._use_bfloat16 = use_bfloat16
         self._lines: List[str] = []
         self._indent_level: int = 0
         self._buffer_structs: Dict[str, str] = {}  # name -> struct_name
@@ -50,6 +91,8 @@ class VulkanCppStubVisitor(Visitor):
             return "int32_t"
         if isinstance(ty, ast.Float):
             return "float"
+        if isinstance(ty, ast.Float16):
+            return "bfloat_t" if self._use_bfloat16 else "float16_t"
         return "unknown_type"
 
     def _class_name(self, kernel_name: str) -> str:
@@ -129,7 +172,7 @@ class VulkanCppStubVisitor(Visitor):
         return f"({left} {op} {right})"
 
     def visit_cast_expr(self, node: ast.CastExpr) -> str:
-        cast_type = "int32_t"
+        cast_type = type_to_cpp_string(node.cast_type, self._use_bfloat16)
         operand = self._visit_expr_child(node.operand)
         return f"static_cast<{cast_type}>({operand})"
 

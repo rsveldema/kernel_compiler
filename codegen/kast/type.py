@@ -28,6 +28,13 @@ class Float(Type):
         return visitor.visit_float(self)
 
 
+class Float16(Type):
+    """Represents 'float16' type."""
+
+    def accept(self, visitor):
+        return visitor.visit_float16(self)
+
+
 class FixedSizeVector(Type):
     """fixed_size_vector<elem_type, size_expr>&"""
 
@@ -142,6 +149,7 @@ __all__ = [
     "Type",
     "Int",
     "Float",
+    "Float16",
     "FixedSizeVector",
     "FlexibleRowsMatrix",
     "FixedSizeMatrix",

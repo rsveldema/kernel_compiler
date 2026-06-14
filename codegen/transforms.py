@@ -46,7 +46,7 @@ def _token_value(t):
 
 
 _TYPE_NAMES = frozenset((
-    "int", "size_t", "float", "float16", "PositionIndex",
+    "int", "size_t", "float", "float16",
     "fixed_size_vector", "flexible_rows_matrix", "fixed_size_matrix",
     "flexible_size_matrix", "flexible_cols_matrix", "fixed_size_levels_rows_cols_matrix",
     "flexible_rows_cols_levels_matrix", "fixed_size_obj_vector",
@@ -605,24 +605,43 @@ def _parse_field_access_for_lhs(fa_tree):
 # ── type transform ─────────────────────────────────────────────────
 
 
-def _resolve_nested_type(node, default_name="int"):
-    """Resolve a nested type from a tree node (TYPE_LITERAL or compound type)."""
+def _resolve_nested_type(node):
+    """Resolve a nested type from a tree node (TYPE_LITERAL or compound type).
+
+    Handles both Tree nodes (from grammar) and direct Token inputs (e.g., from
+    field_access detection in cast expressions).
+    """
+    # Handle direct Token input (e.g., when called from _maybe_parse_cast_from_field_access)
+    if isinstance(node, Token):
+        val = node.value
+        if val in ("int", "size_t"):
+            return Int(val)
+        elif val in ("float", "rlmm_float", "rlmm_float_small"):
+            return Float()
+        elif val == "float16":
+            return Float16()
+        return None
+
     if isinstance(node, Tree):
         data = node.data
-        # Handle the simple type case: TYPE_LITERAL terminal
+        # Handle the simple type case: single TYPE_LITERAL token child
         if data == "type" and len(node.children) == 1 and _is_token(node.children[0]):
             token = node.children[0]
             val = token.value
-            if val in ("int", "size_t", "PositionIndex", "TokenID", "EmbeddingDimension", "HeadsIndex", "TempStorage", "FFDimension", "HeadDimension", "RmsNormPartialSumIndex", "MultiTokenPredictionIndex", "NeuronConnectionIndex", "ConflictIndex"):
+            if val in ("int", "size_t"):
                 return Int(val)
             elif val in ("float", "rlmm_float", "rlmm_float_small"):
                 return Float()
+            elif val == "float16":
+                return Float16()
         # Handle compound types (multi-param matrix/vector types)
         if data == "type" and len(node.children) >= 2:
             first_child = node.children[0]
             if _is_token(first_child):
                 type_name = first_child.value
                 return _transform_type(node, default_name=type_name)
+
+    # Explicitly reject unknown types instead of silently falling back to int
     return None
 
 
@@ -721,10 +740,19 @@ def _transform_type(type_tree, default_name="int"):
                 )
         return None
 
-    # Handle single-child TYPE_LITERAL terminal
+
+    # Handle single-child TYPE_LITERAL terminal (scalar types)
     if len(children) == 1 and _is_token(first_child):
         name_val = first_child.value
-        return Int(name_val) if name_val in ("int", "size_t", "PositionIndex", "TokenID", "EmbeddingDimension", "HeadsIndex", "TempStorage", "FFDimension", "HeadDimension", "RmsNormPartialSumIndex", "MultiTokenPredictionIndex", "NeuronConnectionIndex", "ConflictIndex") else Float()
+        if name_val in ("int", "size_t"):
+            return Int(name_val)
+        elif name_val in ("float", "rlmm_float", "rlmm_float_small"):
+            return Float()
+        elif name_val == "float16":
+            return Float16()
+        else:
+            # Unknown scalar type - fall through to return None for explicit handling
+            pass
 
     # Simple types (data like 'int' or 'float')
     if hasattr(first_child, 'data') and first_child.data in ("int", "float"):
@@ -736,7 +764,7 @@ def _transform_type(type_tree, default_name="int"):
 
     return None
 
-
+    # Simple types (data like 'int' or 'float')
 # ── statement transform ────────────────────────────────────────────
 
 
