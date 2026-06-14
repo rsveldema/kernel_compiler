@@ -93,7 +93,7 @@ class RllmVulkanDispatchStubVisitor(Visitor):
         else:
             dim_values = ["static_cast<uint32_t>(range.inner_size())"]
 
-        push_fields: list[tuple[str, str, str]] = [("rllm_bound_x", "int32_t", dim_values[0])]
+        push_fields = [("rllm_bound_x", "int32_t", dim_values[0])]
         if node.space_dim >= 2:
             push_fields.append(("rllm_bound_y", "int32_t", dim_values[1]))
         if node.space_dim >= 3:
@@ -110,8 +110,14 @@ class RllmVulkanDispatchStubVisitor(Visitor):
                 seen.add(tb)
                 push_fields.append((tb, "int32_t", tb))
 
+        # When parallelized, add workgroup count and offset fields to push constants.
+        _wg_count = getattr(node, "workgroup_count", 1)
+        _parallelized = getattr(node, "parallelized", False)
+        if _parallelized and _wg_count > 1:
+            push_fields.insert(0, ("rllm_wg_count", "int32_t", str(_wg_count)))
+
         dispatch_args = ["rllm::vulkan_runtime::context()", *dim_values]
-        mutable_buffers: list[tuple[str, int | None]] = []
+        mutable_buffers = []
         for param in params:
             if not self._is_buffer_type(param.var_type):
                 continue
@@ -132,9 +138,9 @@ class RllmVulkanDispatchStubVisitor(Visitor):
 
         template_prefix = ""
         if template_params:
-            template_prefix = "template <typename Range, " + ", ".join(template_params) + ", typename... Ignored>\n"
+            template_prefix = "template <typename Range, " + ", ".join(template_params) + ", typename... Ignored>" + chr(10)
         else:
-            template_prefix = "template <typename Range, typename... Ignored>\n"
+            template_prefix = "template <typename Range, typename... Ignored>" + chr(10)
 
         joined_function_params = ", ".join(["Range&& range", *function_params, "Ignored&&... ignored_args"])
         joined_dispatch_args = ", ".join(dispatch_args)
@@ -145,32 +151,69 @@ class RllmVulkanDispatchStubVisitor(Visitor):
                 mark_lines.append(f"    rllm::vulkan_runtime::mark_device_latest({name});")
             else:
                 mark_lines.append(f"    rllm::vulkan_runtime::mark_device_latest({name}, {level});")
-        push_body = "\n".join(push_lines)
-        mark_body = "\n".join(mark_lines) + ("\n" if mark_lines else "")
 
-        return (
-            "#pragma once\n"
-            "#include <cstdint>\n"
-            "#include <string>\n"
-            "#include <utility>\n"
-            "#include <rllm_vulkan_runtime.hpp>\n"
-            f'#include "{stub_header}"\n'
-            "\n"
-            "namespace rllm::vulkan::generated {\n"
-            "\n"
-            f"{template_prefix}"
-            f"inline void {symbol}({joined_function_params})\n"
-            "{\n"
-            "    static_cast<void>(sizeof...(ignored_args));\n"
-            "    std::lock_guard<std::recursive_mutex> vulkan_lock(rllm::vulkan_runtime::mutex());\n"
-            f"    static {namespace_name}::{class_name} kernel(rllm::vulkan_runtime::session(), std::string(RLLM_VULKAN_KERNEL_ROOT) + \"/{self._spv_path}\");\n"
-            "    ComputeKernelRegistry::ScopedActiveKernel active_kernel(kernel);\n"
-            f"    const {namespace_name}::{push_name} push_constants{{\n"
-            f"{push_body}\n"
-            "    };\n"
-            f"    kernel.dispatch({joined_dispatch_args});\n"
-            f"{mark_body}"
-            "}\n"
-            "\n"
-            "} // namespace rllm::vulkan::generated\n"
-        )
+        # Build dispatch function body based on parallelization setting.
+        if _parallelized and _wg_count > 1:
+            wg_size = getattr(node, "workgroup_size", 8)
+            base_args_list = [a for a in dispatch_args[:-1]]  # everything except push_constants
+            base_args_str = ", ".join(base_args_list)
+
+            inner_pc_lines = []
+            for pname, pctype, pval in push_fields:
+                if pname == "rllm_wg_count":
+                    inner_pc_lines.append("        ." + pname + " = static_cast<" + pctype + ">(_wg),")
+                else:
+                    inner_pc_lines.append("        ." + pname + " = static_cast<" + pctype + ">(" + pval + "),")
+            inner_pc_lines.append("        .rllm_wg_offset = static_cast<int32_t>(_wg * " + str(wg_size) + "),")
+
+            inner_push_body = chr(10).join(inner_pc_lines)
+
+            body_parts = []
+            body_parts.append("    static_cast<void>(sizeof...(ignored_args));")
+            body_parts.append("    std::lock_guard<std::recursive_mutex> vulkan_lock(rllm::vulkan_runtime::mutex());")
+            spv_esc = self._spv_path.replace(chr(92), chr(92)+chr(92))
+            body_parts.append('    static ' + namespace_name + "::" + class_name + ' kernel(rllm::vulkan_runtime::session(), std::string(RLLM_VULKAN_KERNEL_ROOT) + "/' + spv_esc + '");')
+            body_parts.append("    ComputeKernelRegistry::ScopedActiveKernel active_kernel(kernel);")
+            body_parts.append("    const uint32_t _wg_count = " + str(_wg_count) + ";")
+            body_parts.append("        for (uint32_t _wg = 0; _wg < _wg_count; ++_wg) {")
+            body_parts.append("        const auto _pc {")
+            body_parts.append(inner_push_body)
+            body_parts.append("        };")
+            body_parts.append("        kernel.dispatch(" + base_args_str + ", _pc);")
+            loop_body = chr(10).join(body_parts)
+        else:
+            push_body = chr(10).join(push_lines)
+            mark_body = chr(10).join(mark_lines) + (chr(10) if mark_lines else "")
+
+            body_parts = []
+            body_parts.append("    static_cast<void>(sizeof...(ignored_args));")
+            body_parts.append("    std::lock_guard<std::recursive_mutex> vulkan_lock(rllm::vulkan_runtime::mutex());")
+            spv_esc = self._spv_path.replace(chr(92), chr(92)+chr(92))
+            body_parts.append('    static ' + namespace_name + "::" + class_name + ' kernel(rllm::vulkan_runtime::session(), std::string(RLLM_VULKAN_KERNEL_ROOT) + "/' + spv_esc + '");')
+            body_parts.append("    ComputeKernelRegistry::ScopedActiveKernel active_kernel(kernel);")
+            body_parts.append("    const " + namespace_name + "::" + push_name + " push_constants{")
+            body_parts.append(push_body)
+            body_parts.append("    };")
+            body_parts.append("    kernel.dispatch(" + joined_dispatch_args + ");")
+            if mark_body:
+                body_parts.append(mark_body)
+            loop_body = chr(10).join(body_parts)
+
+        result = ""
+        result += "#pragma once" + chr(10)
+        result += "#include <cstdint>" + chr(10)
+        result += "#include <string>" + chr(10)
+        result += "#include <utility>" + chr(10)
+        result += "#include <rllm_vulkan_runtime.hpp>" + chr(10)
+        result += '#include "' + stub_header + '"' + chr(10)
+        result += chr(10)
+        result += "namespace rllm::vulkan::generated {" + chr(10)
+        result += chr(10)
+        result += template_prefix
+        result += "inline void " + symbol + "(" + joined_function_params + ")" + chr(10)
+        result += "{" + chr(10)
+        result += loop_body
+        result += "}" + chr(10)
+        result += chr(10)
+        result += "} // namespace rllm::vulkan::generated" + chr(10)
+        return result

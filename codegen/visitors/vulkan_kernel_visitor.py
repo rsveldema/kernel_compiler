@@ -1272,6 +1272,11 @@ class VulkanKernelVisitor(Visitor):
                 self._push_constant_fields.insert(0, (name, vtype))
                 self._push_constant_map[name] = True
 
+        # When parallelized, pass workgroup_count K to the shader for stride-based iteration.
+        if getattr(node, 'parallelized', False) and getattr(node, 'workgroup_count', 1) > 1:
+            self._push_constant_fields.insert(0, ('rllm_wg_count', 'int'))
+            self._push_constant_map['rllm_wg_count'] = True
+
         # ── Emit push_constant block before helper functions that reference it ──
         if self._push_constant_fields:
             self._emit("")
@@ -1398,31 +1403,20 @@ class VulkanKernelVisitor(Visitor):
         if getattr(node, "tiled", False):
             self._emit_tile_vars(node)
 
-        # ── Parallelized initialization ──
+        # ── Parallelized initialization (GPU-wide parallel dispatch) ──
         parallelized = getattr(node, 'parallelized', False)
         if parallelized and node.space_dim >= 1 and node.loop_vars:
-            wg_size = getattr(node, 'workgroup_size', 8)
             workgroup_count = getattr(node, 'workgroup_count', 1)
             
-            # Compute global index for each loop variable using stride pattern.
-            # For workgroup_count=1 (no partitioning), use gl_GlobalInvocationID.x/y/z directly.
-            # For workgroup_count > 1 (partitioned across K workgroups), combine
-            # gl_WorkGroupID.x with gl_LocalInvocationID.x to create a unique global index per thread.
+            # Compute global index using gl_GlobalInvocationID for true GPU-wide parallelism.
+            # Each thread handles one element per invocation. When K > 1, the dispatch
+            # dimensions cover all elements and threads use stride-based iteration if needed.
             self._parallel_global_vars = {}
             for idx, var_name in enumerate(node.loop_vars):
-                if workgroup_count > 1:
-                    # Partitioned: each workgroup handles ceil(N / K) iterations sequentially.
-                    global_var = f"global_{var_name}"
-                    self._emit(
-                        f"const int {global_var} = int(gl_WorkGroupID.x) * {workgroup_count} "
-                        f"+ int(gl_LocalInvocationID.x);"
-                    )
-                else:
-                    # Non-partitioned: use gl_GlobalInvocationID component directly.
-                    dim_idx = min(idx, 2)
-                    dim = ['x', 'y', 'z'][dim_idx]
-                    global_var = f"global_{var_name}"
-                    self._emit(f"const int {global_var} = int(gl_GlobalInvocationID.{dim});")
+                dim_idx = min(idx, 2)
+                dim = ['x', 'y', 'z'][dim_idx]
+                global_var = f"global_{var_name}"
+                self._emit(f"const int {global_var} = int(gl_GlobalInvocationID.{dim});")
                 
                 # Create an alias so that the original loop variable name is available in scope
                 # for triangular guards and other code that references i, j etc. directly.
