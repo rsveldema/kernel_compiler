@@ -94,6 +94,16 @@ def generate_vulkan(
     with open(stub_output, "w") as f:
         f.write(stub)
     print(f"Generated C++ stub -> {stub_output}")
+    
+    # Write type aliases header for kfloat type at kernels/ level
+    alias_filename, alias_content = visitor._generate_type_aliases_header()
+    stub_dir = os.path.dirname(stub_output)  # e.g. kernels/
+    alias_path = os.path.join(stub_dir, alias_filename)  # kernels/_type_aliases.hpp
+    os.makedirs(os.path.dirname(alias_path), exist_ok=True)
+    with open(alias_path, "w") as f:
+        f.write(alias_content)
+    print(f"Generated type aliases -> {alias_path}")
+    
     if rllm_dispatch_stub:
         visitor = RllmVulkanDispatchStubVisitor(rllm_spv_path or (output.rsplit(".", 1)[0] + ".spv"))
         dispatch_stub = program.accept(visitor)

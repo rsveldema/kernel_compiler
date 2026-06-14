@@ -1557,6 +1557,25 @@ def transform(t: Tree) -> Program:
         if bound_name in param_type_map and bound_name not in param_names:
             param_names.append(bound_name)
 
+    # Add any parameter names declared in the PARAMETERS block that were not
+    # listed in the OFFLOAD_PARFOR_*_PARAM line (local variable aliases).
+    # Only add declarations whose types are matrices/vectors (not scalars like
+    # limit expressions or other push-constant-only values).
+    matrix_type_classes = frozenset((
+        "FixedSizeVector",
+        "FlexibleRowsMatrix",
+        "FixedSizeMatrix",
+        "FlexibleSizeMatrix",
+        "FixedSizeLevelsRowsColsMatrix",
+        "FlexibleRowsColsLevelsMatrix",
+        "FixedSizeObjVectorMatrix",
+    ))
+    for decl_name, decl in param_type_map.items():
+        if decl_name not in param_names and decl_name.strip():
+            vt = getattr(decl, "var_type", None)
+            if vt is not None and str(type(vt).__name__) in matrix_type_classes:
+                param_names.append(decl_name)
+
     p.params = [param_type_map.get(n) for n in param_names]
 
     for stmt_tree in t.children[3].children:

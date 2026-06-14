@@ -85,6 +85,13 @@ class VulkanCppStubVisitor(Visitor):
 
     def result(self) -> str:
         return "\n".join(self._lines) + "\n"
+    def _generate_type_aliases_header(self) -> tuple[str, str]:
+        """Generate the kfloat type aliases header filename and content."""
+        kfloat_type = "bfloat_t" if self._use_bfloat16 else "float"
+        filename = "_type_aliases.hpp"
+        content = f'#pragma once\nusing kfloat = {kfloat_type};\n'
+        return (filename, content)
+
 
     def _cpp_type_str(self, ty) -> str:
         if isinstance(ty, ast.Int):
@@ -449,6 +456,7 @@ class VulkanCppStubVisitor(Visitor):
         self._emit("#include <string>")
         self._emit("#include <vulkan/vulkan_core.h>")
         self._emit('#include "vulkan_session.hpp"')
+        self._emit('#include "_type_aliases.hpp"')
         self._emit("")
         self._emit(f"namespace {self._namespace_name} {{")
         self._emit("")
