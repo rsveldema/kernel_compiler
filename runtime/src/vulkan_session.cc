@@ -4,7 +4,8 @@
  */
 
 #include <string>
-#include <stdexcept>
+#include <cstdlib>
+#include <cstdio>
 #include <cctype>
 #include <fstream>
 #include <iterator>
@@ -266,7 +267,10 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
     {
         std::ifstream ifs_spv(glsl_file, std::ios::binary);
         if (!ifs_spv.is_open())
-            throw std::runtime_error("Cannot open SPIR-V file: " + glsl_file);
+            {
+                std::fprintf(stderr, "Cannot open SPIR-V file: %s\n", glsl_file.c_str());
+                std::abort();
+            }
         spirv.assign(
             std::istreambuf_iterator<char>(ifs_spv),
             std::istreambuf_iterator<char>());
@@ -277,7 +281,10 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
         char tmp_spv[] = "/tmp/spv_gen_XXXXXX";
         int fd = mkstemp(tmp_spv);
         if (fd < 0)
-            throw std::runtime_error("mkstemp failed");
+        {
+            std::fprintf(stderr, "mkstemp failed\n");
+            std::abort();
+        }
 
         std::string glslc_cmd = "glslc -x glsl -O -fshader-stage=compute ";
         if (glsl_file.find("coopmat2") != std::string::npos)
@@ -287,7 +294,8 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
         if (!fp)
         {
             close(fd);
-            throw std::runtime_error("glslc failed for: " + glsl_file);
+            std::fprintf(stderr, "glslc failed for: %s\n", glsl_file.c_str());
+            std::abort();
         }
 
         char buf[4096];
@@ -297,13 +305,17 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
         if (rc_p != 0)
         {
             close(fd);
-            throw std::runtime_error("glslc error for: " + glsl_file);
+            std::fprintf(stderr, "glslc error for: %s\n", glsl_file.c_str());
+            std::abort();
         }
         close(fd);
 
         std::ifstream ifs_spv(tmp_spv, std::ios::binary);
         if (!ifs_spv.is_open())
-            throw std::runtime_error("Cannot read generated SPIR-V");
+            {
+                std::fprintf(stderr, "Cannot read generated SPIR-V\n");
+                std::abort();
+            }
         spirv.assign(
             std::istreambuf_iterator<char>(ifs_spv),
             std::istreambuf_iterator<char>());
@@ -312,7 +324,10 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
     }
 
     if (spirv.empty())
-        throw std::runtime_error("Empty SPIR-V from glslc for: " + glsl_file);
+        {
+            std::fprintf(stderr, "Empty SPIR-V from glslc for: %s\n", glsl_file.c_str());
+            std::abort();
+        }
 
     VkShaderModuleCreateInfo smci{};
     smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -359,5 +374,8 @@ std::string vk_result_str(VkResult rc)
 void check_vk(VkResult rc, const char* label)
 {
     if (rc != VK_SUCCESS)
-        throw std::runtime_error(std::string(label) + ": " + vk_result_str(rc));
+    {
+        std::fprintf(stderr, "%s: %s\n", label, vk_result_str(rc).c_str());
+        std::abort();
+    }
 }

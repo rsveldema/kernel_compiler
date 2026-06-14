@@ -15,7 +15,6 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
-#include <stdexcept>
 #include <string>
 #include <mutex>
 #include <type_traits>
@@ -597,15 +596,7 @@ public:
         m_mutex.lock();
         VkCommandBufferBeginInfo bbci{};
         bbci.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        try
-        {
-            check_vk(vkBeginCommandBuffer(m_cmd_buf, &bbci), "VkComputeSession cmd buf begin");
-        }
-        catch (...)
-        {
-            m_mutex.unlock();
-            throw;
-        }
+        check_vk(vkBeginCommandBuffer(m_cmd_buf, &bbci), "VkComputeSession cmd buf begin");
         return m_cmd_buf;
     }
 
@@ -719,7 +710,10 @@ static inline void create_bound_buffer(
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
     }
     if (mem_type_idx == 0xFFFFFFFFu)
-        throw std::runtime_error(std::string(label) + ": no suitable memory type");
+    {
+        std::fprintf(stderr, "%s: no suitable memory type\n", label);
+        std::abort();
+    }
 
     VkMemoryAllocateInfo ai{};
     ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
