@@ -104,7 +104,7 @@ class BinaryExpr(Expression):
 class CastExpr(Expression):
     """Represents a cast expression (e.g., int(x))."""
 
-    def __init__(self, cast_type: Type, operand: Expression):
+    def __init__(self, cast_type: 'Type', operand: Expression):
         self.cast_type = cast_type
         self.operand = operand
 

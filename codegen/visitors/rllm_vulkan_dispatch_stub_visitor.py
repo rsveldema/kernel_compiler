@@ -152,52 +152,24 @@ class RllmVulkanDispatchStubVisitor(Visitor):
             else:
                 mark_lines.append(f"    rllm::vulkan_runtime::mark_device_latest({name}, {level});")
 
-        # Build dispatch function body based on parallelization setting.
-        if _parallelized and _wg_count > 1:
-            wg_size = getattr(node, "workgroup_size", 8)
-            base_args_list = [a for a in dispatch_args[:-1]]  # everything except push_constants
-            base_args_str = ", ".join(base_args_list)
+        # Parallelized kernels are still dispatched once; the GPU workgroup grid
+        # and push constants control partitioning inside the shader.
+        push_body = chr(10).join(push_lines)
+        mark_body = chr(10).join(mark_lines) + (chr(10) if mark_lines else "")
 
-            inner_pc_lines = []
-            for pname, pctype, pval in push_fields:
-                if pname == "rllm_wg_count":
-                    inner_pc_lines.append("        ." + pname + " = static_cast<" + pctype + ">(_wg),")
-                else:
-                    inner_pc_lines.append("        ." + pname + " = static_cast<" + pctype + ">(" + pval + "),")
-            inner_pc_lines.append("        .rllm_wg_offset = static_cast<int32_t>(_wg * " + str(wg_size) + "),")
-
-            inner_push_body = chr(10).join(inner_pc_lines)
-
-            body_parts = []
-            body_parts.append("    static_cast<void>(sizeof...(ignored_args));")
-            body_parts.append("    std::lock_guard<std::recursive_mutex> vulkan_lock(rllm::vulkan_runtime::mutex());")
-            spv_esc = self._spv_path.replace(chr(92), chr(92)+chr(92))
-            body_parts.append('    static ' + namespace_name + "::" + class_name + ' kernel(rllm::vulkan_runtime::session(), std::string(RLLM_VULKAN_KERNEL_ROOT) + "/' + spv_esc + '");')
-            body_parts.append("    ComputeKernelRegistry::ScopedActiveKernel active_kernel(kernel);")
-            body_parts.append("    const uint32_t _wg_count = " + str(_wg_count) + ";")
-            body_parts.append("        for (uint32_t _wg = 0; _wg < _wg_count; ++_wg) {")
-            body_parts.append("        const auto _pc {")
-            body_parts.append(inner_push_body)
-            body_parts.append("        };")
-            body_parts.append("        kernel.dispatch(" + base_args_str + ", _pc);")
-            loop_body = chr(10).join(body_parts)
-        else:
-            push_body = chr(10).join(push_lines)
-            mark_body = chr(10).join(mark_lines) + (chr(10) if mark_lines else "")
-
-            body_parts = []
-            body_parts.append("    static_cast<void>(sizeof...(ignored_args));")
-            body_parts.append("    std::lock_guard<std::recursive_mutex> vulkan_lock(rllm::vulkan_runtime::mutex());")
-            spv_esc = self._spv_path.replace(chr(92), chr(92)+chr(92))
-            body_parts.append('    static ' + namespace_name + "::" + class_name + ' kernel(rllm::vulkan_runtime::session(), std::string(RLLM_VULKAN_KERNEL_ROOT) + "/' + spv_esc + '");')
-            body_parts.append("    ComputeKernelRegistry::ScopedActiveKernel active_kernel(kernel);")
-            body_parts.append("    const " + namespace_name + "::" + push_name + " push_constants{")
-            body_parts.append(push_body)
-            body_parts.append("    };")
-            body_parts.append("    kernel.dispatch(" + joined_dispatch_args + ");")
-            if mark_body:
-                body_parts.append(mark_body)
-            loop_body = chr(10).join(body_parts)
+        body_parts = []
+        body_parts.append("    static_cast<void>(sizeof...(ignored_args));")
+        body_parts.append("    std::lock_guard<std::recursive_mutex> vulkan_lock(rllm::vulkan_runtime::mutex());")
+        spv_esc = self._spv_path.replace(chr(92), chr(92)+chr(92))
+        body_parts.append('    static ' + namespace_name + "::" + class_name + ' kernel(rllm::vulkan_runtime::session(), std::string(RLLM_VULKAN_KERNEL_ROOT) + "/' + spv_esc + '");')
+        body_parts.append("    ComputeKernelRegistry::ScopedActiveKernel active_kernel(kernel);")
+        body_parts.append("    const " + namespace_name + "::" + push_name + " push_constants{")
+        body_parts.append(push_body)
+        body_parts.append("    };")
+        body_parts.append("    kernel.dispatch(" + joined_dispatch_args + ");")
+        if mark_body:
+            body_parts.append(mark_body)
+        loop_body = chr(10).join(body_parts)
 
         result = ""
         result += "#pragma once" + chr(10)
