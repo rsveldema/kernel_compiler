@@ -35,11 +35,16 @@ set(GENERATED_KERNEL_SRCS)
 set(GENERATED_DIR ${CMAKE_BINARY_DIR}/generated/vulkanized/kernels)
 file(MAKE_DIRECTORY ${GENERATED_DIR})
 
-foreach(kernel_name multi-arg single-assign triangular1 with-wg2)
+foreach(kernel_name multi-arg single-assign single-assign-tiled triangular1 with-wg2)
     set(kernel_file "${KERNEL_COMPILER_SOURCE_DIR}/testdata/${kernel_name}.kernel")
     set(output_header "${GENERATED_DIR}/${kernel_name}.h")
     set(output_glsl "${GENERATED_DIR}/${kernel_name}.glsl")
     list(APPEND GENERATED_KERNEL_SRCS ${output_header} ${output_glsl})
+
+    set(extra_codegen_args "")
+    if(kernel_name STREQUAL "single-assign" OR kernel_name STREQUAL "single-assign-tiled")
+        set(extra_codegen_args --parallelize)
+    endif()
 
     add_custom_command(
         OUTPUT "${output_header}" "${output_glsl}"
@@ -47,6 +52,7 @@ foreach(kernel_name multi-arg single-assign triangular1 with-wg2)
         COMMAND env PYTHONPATH="${KERNEL_COMPILER_SOURCE_DIR}:/tmp/pylib:${PYTHONPATH}"
             ${Python3_EXECUTABLE}
             "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
+            ${extra_codegen_args}
             --vulkan "${output_glsl}"
             "${kernel_file}"
         WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"

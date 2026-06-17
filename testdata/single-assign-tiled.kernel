@@ -1,0 +1,15 @@
+PROGRAM("vecmath.cc:640")
+workgroup { x: 8, y: 1, z: 1 }
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<1>(length), (dst, value))
+
+PARAMETERS
+        fixed_size_vector<int, 16384>& dst,
+        int value,
+        int length
+
+BEGIN
+        for (const int j : limit<1024>())
+                dst[j] = value;
+
+END_PROGRAM
