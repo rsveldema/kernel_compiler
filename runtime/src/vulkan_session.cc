@@ -12,6 +12,13 @@
 #include <vulkan/vulkan_core.h>
 #include <unistd.h>
 
+#if defined(VK_NV_COOPERATIVE_MATRIX_2_EXTENSION_NAME) && \
+    defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_2_FEATURES_NV)
+#define RLLM_HAS_VK_COOPMAT2 1
+#else
+#define RLLM_HAS_VK_COOPMAT2 0
+#endif
+
 #include <vulkan_session.hpp>
 
 // Forward declarations from test_vulkan_helpers.h
@@ -23,7 +30,11 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
     VkApplicationInfo ai{};
     ai.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     ai.pApplicationName = "kernel_compiler_tests";
+#ifdef VK_API_VERSION_1_4
     ai.apiVersion = enable_cooperative_matrix2 ? VK_API_VERSION_1_4 : VK_API_VERSION_1_1;
+#else
+    ai.apiVersion = VK_API_VERSION_1_1;
+#endif
     ai.pEngineName = "kernel_compiler";
     ai.engineVersion = VK_MAKE_VERSION(1, 0, 0);
 
@@ -122,8 +133,10 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
     void* device_pnext = nullptr;
     VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomic_float_features{};
     VkPhysicalDeviceShaderFloat16Int8Features shader_float16_int8_features{};
+#if RLLM_HAS_VK_COOPMAT2
     VkPhysicalDeviceCooperativeMatrixFeaturesKHR coopmat_features{};
     VkPhysicalDeviceCooperativeMatrix2FeaturesNV coopmat2_features{};
+#endif
 
     if (has_device_extension(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME))
     {
@@ -162,6 +175,10 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
 
     if (enable_cooperative_matrix2)
     {
+#if !RLLM_HAS_VK_COOPMAT2
+        m_coopmat2_unavailable_reason =
+            "Vulkan headers do not provide VK_NV_cooperative_matrix2 symbols";
+#else
         if (!has_device_extension(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME) ||
             !has_device_extension(VK_NV_COOPERATIVE_MATRIX_2_EXTENSION_NAME))
         {
@@ -198,6 +215,7 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
                 m_coopmat2_enabled = true;
             }
         }
+#endif
     }
 
     VkDeviceCreateInfo dci{};
@@ -299,8 +317,11 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
         }
 
         char buf[4096];
-        while (auto n = fread(buf, 1, sizeof(buf), fp))
-            write(fd, buf, static_cast<size_t>(n));
+        while (auto n = fread(buf, 1, sizeof(buf), fp)) {
+            const auto wrote = write(fd, buf, static_cast<size_t>(n));
+            assert(wrote == static_cast<ssize_t>(n));
+        }
+
         int rc_p = pclose(fp);
         if (rc_p != 0)
         {

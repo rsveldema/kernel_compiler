@@ -7,7 +7,7 @@ Generates compilable C++ header with:
 - A dispatch function matching the kernel's parameters
 """
 
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 from .. import kast as ast
 from .visitor import Visitor
 
@@ -145,9 +145,10 @@ class VulkanCppStubVisitor(Visitor):
         return node.accept(self)
 
     def visit_number(self, node: ast.Number) -> str:
-        s = str(node.value)
+        num_value = int(node.value)
+        s = str(num_value)
         if getattr(node, "unsigned", False):
-            if abs(node.value) > 4294967295:  # UINT_MAX — need uint64
+            if abs(num_value) > 4294967295:  # UINT_MAX — need uint64
                 return s + "ULL"
             return s + "U"
         return s
@@ -226,21 +227,6 @@ class VulkanCppStubVisitor(Visitor):
         self, node: ast.ForLoopWithConditionAndIncrement
     ) -> str:
         return ""
-
-    def visit_if(self, node: ast.If) -> str:
-        raise NotImplementedError("visit_if")
-
-    def visit_declaration(self, node: ast.Declaration) -> str:
-        raise NotImplementedError("visit_declaration")
-
-    def visit_assignment(self, node: ast.Assignment) -> str:
-        raise NotImplementedError("visit_assignment")
-
-    def visit_overflow_check(self, node: ast.OverflowCheck) -> str:
-        raise NotImplementedError("visit_overflow_check")
-
-    def visit_shared_decl(self, node: ast.SharedDecl) -> str:
-        raise NotImplementedError("visit_shared_decl")
 
     def visit_raw_statement(self, node: ast.RawStatement) -> str:
         return node.text.rstrip()
@@ -342,18 +328,17 @@ class VulkanCppStubVisitor(Visitor):
             "z": self._to_str(node.z_expr) if node.z_expr else "1",
         }
 
-    def visit_program(self, node: ast.Program) -> str:
-        """Generate the complete C++ stub header for RLLM-style kernels."""
+    def _initialize_program_emit_state(self) -> None:
         self._lines = []
         self._indent_level = 0
         self._buffer_structs = {}
         self._kernel_name = ""
-
         self._namespace_name = ""
-        # Determine kernel name from header
+
+    def _configure_kernel_identity(self, node: ast.Program) -> None:
         basename = "kernel"
+        self._display_name = "unknown"
         if node.header:
-            # Extract display name (class:lineno) from PROGRAM("ClassName.cc:N") for demangling
             hdr_raw = node.header.strip('"')
             colon_idx = hdr_raw.rfind(":")
             if colon_idx >= 0:
@@ -365,16 +350,21 @@ class VulkanCppStubVisitor(Visitor):
                 self._display_name = f"{raw_class}:{lineno_str}"
             parts = node.header.replace('"', "").split("/")
             basename = parts[-1].rsplit(".", 1)[0] if "." in parts[-1] else parts[-1]
-        # Use source filename stem + header basename to ensure unique dispatch names
-        src_stem = getattr(node, "_source_filename", "").rsplit("/", 1)[-1].rsplit(".", 1)[0].replace("-", "_") if hasattr(node, "_source_filename") and node._source_filename else "kernel"
+
+        src_name = getattr(node, "_source_filename", "")
+        if hasattr(node, "_source_filename") and src_name:
+            src_stem = src_name.rsplit("/", 1)[-1].rsplit(".", 1)[0].replace("-", "_")
+        else:
+            src_stem = "kernel"
+
         self._kernel_name = f"{src_stem}_{basename}" if basename != "kernel" else src_stem
         self._namespace_name = f"rllm_{src_stem}"
 
-        # Classify params
+    def _classify_program_params(
+        self, node: ast.Program
+    ) -> tuple[List[Tuple[ast.Declaration, str, str]], List[ast.Declaration], bool]:
         buffer_params: List[Tuple[ast.Declaration, str, str]] = []
         scalar_params: List[ast.Declaration] = []
-
-        is_triangular = len(getattr(node, "triangular_bounds_raw", [])) >= 2
         has_matrix_params = False
 
         for param in node.params:
@@ -397,22 +387,9 @@ class VulkanCppStubVisitor(Visitor):
             else:
                 scalar_params.append(param)
 
-        # Collect dispatch dimensions
-        has_2d = node.space_dim >= 2 and len(node.loop_vars) >= 2
-        has_3d = node.space_dim >= 3 and len(node.loop_vars) >= 3
+        return buffer_params, scalar_params, has_matrix_params
 
-        self._space_dim = node.space_dim
-        if is_triangular:
-            self._kernel_type: str = "Triangular"
-        elif has_matrix_params:
-            self._kernel_type: str = "Matrix"
-        else:
-            self._kernel_type: str = "Vector"
-        rows_param_name = node.loop_vars[0] if node.loop_vars else "dispatch_rows"
-        cols_param_name = node.loop_vars[1] if has_2d else None
-        levels_param_name = node.loop_vars[2] if has_3d else None
-
-        # Workgroup sizes
+    def _resolve_workgroup_sizes(self, node: ast.Program) -> tuple[str, str, str]:
         wg_x, wg_y, wg_z = "1", "1", "1"
         for wg in node.workgroups:
             if isinstance(wg, ast.WorkgroupProperties):
@@ -425,32 +402,18 @@ class VulkanCppStubVisitor(Visitor):
                     wg_y = y_val
                 if z_val.isdigit():
                     wg_z = z_val
+        return wg_x, wg_y, wg_z
 
-        # ── Emit C++ header ────────────────────────────────────────────
-
-        method_params: List[str] = []
-        method_params.append("        VulkanComputeContext& context")
-
-        if has_3d:
-            method_params.append("        uint32_t dispatch_rows")
-            method_params.append("        uint32_t dispatch_cols")
-            method_params.append("        uint32_t dispatch_levels")
-        elif has_2d:
-            method_params.append("        uint32_t dispatch_rows")
-            method_params.append("        uint32_t dispatch_cols")
-        else:
-            method_params.append("        uint32_t dispatch_rows")
-
-        # Add buffer params as runtime device buffers. The generated structs
-        # above document SSBO layout, but runtime-sized buffers may be smaller
-        # than the maximum static type for flexible kernels.
-        for param, sname, arg_name in buffer_params:
-            const_prefix = "const " if getattr(param, "is_const", False) else ""
-            method_params.append(f"        {const_prefix}VBaseDeviceBuffer& {arg_name}")
-
-        # Build push constant field names (deduplicated)
+    def _build_push_constant_fields(
+        self,
+        scalar_params: List[ast.Declaration],
+        has_2d: bool,
+        has_3d: bool,
+        is_triangular: bool,
+        node: ast.Program,
+    ) -> List[Any]:
         pc_field_names = set()
-        all_pc_fields = []
+        all_pc_fields: List[Any] = []
 
         if "rllm_bound_x" not in pc_field_names:
             pc_field_names.add("rllm_bound_x")
@@ -473,21 +436,39 @@ class VulkanCppStubVisitor(Visitor):
                     continue
                 if _is_push_identifier(tb) and tb not in pc_field_names and not tb.lstrip("-").isdigit():
                     pc_field_names.add(tb)
-                    # Create a synthetic field for triangular bounds
-                    all_pc_fields.append(
-                        type(
-                            "",
-                            (),
-                            {"name": tb, "var_type": ast.Int()},
-                        )()
-                    )
+                    all_pc_fields.append(type("", (), {"name": tb, "var_type": ast.Int()})())
+
+        return all_pc_fields
+
+    def _build_method_params(
+        self,
+        has_2d: bool,
+        has_3d: bool,
+        buffer_params: List[Tuple[ast.Declaration, str, str]],
+        all_pc_fields: List[Any],
+    ) -> List[str]:
+        method_params: List[str] = ["        VulkanComputeContext& context"]
+
+        if has_3d:
+            method_params.append("        uint32_t dispatch_rows")
+            method_params.append("        uint32_t dispatch_cols")
+            method_params.append("        uint32_t dispatch_levels")
+        elif has_2d:
+            method_params.append("        uint32_t dispatch_rows")
+            method_params.append("        uint32_t dispatch_cols")
+        else:
+            method_params.append("        uint32_t dispatch_rows")
+
+        for param, _sname, arg_name in buffer_params:
+            const_prefix = "const " if getattr(param, "is_const", False) else ""
+            method_params.append(f"        {const_prefix}VBaseDeviceBuffer& {arg_name}")
 
         if all_pc_fields:
-            method_params.append(
-                f"        const {self._kernel_name}_PushConstants& push_constants"
-            )
+            method_params.append(f"        const {self._kernel_name}_PushConstants& push_constants")
 
-        # Emit includes
+        return method_params
+
+    def _emit_header_prelude(self, node: ast.Program) -> None:
         self._emit("")
         hdr_text = node.header.strip('"') if node.header else "unknown"
         self._emit(f"// ── Kernel dispatch stub: {hdr_text} ─────────────")
@@ -500,7 +481,9 @@ class VulkanCppStubVisitor(Visitor):
         self._emit(f"namespace {self._namespace_name} {{")
         self._emit("")
 
-        # Buffer structs (matching SSBO layout)
+    def _emit_buffer_structs(
+        self, buffer_params: List[Tuple[ast.Declaration, str, str]]
+    ) -> None:
         emitted_struct_names = set()
         emitted_dim_constants = set()
         for param, sname, _arg_name in buffer_params:
@@ -510,12 +493,14 @@ class VulkanCppStubVisitor(Visitor):
             vt = param.var_type
             size_str = self._compute_matrix_size(vt)
             dim_constants = self._buffer_dimension_constants(param.name, vt)
+            new_constants = False
             for cname, cvalue in dim_constants:
                 if cname in emitted_dim_constants:
                     continue
                 emitted_dim_constants.add(cname)
+                new_constants = True
                 self._emit(f"inline constexpr uint32_t {cname} = {cvalue};")
-            if any(cname in emitted_dim_constants for cname, _ in dim_constants):
+            if new_constants:
                 self._emit("")
 
             self._emit(f"struct {sname} {{")
@@ -525,47 +510,28 @@ class VulkanCppStubVisitor(Visitor):
             self._emit("};")
             self._emit("")
 
-        # Push constants struct for scalar params and triangular bounds
-        if all_pc_fields:
-            pc_name = f"{self._kernel_name}_PushConstants"
-            self._emit(f"struct {pc_name} {{")
-            self._push()
-
-            for field in all_pc_fields:
-                ctype = "float" if isinstance(getattr(field, "var_type", None), ast.Float) else "int32_t"
-                self._emit(f"    {ctype} {field.name};")
-
-            self._pop()
-            self._emit("};")
-            self._emit("")
-
-        # Kernel wrapper class and dispatch method
-        class_name = self._class_name(self._kernel_name)
-        push_size = f"sizeof({self._kernel_name}_PushConstants)" if all_pc_fields else "0"
-        self._emit(f"class {class_name} : public AbstractKernel {{")
-        self._emit("public:")
+    def _emit_push_constant_struct(self, all_pc_fields: List[Any]) -> None:
+        if not all_pc_fields:
+            return
+        pc_name = f"{self._kernel_name}_PushConstants"
+        self._emit(f"struct {pc_name} {{")
         self._push()
-        self._emit(f"{class_name}(VulkanSession& session, const std::string& glsl_file)")
-        kernel_name_str = '\"' + self._namespace_name + '::' + class_name + '|' + self._display_name + '", '
-        kernel_type_str = 'KernelDimension::' + self._cpp_dimension() + ', KernelType::' + self._cpp_type()
-        self._emit('    : AbstractKernel(' + kernel_name_str + kernel_type_str + ')')
-        self._emit(f"    , kernel_(session, glsl_file, {push_size}, {len(buffer_params)})")
-        self._emit("{")
-        self._emit("}")
+        for field in all_pc_fields:
+            ctype = "float" if isinstance(getattr(field, "var_type", None), ast.Float) else "int32_t"
+            self._emit(f"    {ctype} {field.name};")
+        self._pop()
+        self._emit("};")
         self._emit("")
-        self._emit("void dispatch(")
-        for i, fp in enumerate(method_params):
-            comma = "," if i < len(method_params) - 1 else ""
-            self._emit(fp + comma)
-        self._emit(") {")
-        self._push()
 
-        # Determine tile block size (set by perform_blocking when tiling is active)
-        tile_bs = getattr(node, "tile_block_size", None)
-
-        def _div_ceil(a, b):
-            return "((" + a + ") + (" + str(b) + ") - 1) / (" + str(b) + ")"
-
+    def _compute_dispatch_dims(
+        self,
+        node: ast.Program,
+        has_2d: bool,
+        has_3d: bool,
+        wg_x: str,
+        wg_y: str,
+        wg_z: str,
+    ) -> tuple[str, str, str]:
         if has_3d:
             x_dim = f"(dispatch_rows + {wg_x} - 1) / {wg_x}"
             y_dim = f"(dispatch_cols + {wg_y} - 1) / {wg_y}"
@@ -573,21 +539,71 @@ class VulkanCppStubVisitor(Visitor):
         elif has_2d:
             x_dim = f"(dispatch_rows + {wg_x} - 1) / {wg_x}"
             y_dim = f"(dispatch_cols + {wg_y} - 1) / {wg_y}"
-            z_dim = str(getattr(node, "reduction_chunks", 1))
+            z_dim = str(node.reduction_chunks)
         else:
             x_dim = f"(dispatch_rows + {wg_x} - 1) / {wg_x}"
             y_dim = "1"
-            z_dim = str(getattr(node, "reduction_chunks", 1))
+            z_dim = str(node.reduction_chunks)
+        return x_dim, y_dim, z_dim
 
-        # Check for workgroup partitioning (performed by the parallelization pass).
-        # When parallelized with K > 1, dispatch dimensions are adjusted so that
-        # total work items cover the iteration space. Each thread handles one element.
-        parallelized = getattr(node, "parallelized", False)
-        wg_count = getattr(node, "workgroup_count", 1)
+    def _emit_kernel_class(
+        self,
+        node: ast.Program,
+        class_name: str,
+        method_params: List[str],
+        all_pc_fields: List[Any],
+        buffer_params: List[Tuple[ast.Declaration, str, str]],
+        has_2d: bool,
+        has_3d: bool,
+        wg_x: str,
+        wg_y: str,
+        wg_z: str,
+    ) -> None:
+        push_size = f"sizeof({self._kernel_name}_PushConstants)" if all_pc_fields else "0"
+        self._emit(f"class {class_name} : public AbstractKernel {{")
+        self._emit("public:")
+        self._push()
+        self._emit(f"{class_name}(VulkanSession& session, const std::string& glsl_file)")
+        kernel_name_str = '"' + self._namespace_name + '::' + class_name + '|' + self._display_name + '", '
+        kernel_type_str = 'KernelDimension::' + self._cpp_dimension() + ', KernelType::' + self._cpp_type()
+        self._emit('    : AbstractKernel(' + kernel_name_str + kernel_type_str + ')')
+        self._emit(f"    , kernel_(session, glsl_file, {push_size}, {len(buffer_params)})")
+        self._emit("{")
+        self._emit("}")
+        self._emit("")
+
+        tiled = bool(node.tiled)
+        parallelized = bool(node.parallelized)
+        tile_bs = node.tile_block_size
+        if tile_bs is None:
+            tile_bs = 1
+        wg_count = node.workgroup_count
+        if wg_count is None:
+            wg_count = 1
+        shared_tiling = bool(node.use_shared_memory_tiling)
+        descriptor = (
+            f"tiling={'on' if tiled else 'off'};"
+            f"parallelized={'on' if parallelized else 'off'};"
+            f"tile_block_size={tile_bs};"
+            f"workgroup_count={wg_count};"
+            f"shared_memory_tiling={'on' if shared_tiling else 'off'}"
+        )
+        self._emit(f"static constexpr const char* generated_descriptor() {{ return \"{descriptor}\"; }}")
+        self._emit("")
+
+        self._emit("void dispatch(")
+        for i, fp in enumerate(method_params):
+            comma = "," if i < len(method_params) - 1 else ""
+            self._emit(fp + comma)
+        self._emit(") {")
+        self._push()
+
+        x_dim, y_dim, z_dim = self._compute_dispatch_dims(node, has_2d, has_3d, wg_x, wg_y, wg_z)
+        parallelized = bool(node.parallelized)
 
         self._emit("ComputeKernelRegistry::ScopedActiveKernel active_kernel(*this);")
         self._emit("VkCommandBuffer command_buffer = context.begin_command_buffer();")
-        
+
         if buffer_params:
             self._emit("VkDescriptorSet desc_set = kernel_.desc_set();")
             self._emit(f"VkDescriptorBufferInfo buffer_infos[{len(buffer_params)}]{{}};")
@@ -614,19 +630,13 @@ class VulkanCppStubVisitor(Visitor):
                 "kernel_.pipeline_layout(), 0, 1, &desc_set, 0, nullptr);"
             )
         self._emit("vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, kernel_.pipeline());")
-        
-        # For parallelized kernels: use full GPU-wide dispatch so each thread handles one element.
-        # The shader uses gl_GlobalInvocationID + stride-based iteration to partition work across K groups.
+
         if parallelized and wg_count > 1:
-            # x_dim = ceil(rows / wg_x) covers all N elements with total_threads = x_dim * wg_x >= N.
-            # Each thread processes one element via gl_GlobalInvocationID; the shader partitions
-            # using stride = rllm_wg_count (passed as push constant) for bounds checking.
             self._emit(f"vkCmdDispatch(command_buffer, {x_dim}, {y_dim}, {z_dim});")
         else:
             self._emit(f"vkCmdDispatch(command_buffer, {x_dim}, {y_dim}, {z_dim});")
         self._emit("context.submit_and_wait();")
 
-        # Close dispatch body and pop indent level.
         self._emit("}")
         self._pop()
         self._emit("")
@@ -636,6 +646,56 @@ class VulkanCppStubVisitor(Visitor):
         self._pop()
         self._emit("};")
 
+    def visit_program(self, node: ast.Program) -> str:
+        """Generate the complete C++ stub header for RLLM-style kernels."""
+        self._initialize_program_emit_state()
+        self._configure_kernel_identity(node)
+
+        buffer_params, scalar_params, has_matrix_params = self._classify_program_params(node)
+        is_triangular = len(node.triangular_bounds_raw) >= 2
+        has_2d = node.space_dim >= 2 and len(node.loop_vars) >= 2
+        has_3d = node.space_dim >= 3 and len(node.loop_vars) >= 3
+
+        self._space_dim = node.space_dim
+        if is_triangular:
+            self._kernel_type = "Triangular"
+        elif has_matrix_params:
+            self._kernel_type = "Matrix"
+        else:
+            self._kernel_type = "Vector"
+
+        wg_x, wg_y, wg_z = self._resolve_workgroup_sizes(node)
+        all_pc_fields = self._build_push_constant_fields(
+            scalar_params=scalar_params,
+            has_2d=has_2d,
+            has_3d=has_3d,
+            is_triangular=is_triangular,
+            node=node,
+        )
+        method_params = self._build_method_params(
+            has_2d=has_2d,
+            has_3d=has_3d,
+            buffer_params=buffer_params,
+            all_pc_fields=all_pc_fields,
+        )
+
+        self._emit_header_prelude(node)
+        self._emit_buffer_structs(buffer_params)
+        self._emit_push_constant_struct(all_pc_fields)
+
+        class_name = self._class_name(self._kernel_name)
+        self._emit_kernel_class(
+            node=node,
+            class_name=class_name,
+            method_params=method_params,
+            all_pc_fields=all_pc_fields,
+            buffer_params=buffer_params,
+            has_2d=has_2d,
+            has_3d=has_3d,
+            wg_x=wg_x,
+            wg_y=wg_y,
+            wg_z=wg_z,
+        )
 
         self._emit("}")
         return self.result()

@@ -217,7 +217,11 @@ TEST_F(VulkanTestBase, multi_arg_correctness)
         b2_buf,
         a3_buf,
         b3_buf,
-        c_buf);
+        c_buf,
+        rllm_multi_arg::multi_arg_vecmath_PushConstants{
+            static_cast<int32_t>(ROWS),
+            static_cast<int32_t>(COLS),
+        });
 
     VHostBuffer<rllm_multi_arg::RllmBuffer_C> actual(get_session());
     c_buf.read(ctx, actual);
@@ -609,6 +613,10 @@ TEST_F(VulkanTestBase, tiled_kernel_generates_correct_output)
     rllm_single_assign::SingleAssignVecmathKernel kernel(
         get_session(),
         TESTDATA_DIR "/single-assign.glsl");
+    const std::string descriptor = rllm_single_assign::SingleAssignVecmathKernel::generated_descriptor();
+    EXPECT_NE(descriptor.find("tiling=on"), std::string::npos)
+        << "expected generated stub descriptor to report tiling, got: " << descriptor;
+
     VulkanComputeContext ctx(get_session());
 
     kernel.dispatch(

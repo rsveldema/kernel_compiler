@@ -311,13 +311,13 @@ class VulkanKernelVisitor(Visitor):
         return None
 
     def _is_shared_memory_multi_arg(self, node: Program) -> bool:
-        if not getattr(node, "use_shared_memory_tiling", False):
+        if not node.use_shared_memory_tiling:
             return False
         names = [p.name for p in node.params if isinstance(p, Declaration)]
         return names == ["A1", "B1", "A2", "B2", "A3", "B3", "C"]
 
     def _is_cooperative_matrix2_multi_arg(self, node: Program) -> bool:
-        if not getattr(node, "use_cooperative_matrix2", False):
+        if not node.use_cooperative_matrix2:
             return False
         names = [p.name for p in node.params if isinstance(p, Declaration)]
         return names == ["A1", "B1", "A2", "B2", "A3", "B3", "C"]
@@ -1205,7 +1205,7 @@ class VulkanKernelVisitor(Visitor):
         self._push_constant_fields = []
         self._push_constant_map = {}
         self._triangular_upper_bound_name = None
-        self._uses_reduction_chunks = getattr(node, "reduction_chunks", 1) > 1
+        self._uses_reduction_chunks = node.reduction_chunks > 1
 
         self._emit("#version 450")
         self._emit("#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require")
@@ -1215,7 +1215,7 @@ class VulkanKernelVisitor(Visitor):
         self._emit("#extension GL_KHR_shader_subgroup_clustered : require")
         self._emit("#extension GL_EXT_shader_atomic_float : require")
         self._emit("#extension GL_EXT_shader_atomic_float2 : require")
-        if getattr(node, "use_cooperative_matrix2", False):
+        if node.use_cooperative_matrix2:
             self._emit("#extension GL_KHR_memory_scope_semantics : require")
             self._emit("#extension GL_KHR_cooperative_matrix : require")
             self._emit("#extension GL_NV_cooperative_matrix2 : require")
@@ -1225,12 +1225,8 @@ class VulkanKernelVisitor(Visitor):
 
         # ── Classify parameters ──
         all_matrix_params = []
-        triangular_bounds_raw = (
-            node.triangular_bounds_raw
-            if getattr(node, "triangular_bounds_raw", None)
-            else []
-        )
-        triangular_kind = getattr(node, "triangular_kind", "")
+        triangular_bounds_raw = node.triangular_bounds_raw
+        triangular_kind = node.triangular_kind
         is_triangular = bool(triangular_kind) or len(triangular_bounds_raw) >= 2
         if is_triangular and _is_push_identifier(triangular_bounds_raw[1]) and not triangular_bounds_raw[1].lstrip("-").isdigit():
             self._triangular_upper_bound_name = triangular_bounds_raw[1]
@@ -1282,7 +1278,7 @@ class VulkanKernelVisitor(Visitor):
                 self._push_constant_map[name] = True
 
         # When parallelized, pass workgroup_count K to the shader for stride-based iteration.
-        if getattr(node, 'parallelized', False) and getattr(node, 'workgroup_count', 1) > 1:
+        if node.parallelized and node.workgroup_count > 1:
             self._push_constant_fields.insert(0, ('rllm_wg_count', 'int'))
             self._push_constant_map['rllm_wg_count'] = True
 
@@ -1301,10 +1297,8 @@ class VulkanKernelVisitor(Visitor):
         constexpr_map = {}
         
         # Add param-level constexpr defines (for unresolved identifier resolution in types)
-        has_attr = hasattr(node, "_param_constexpr_defines")
-        if has_attr:
-            for name, expr in node._param_constexpr_defines:
-                constexpr_map[name] = expr
+        for name, expr in node._param_constexpr_defines:
+            constexpr_map[name] = expr
         
         # Then merge with body-level constexpr defines
         for name, expr in self._constexpr_defines:
@@ -1390,16 +1384,16 @@ class VulkanKernelVisitor(Visitor):
         if self._is_shared_memory_multi_arg(node):
             self._emit("")
             self._emit_shared_memory_multi_arg_body(
-                getattr(node, "tile_block_size", 8),
-                getattr(node, "shared_memory_chunk_size", 8),
+                node.tile_block_size,
+                node.shared_memory_chunk_size,
             )
             return self.result()
 
         if self._is_cooperative_matrix2_multi_arg(node):
             self._emit("")
             self._emit_cooperative_matrix2_multi_arg_body(
-                getattr(node, "tile_block_size", 8),
-                getattr(node, "cooperative_matrix2_chunk_size", 8),
+                node.tile_block_size,
+                node.cooperative_matrix2_chunk_size,
             )
             return self.result()
 
@@ -1409,13 +1403,13 @@ class VulkanKernelVisitor(Visitor):
         self._push()
 
         # Tile variable names (when tiling is applied)
-        if getattr(node, "tiled", False):
+        if node.tiled:
             self._emit_tile_vars(node)
 
         # ── Parallelized initialization (GPU-wide parallel dispatch) ──
-        parallelized = getattr(node, 'parallelized', False)
+        parallelized = node.parallelized
         if parallelized and node.space_dim >= 1 and node.loop_vars:
-            workgroup_count = getattr(node, 'workgroup_count', 1)
+            workgroup_count = node.workgroup_count
             
             # Compute global index using gl_GlobalInvocationID for true GPU-wide parallelism.
             # Each thread handles one element per invocation. When K > 1, the dispatch
