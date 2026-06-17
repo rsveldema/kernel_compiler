@@ -122,6 +122,14 @@ class NegationExpr(Expression):
         return visitor.visit_negation_expr(self)
 
 
+class WildcardExpression(Expression):
+    def __init__(self, name: str):
+        self.name = name
+
+    def accept(self, visitor):
+        return visitor.visit_wildcard_expression(self)
+
+
 __all__ = [
     "Expression",
     "Number",
@@ -133,6 +141,7 @@ __all__ = [
     "BinaryExpr",
     "CastExpr",
     "NegationExpr",
+    "WildcardExpression",
     "TernaryExpr",
     "UnaryMinusExpr",
 ]

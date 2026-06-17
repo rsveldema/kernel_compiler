@@ -54,7 +54,7 @@ class ForLoopWithConditionAndIncrement(ForStatement):
         self,
         loop_var_type: Type | None = None,
         loop_var_name: str = "",
-        condition: Expression | None = None,
+        condition: Condition | Expression | None = None,
         increment_var: str = "",
         increment_op: str = "",
         body_stmts: list[Statement] | None = None,
@@ -146,6 +146,24 @@ class SharedDecl(Statement):
         return visitor.visit_shared_decl(self)
 
 
+class RawStatement(Statement):
+    """A raw statement emitted as-is by code generators."""
+
+    def __init__(self, text: str):
+        self.text = text
+
+    def accept(self, visitor):
+        return visitor.visit_raw_statement(self)
+
+
+class WildcardStatement(Statement):
+    def __init__(self, name: str):
+        self.name = name
+
+    def accept(self, visitor):
+        return visitor.visit_wildcard_statement(self)
+
+
 __all__ = [
     "Condition",
     "Statement",
@@ -158,6 +176,8 @@ __all__ = [
     "Assignment",
     "OverflowCheck",
     "SharedDecl",
+    "RawStatement",
+    "WildcardStatement",
     "ReturnStatement",
     "AtomicOp",
 ]

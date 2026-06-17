@@ -65,11 +65,17 @@ class Visitor:
 
     def visit_binary_expr(self, node: _ast.BinaryExpr):
         raise NotImplementedError
-
+    
+    def visit_call_expr(self, node: _ast.CallExpr):
+        raise NotImplementedError
+    
     def visit_cast_expr(self, node: _ast.CastExpr):
         raise NotImplementedError
 
     def visit_negation_expr(self, node: _ast.NegationExpr):
+        raise NotImplementedError
+
+    def visit_wildcard_expression(self, node: _ast.WildcardExpression):
         raise NotImplementedError
 
     def visit_condition(self, node: _ast.Condition):
@@ -99,6 +105,12 @@ class Visitor:
         raise NotImplementedError
 
     def visit_shared_decl(self, node: _ast.SharedDecl):
+        raise NotImplementedError
+
+    def visit_raw_statement(self, node: _ast.RawStatement):
+        raise NotImplementedError
+
+    def visit_wildcard_statement(self, node: _ast.WildcardStatement):
         raise NotImplementedError
 
     def visit_workgroup_properties(self, node: _ast.WorkgroupProperties):

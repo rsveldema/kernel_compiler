@@ -623,6 +623,9 @@ class VulkanKernelVisitor(Visitor):
         operand = self._visit_expr_child(node.operand)
         return f"!{operand}"
 
+    def visit_wildcard_expression(self, node: WildcardExpression) -> str:
+        return f"wildcard({node.name})"
+
     # ── condition visitor ──────────────────────────────────────────────
 
     def visit_condition(self, node: Condition) -> str:
@@ -702,7 +705,7 @@ class VulkanKernelVisitor(Visitor):
         return "\n".join(lines) + "\n"
 
     def visit_if(self, node: If) -> str:
-        cond_str = self.visit_condition(node.condition) if node.condition else "?"
+        cond_str = self._to_str(node.condition) if node.condition else "?"
         ind = "    " * (self._indent_level + 1)
         lines = [f"{ind}if ({cond_str}) {{"]
 
@@ -788,6 +791,12 @@ class VulkanKernelVisitor(Visitor):
         if node.init_expr is not None:
             init_str = f" = {self._to_str(node.init_expr)}"
         return f"shared {prefix}{var_type} {node.name}{init_str};"
+
+    def visit_raw_statement(self, node: RawStatement) -> str:
+        return node.text.rstrip()
+
+    def visit_wildcard_statement(self, node: WildcardStatement) -> str:
+        return f"wildcard({node.name})"
 
     def visit_workgroup_properties(self, node: WorkgroupProperties) -> str:
         parts = []

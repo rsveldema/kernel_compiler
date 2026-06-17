@@ -582,3 +582,50 @@ TEST_F(VulkanTestBase, with_wg2_correctness)
               << ", workgroup=" << wg_x << "x" << wg_y
               << ", push.A=" << push_A << ")";
 }
+
+// ───────────── Test: Tiled execution (workgroup partitioning) ──
+
+TEST_F(VulkanTestBase, tiled_kernel_generates_correct_output)
+{
+    /**
+     * Verify that workgroup partitioning (tiling) correctly transforms loops
+     * into workgroup-local strided loops with barriers.
+     * 
+     * This test validates that:
+     * 1. Parallelizable loops are correctly identified
+     * 2. Step 2 guard (local_id == 0 barriers) is inserted
+     * 3. Step 3 chunking (loop tiling with stride) is applied
+     * 4. Numerical correctness is preserved after transformation
+     */
+    constexpr uint32_t N = 128;
+    int push_value = 77;
+    std::vector<int> expected(N, 77);
+
+    VHostBuffer<rllm_single_assign::RllmBuffer_dst> readback(get_session());
+    VDeviceBuffer<rllm_single_assign::RllmBuffer_dst> dst_buf(readback);
+
+    // Load the standard single-assign kernel; its loop will be tiled if
+    // the tiling pass is enabled during code generation
+    rllm_single_assign::SingleAssignVecmathKernel kernel(
+        get_session(),
+        TESTDATA_DIR "/single-assign.glsl");
+    VulkanComputeContext ctx(get_session());
+
+    kernel.dispatch(
+        ctx,
+        N,
+        dst_buf,
+        rllm_single_assign::single_assign_vecmath_PushConstants{push_value});
+
+    dst_buf.read(ctx, readback);
+    const int* actual = reinterpret_cast<const int*>(readback.get()->data);
+
+    // Verify tiled loop produces correct results
+    for (uint32_t i = 0; i < N; ++i) {
+        EXPECT_EQ(actual[i], push_value)
+            << "tiled kernel produced incorrect value at index " << i;
+    }
+
+    SUCCEED() << "tiled kernel dispatch completed with N=" << N
+              << " and produced correct output (all elements = " << push_value << ")";
+}

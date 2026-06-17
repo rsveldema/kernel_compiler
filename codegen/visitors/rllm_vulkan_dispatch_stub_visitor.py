@@ -189,3 +189,6 @@ class RllmVulkanDispatchStubVisitor(Visitor):
         result += chr(10)
         result += "} // namespace rllm::vulkan::generated" + chr(10)
         return result
+
+    def visit_raw_statement(self, node: ast.RawStatement) -> str:
+        return node.text.rstrip()

@@ -189,6 +189,12 @@ class PrettyPrinter(Visitor):
             f"{indent}  rhs: {node.right.accept(self)}\n"
             f"{indent}>"
         )
+    
+    def visit_call_expr(self, node: ast.CallExpr) -> str:
+        callee = node.callee.accept(self) if node.callee else ""
+        args = ", ".join(arg.accept(self) for arg in node.args)
+        return f"{callee}({args})"
+
 
     def visit_cast_expr(self, node: ast.CastExpr):
         return (
@@ -198,6 +204,9 @@ class PrettyPrinter(Visitor):
 
     def visit_negation_expr(self, node: ast.NegationExpr):
         return f"{self._indent_str()}!{node.operand.accept(self)}"
+
+    def visit_wildcard_expression(self, node: ast.WildcardExpression):
+        return f"{self._indent_str()}wildcard({node.name})"
 
     # ── Condition visitors ───────────────────────────────────────────
 
@@ -261,6 +270,15 @@ class PrettyPrinter(Visitor):
         prefix = "const " if node.is_const else ""
         init_str = f" = {node.init_expr.accept(self)}" if node.init_expr else ""
         return f"{indent}shared {prefix}{node.var_type.accept(self)} {node.name}{init_str};"
+
+    def visit_raw_statement(self, node: ast.RawStatement):
+        text = node.text.rstrip()
+        if not text.endswith(";") and not text.endswith("}"):
+            text += ";"
+        return f"{self._indent_str()}{text}"
+
+    def visit_wildcard_statement(self, node: ast.WildcardStatement):
+        return f"{self._indent_str()}wildcard({node.name})"
 
     def visit_workgroup_properties(self, node: ast.WorkgroupProperties):
         indent = self._indent_str()

@@ -4,7 +4,20 @@
 program: header parfor_space parfor_parameters body
 
 // when a search pattern:
-search_replace_pattern: "search" statement "replace" statement
+search_replace_pattern: search search_statements replace replace_statements constraints
+
+// compile-time evaluated if the replacement should be allowed
+constraints: "constraints" expression
+
+
+search_statements: statement*
+replace_statements: statement*
+
+search: SEARCH
+replace: REPLACE
+
+SEARCH: "search"
+REPLACE: "replace"
 
 parfor_parameters: "PARAMETERS" decl_list
 
@@ -35,6 +48,12 @@ statement: for_statement
 | block
 | return_statement
 | atomic_op
+| wildcard_statement
+
+wildcard_statement: wildcard "(" IDENT ")"
+wildcard_expression: wildcard "(" IDENT ")"
+wildcard: WILDCARD
+WILDCARD: "wildcard"
 
 
 atomic_op: ATOMIC_OP "(" expression "," expression ")" ";"
@@ -109,6 +128,7 @@ call_args: "("  (expression ("," expression)*)?   ")"
 lhs: field_access
 
 expression: base_expr (binary_operator expression)?  ternary_trailer?
+| wildcard_expression
 
 ternary_trailer: "?" expression ":" expression
 

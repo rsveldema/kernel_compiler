@@ -391,6 +391,9 @@ class ResolveArrayIndicesVisitor(Expression):
         operand = node.operand.accept(self) if node.operand else None
         return NegationExpr(operand=operand)
 
+    def visit_wildcard_expression(self, node: WildcardExpression):
+        return WildcardExpression(name=node.name)
+
     # -- Condition visitors --
     def visit_condition(self, node: Condition):
         lhs = node.lhs.accept(self) if node.lhs else None
@@ -470,6 +473,12 @@ class ResolveArrayIndicesVisitor(Expression):
         lvalue = node.lvalue.accept(self) if node.lvalue else None
         operand = node.operand.accept(self) if node.operand else None
         return OverflowCheck(lvalue=lvalue, operand=operand)
+
+    def visit_wildcard_statement(self, node: WildcardStatement):
+        return WildcardStatement(name=node.name)
+
+    def visit_raw_statement(self, node: RawStatement):
+        return RawStatement(text=node.text)
 
     def visit_atomic_op(self, node: AtomicOp):
         lhs = node.lhs.accept(self) if node.lhs else None

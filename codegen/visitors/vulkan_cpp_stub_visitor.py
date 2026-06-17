@@ -196,6 +196,9 @@ class VulkanCppStubVisitor(Visitor):
         operand = self._visit_expr_child(node.operand)
         return f"!{operand}"
 
+    def visit_wildcard_expression(self, node: ast.WildcardExpression) -> str:
+        return f"wildcard({node.name})"
+
     # ── condition visitor ──────────────────────────────────────────────
 
     def visit_condition(self, node: ast.Condition) -> str:
@@ -238,6 +241,12 @@ class VulkanCppStubVisitor(Visitor):
 
     def visit_shared_decl(self, node: ast.SharedDecl) -> str:
         raise NotImplementedError("visit_shared_decl")
+
+    def visit_raw_statement(self, node: ast.RawStatement) -> str:
+        return node.text.rstrip()
+
+    def visit_wildcard_statement(self, node: ast.WildcardStatement) -> str:
+        return f"wildcard({node.name})"
 
     # ── workgroup and program visitors ────────────────────────────────
 

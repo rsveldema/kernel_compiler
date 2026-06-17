@@ -10,7 +10,10 @@ from codegen.kast.statement import (
     Condition,
     ForLoopRange,
 )
-from codegen.kast.expression import Identifier, Number, LimitExpr
+from codegen.kast.expression import Identifier, Number, LimitExpr, CastExpr, FieldAccess
+from codegen.kast.statement import Declaration
+from codegen.kast.type import Int
+from codegen.visitors.tree_rewriter import TreeRewriter
 
 
 DEFAULT_WORKGROUPS = 8
@@ -22,19 +25,28 @@ def perform_tiling(program: Program, workgroups: int = DEFAULT_WORKGROUPS) -> Pr
 
     step 0: check if the kernel contains loops of the form for (int i = 0; i < N; i++) where N is a concrete integer bound.
     step 1: mark the program as tiled and set a tile_block_size (e.g., 8) if such loops are found, but do not yet transform the loops.
-    step 2: wrap each non for loop statement S in an:
-                if (is_first_in_local_workgroup()) S
+    step 2: use the tree_rewriter:
+            
+            search 
+                wildcard_statement(S)
+            replace 
+                if (is_first_in_local_workgroup()) 
+                    wildcard_statement(S)
                 workgroup_barrier()
-            guard
-    step 3: each loop is transformed to operate on a portion of the loop. 
-            For example, given a loop inside a kernel like: 
+            constraints S != ForStatement
+
+    step 3:  use the tree_rewriter: each loop is transformed to operate on a portion of the loop. 
+
+            search
                 for (int i = 0; i < N; i++)
-            we transform it to 
-                start_i = local_id * chunk_size
-                end_i = start_i + chunk_size
+                    wildcard_statement(S)
+            replace
+                int chunk_size = ceil(N / workgroups)
+                int start_i = local_id * chunk_size
+                int end_i = start_i + chunk_size
                 for (int i = start_i; i < end_i; i++) 
-                    ...
-            where chunk_size is "ceil(N / workgroups)".
+                    wildcard_statement(S)
+    
     step 4: each statement X += Y we assume is a reduction and transform it to a local reduction across the workgroup
             for example:
                 float sum = 0.0f;
@@ -59,34 +71,45 @@ def perform_tiling(program: Program, workgroups: int = DEFAULT_WORKGROUPS) -> Pr
     step 5: the Vulkan backend will detect the tiled loops and emit appropriate workgroup sizes
     """
 
-    if not program.contains_fixed_size_loops():
+    loops = _find_parallelizable_loops(program)
+    if len(loops) == 0:
         return program
 
+    parallelizable_loop_bounds = {entry["upper_bound"] for entry in loops}
 
+    program.tiled = True
+    program.tile_block_size = workgroups
+    program.workgroup_count = workgroups
+    program.workgroup_size = workgroups
+
+    rewrite_context = {
+        "workgroups": workgroups,
+        "target_loop_bounds": parallelizable_loop_bounds,
+    }
+    rewritten_program = TreeRewriter(rewrite_context).visit_program(program)
+    body_stmts = getattr(rewritten_program, "body_stmts", []) or []
+
+    prefix_stmts = [
+        Declaration(
+            is_const=True,
+            var_type=Int(),
+            name="rllm_wg_count",
+            init_expr=Number(str(workgroups)),
+        ),
+        Declaration(
+            is_const=True,
+            var_type=Int(),
+            name="local_id",
+            init_expr=CastExpr(Int(), FieldAccess(Identifier("gl_LocalInvocationID"), "x")),
+        ),
+    ]
+
+    program.body_stmts = prefix_stmts + body_stmts
 
     return program
 
 
 # ── Helpers ────────────────────────────────────────────────────────
-
-
-def _extract_number(expr):
-    """Extract a concrete number from an expression node."""
-    if expr is None:
-        return None
-    from codegen.kast.expression import Number
-    if isinstance(expr, Number):
-        val = getattr(expr, "value", None)
-        if val is not None and isinstance(val, (int, float)):
-            return int(val)
-    return None
-
-
-def _make_number(val):
-    """Create a Number expression from an int/str value."""
-    if isinstance(val, Number):
-        return val
-    return Number(str(val))
 
 
 def _extract_upper_bound(expr):
@@ -157,7 +180,7 @@ def _get_loop_var_name(node, condition):
     return ""
 
 
-def _find_parallelizable_loops(program):
+def _find_parallelizable_loops(program) -> list[dict]:
     """Find parallelizable outer loops in the program body.
 
     A loop is parallelizable when:

@@ -301,6 +301,11 @@ def _transform_workgroup_properties(wg_tree):
 
 def transform_expression(expr_tree):
     """Convert an expression Tree to an AST node."""
+    if expr_tree.data == "wildcard_expression":
+        for child in expr_tree.children:
+            if _is_token(child) and child.type == "IDENT":
+                return WildcardExpression(child.value)
+
     if expr_tree.data == "inc_call":
         for child in expr_tree.children:
             if isinstance(child, Tree) and child.data == "expression":
@@ -427,6 +432,9 @@ def _transform_from_base(base_tree):
                 # Check for cast expression pattern: type_name(...) where
                 # the base IDENT is a known type name and call_args exists.
                 # This catches `int(l_idx)` which grammar prefers as field_access.
+                wildcard_result = _maybe_parse_wildcard_from_field_access(child)
+                if wildcard_result is not None:
+                    return wildcard_result
                 fa_result = _maybe_parse_cast_from_field_access(child)
                 if fa_result is not None:
                     return fa_result
@@ -503,6 +511,29 @@ def _maybe_parse_cast_from_field_access(fa_tree):
     # Resolve the type name
     cast_type = _resolve_nested_type(fa_tree.children[0]) or Int(first.value)
     return CastExpr(cast_type, operand)
+
+
+def _maybe_parse_wildcard_from_field_access(fa_tree):
+    """Detect wildcard(name) parsed through field_access/call_args."""
+    children = fa_tree.children
+    if not children:
+        return None
+
+    first = children[0]
+    is_wildcard = isinstance(first, Tree) and first.data == "wildcard"
+    is_wildcard = is_wildcard or (_is_token(first) and first.type == "IDENT" and first.value == "wildcard")
+    if not is_wildcard:
+        return None
+
+    for child in children[1:]:
+        if isinstance(child, Tree) and child.data == "call_args":
+            for arg_child in child.children:
+                if isinstance(arg_child, Tree) and arg_child.data == "expression":
+                    operand = transform_expression(arg_child)
+                    if isinstance(operand, Identifier):
+                        return WildcardExpression(operand.name)
+
+    return None
 
 
 def _transform_lvalue(lhs_tree):
@@ -832,6 +863,11 @@ def transform_statement(stmt_tree):
 
     if data == "statement":
         return transform_statement(stmt_tree.children[0])
+
+    if data == "wildcard_statement":
+        for child in stmt_tree.children:
+            if _is_token(child) and child.type == "IDENT":
+                return WildcardStatement(child.value)
 
     # Overflow check: 2 children [lhs, expression]
     if _is_overflow_check(stmt_tree):
