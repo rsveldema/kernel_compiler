@@ -16,79 +16,53 @@ from codegen.kast.expression import Identifier, Number, LimitExpr
 DEFAULT_WORKGROUPS = 8
 
 
-def perform_parallelize(program: Program, workgroups: int = DEFAULT_WORKGROUPS) -> Program:
+def perform_tiling(program: Program, workgroups: int = DEFAULT_WORKGROUPS) -> Program:
     """Transform loops iterating from 0..N into stride-based parallelized loops.
+    We'll introduce this in small steps that are semantics preserving and verifiable.
 
-    For a kernel with one or more sequential loops each iterating over the same
-    upper bound N, this pass detects parallelizable outermost loops (those whose
-    condition is ``i < N`` where N is a concrete number), computes a workgroup
-    size of ceil(N / workgroups), and stores metadata on the Program and loop
-    nodes so the Vulkan code generator can emit proper initialization with
-    early-exit guards.
+    step 0: check if the kernel contains loops of the form for (int i = 0; i < N; i++) where N is a concrete integer bound.
+    step 1: mark the program as tiled and set a tile_block_size (e.g., 8) if such loops are found, but do not yet transform the loops.
+    step 2: wrap each non for loop statement S in an:
+                if (is_first_in_local_workgroup()) S
+                workgroup_barrier()
+            guard
+    step 3: each loop is transformed to operate on a portion of the loop. 
+            For example, given a loop inside a kernel like: 
+                for (int i = 0; i < N; i++)
+            we transform it to 
+                start_i = local_id * chunk_size
+                end_i = start_i + chunk_size
+                for (int i = start_i; i < end_i; i++) 
+                    ...
+            where chunk_size is "ceil(N / workgroups)".
+    step 4: each statement X += Y we assume is a reduction and transform it to a local reduction across the workgroup
+            for example:
+                float sum = 0.0f;
+                for (int i=0; i<N; i++)
+                    sum += ...Y[i]...
+            becomes
+                float sum = 0.0f;
+                float local_X[number_of_workgroup_threads];
+                local_X[local_id] = 0.0f;
+                for (partition of loop)
+                    local_X[local_id] += ...Y[i]...
+                workgroup_barrier()
 
-    After this pass:
-      - program.parallelized == True
-      - program.workgroup_count  == workgroups (e.g. 8)
-      - program.workgroup_size   == ceil(N / workgroups)
-      - program.loop_upper_bound == N
-      - each parallelizable loop node carries:
-          _parallel_offset_var      -- generated offset variable name (e.g. i_offset)
-          _parallel_upper_bound     -- Number expression for N
-          _parallel_workgroup_size  -- Number expression for workgroup_size
+                stride = number_of_workgroup_threads / 2
+                for (int k = 0; k < log2(number_of_workgroup_threads); k++)
+                    if (is_even_thread_id())
+                        // perform local reduction in parallel. Thread 0 adds thread 1, thread 2 adds thread 3, etc. until we have the final sum in local_X[0]
+                        if ((local_id + stride) < number_of_workgroup_threads)
+                            local_X[local_id] += local_X[local_id + stride]
+                        stride /= 2
+                    workgroup_barrier()
+    step 5: the Vulkan backend will detect the tiled loops and emit appropriate workgroup sizes
     """
-    if getattr(program, "parallelized", False):
+
+    if not program.contains_fixed_size_loops():
         return program
 
-    # Find parallelizable explicit loops in body_stmts
-    explicit_loops = _find_parallelizable_loops(program)
 
-    has_parallel_bound = bool(explicit_loops)
-    max_bound = 0
-    for info in explicit_loops:
-        b = info["upper_bound"] or 0
-        if b > max_bound:
-            max_bound = b
-
-    # If no explicit parallelizable loops but there are loop_vars, check if
-    # there's an OFFLOAD_PARFOR_*_PARAM with a concrete upper bound.
-    # These kernels represent implicit loops that aren't in body_stmts as AST nodes.
-    if not has_parallel_bound and program.loop_vars:
-        triangular_raw = getattr(program, "triangular_bounds_raw", None) or []
-        if len(triangular_raw) >= 2:
-            # Try to extract bound from triangular bounds (e.g. ['0', 'n'])
-            upper_part = triangular_raw[1]
-            try:
-                max_bound = int(upper_part)
-                if max_bound >= 1:
-                    has_parallel_bound = True
-            except (ValueError, AttributeError):
-                pass
-        
-        # If the bound is a parameter name (like 'n'), use dispatch_rows from params.
-        if not has_parallel_bound and program.params:
-            for param in program.params:
-                vt = getattr(param, "var_type", None)
-                if vt:
-                    row_val = _extract_number(getattr(vt, "row_size_expr", None))
-                    if row_val and row_val >= 1:
-                        max_bound = max(max_bound, row_val)
-                        has_parallel_bound = True
-
-    workgroup_size = max(1, (max_bound + workgroups - 1) // workgroups)
-
-    # Store metadata on the Program node for the Vulkan visitor
-    program.parallelized = True
-    program.workgroup_count = workgroups
-    program.workgroup_size = workgroup_size
-    program.loop_upper_bound = max_bound
-
-    # Per-loop metadata for explicit loops
-    for loop_info in explicit_loops:
-        loop_node = loop_info["loop"]
-        offset_var_name = f"{loop_node.loop_var_name}_offset"
-        setattr(loop_node, "_parallel_upper_bound", _make_number(max_bound))
-        setattr(loop_node, "_parallel_workgroup_size", _make_number(workgroup_size))
-        setattr(loop_node, "_parallel_offset_var", offset_var_name)
 
     return program
 

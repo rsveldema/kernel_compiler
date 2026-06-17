@@ -10,7 +10,7 @@ from codegen.kast.expression import BinaryExpr, Identifier, Number
 from codegen.kast.workgroup import WorkgroupProperties
 
 # Import parallelization pass from its own module
-from codegen.workgroup_partitioning import perform_parallelize, DEFAULT_WORKGROUPS
+from codegen.workgroup_partitioning import perform_tiling, DEFAULT_WORKGROUPS
 
 
 BLOCK_SIZE = 8

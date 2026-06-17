@@ -32,7 +32,7 @@ from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
 from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
 from codegen.visitors.rllm_vulkan_dispatch_stub_visitor import RllmVulkanDispatchStubVisitor
 from codegen.optim import perform_blocking, perform_cooperative_matrix2
-from codegen.workgroup_partitioning import perform_parallelize
+from codegen.workgroup_partitioning import perform_tiling
 
 log = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ def optimize(
             program = perform_blocking(program, chunk_size)
     # Apply workgroup partitioning pass when enabled.
     if enable_parallelization:
-        program = perform_parallelize(program)
+        program = perform_tiling(program)
     from codegen.visitors.resolve_array_indices import resolve_array_indices
     program = resolve_array_indices(program)
     return program

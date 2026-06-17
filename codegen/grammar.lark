@@ -1,7 +1,10 @@
 
 
+// when a kernel description:
 program: header parfor_space parfor_parameters body
 
+// when a search pattern:
+search_replace_pattern: "search" statement "replace" statement
 
 parfor_parameters: "PARAMETERS" decl_list
 
