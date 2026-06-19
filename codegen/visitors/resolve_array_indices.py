@@ -55,7 +55,7 @@ class ResolveArrayIndicesVisitor(Expression):
     def _is_large_array_type(self, var_type) -> bool:
         """Check if a type has dimensions large enough to produce linear indices >= INT_MAX."""
         size_exprs = []
-        if isinstance(var_type, (FixedSizeMatrix, FlexibleRowsMatrix, FlexibleSizeMatrix, FlexibleRowsColsMatrix, FixedSizeObjVectorMatrix)):
+        if isinstance(var_type, (FixedSizeMatrix, FixedSizeTriangularMatrix, FlexibleRowsMatrix, FlexibleSizeMatrix, FlexibleRowsColsMatrix, FixedSizeObjVectorMatrix)):
             size_exprs.extend([var_type.row_size_expr, var_type.col_size_expr])
         elif isinstance(var_type, (FixedSizeLevelsRowsColsMatrix, FlexibleRowsColsLevelsMatrix)):
             size_exprs.extend([
@@ -87,6 +87,12 @@ class ResolveArrayIndicesVisitor(Expression):
         stride constants should be emitted as unsigned literals.
         """
         if isinstance(var_type, FlexibleRowsMatrix):
+            col = self._extract_size(var_type.col_size_expr)
+            row = self._extract_size(var_type.row_size_expr)
+            if col is not None and row is not None:
+                return [col, 1], self._is_large_array_type(var_type)
+
+        elif isinstance(var_type, FixedSizeTriangularMatrix):
             col = self._extract_size(var_type.col_size_expr)
             row = self._extract_size(var_type.row_size_expr)
             if col is not None and row is not None:
@@ -209,6 +215,14 @@ class ResolveArrayIndicesVisitor(Expression):
             else None
         )
 
+        if isinstance(var_type, FixedSizeTriangularMatrix) and len(ident.indices) == 2:
+            row_idx, col_idx = ident.indices
+            row_plus_one = BinaryExpr(left=row_idx, op="+", right=Number(1))
+            row_times_next = BinaryExpr(left=row_idx, op="*", right=row_plus_one)
+            triangular_offset = BinaryExpr(left=row_times_next, op="/", right=Number(2))
+            ident.indices = [BinaryExpr(left=triangular_offset, op="+", right=col_idx)]
+            return ident
+
         dynamic_strides = self._compute_dynamic_3d_strides(base_name, var_type)
         if dynamic_strides is None:
             dynamic_strides = self._compute_dynamic_2d_strides(base_name, var_type)
@@ -280,6 +294,12 @@ class ResolveArrayIndicesVisitor(Expression):
         row_s = node.row_size_expr.accept(self) if node.row_size_expr else None
         col_s = node.col_size_expr.accept(self) if node.col_size_expr else None
         return FixedSizeMatrix(elem_type=elem, row_size_expr=row_s, col_size_expr=col_s)
+
+    def visit_fixed_size_triangular_matrix(self, node):
+        elem = node.elem_type.accept(self) if node.elem_type else None
+        row_s = node.row_size_expr.accept(self) if node.row_size_expr else None
+        col_s = node.col_size_expr.accept(self) if node.col_size_expr else None
+        return FixedSizeTriangularMatrix(elem_type=elem, row_size_expr=row_s, col_size_expr=col_s)
 
     def visit_flexible_size_matrix(self, node):
         elem = node.elem_type.accept(self) if node.elem_type else None

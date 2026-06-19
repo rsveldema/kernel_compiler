@@ -102,12 +102,13 @@ TYPE_LITERAL: INT_T | SIZE_T_T | FLOAT_T | FLOAT16_T
 type: FSV "<" type "," expression ">" ("&")?
     | FRM "<" type "," expression "," expression ">" ("&")?
     | FSM "<" type "," expression "," expression ">" ("&")?
+    | FSTM "<" type "," expression "," expression ">" ("&")?
     | FLEXSM "<" type "," expression "," expression ">" ("&")?
     | FSLRMC "<" type "," expression "," expression "," expression ">" ("&")?
     | FRCLM "<" type "," expression "," expression "," expression ">" ("&")?
     | FRCM "<" type "," expression "," expression ">" ("&")?
     | FCOLM "<" type "," expression "," expression ">" ("&")?
-    | FSOV "<" (FSM | FLEXSM) "<" type "," expression "," expression ">" "," expression ">" ("&")?
+    | FSOV "<" (FSM | FSTM | FLEXSM) "<" type "," expression "," expression ">" "," expression ">" ("&")?
     | TYPE_LITERAL
 
 
@@ -167,6 +168,7 @@ FSLRMC: "fixed_size_levels_rows_cols_matrix"
 FRCLM: "flexible_rows_cols_levels_matrix"
 FRCM: "flexible_rows_cols_matrix"
 FCOLM: "flexible_cols_matrix"
+FSTM: "fixed_size_triangular_matrix"
 FSOV: "fixed_size_obj_vector"
 
  

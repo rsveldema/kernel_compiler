@@ -48,6 +48,7 @@ def _token_value(t):
 _TYPE_NAMES = frozenset((
     "int", "size_t", "float", "float16",
     "fixed_size_vector", "flexible_rows_matrix", "fixed_size_matrix",
+    "fixed_size_triangular_matrix",
     "flexible_size_matrix", "flexible_cols_matrix", "fixed_size_levels_rows_cols_matrix",
     "flexible_rows_cols_levels_matrix", "fixed_size_obj_vector",
 ))
@@ -725,6 +726,13 @@ def _transform_type(type_tree, default_name="int"):
                     transform_expression(expr_children[1]),
                     transform_expression(expr_children[2]),
                 )
+        elif "fixed_size_triangular_matrix" in type_name:
+            if len(expr_children) >= 2:
+                return FixedSizeTriangularMatrix(
+                    _resolve_nested_type(children[1]),
+                    transform_expression(expr_children[0]),
+                    transform_expression(expr_children[1]),
+                )
         elif "flexible_size_matrix" in type_name:
             if len(expr_children) >= 2:
                 return FlexibleSizeMatrix(
@@ -825,6 +833,7 @@ def transform_declaration(stmt_tree):
         "fixed_size_vector",
         "flexible_rows_matrix",
         "fixed_size_matrix",
+        "fixed_size_triangular_matrix",
         "fixed_size_levels_rows_cols_matrix",
         "flexible_rows_cols_levels_matrix",
     )
@@ -1532,6 +1541,7 @@ def transform(t: Tree) -> Program:
         "fixed_size_vector",
         "flexible_rows_matrix",
         "fixed_size_matrix",
+        "fixed_size_triangular_matrix",
         "fixed_size_levels_rows_cols_matrix",
         "flexible_rows_cols_levels_matrix",
     )
@@ -1601,6 +1611,7 @@ def transform(t: Tree) -> Program:
         "FixedSizeVector",
         "FlexibleRowsMatrix",
         "FixedSizeMatrix",
+        "FixedSizeTriangularMatrix",
         "FlexibleSizeMatrix",
         "FixedSizeLevelsRowsColsMatrix",
         "FlexibleRowsColsLevelsMatrix",

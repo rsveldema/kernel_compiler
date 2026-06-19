@@ -74,6 +74,20 @@ class FixedSizeMatrix(Type):
         return visitor.visit_fixed_size_matrix(self)
 
 
+class FixedSizeTriangularMatrix(Type):
+    """fixed_size_triangular_matrix<elem_type, row_size_expr, col_size_expr>&"""
+
+    def __init__(
+        self, elem_type: Type, row_size_expr: Expression, col_size_expr: Expression
+    ):
+        self.elem_type = elem_type
+        self.row_size_expr = row_size_expr
+        self.col_size_expr = col_size_expr
+
+    def accept(self, visitor):
+        return visitor.visit_fixed_size_triangular_matrix(self)
+
+
 class FlexibleSizeMatrix(Type):
     """flexible_size_matrix<elem_type, row_size_expr, col_size_expr>&"""
 
@@ -153,6 +167,7 @@ __all__ = [
     "FixedSizeVector",
     "FlexibleRowsMatrix",
     "FixedSizeMatrix",
+    "FixedSizeTriangularMatrix",
     "FixedSizeLevelsRowsColsMatrix",
     "FlexibleRowsColsLevelsMatrix",
     "FlexibleRowsColsMatrix",

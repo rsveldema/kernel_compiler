@@ -35,7 +35,7 @@ set(GENERATED_KERNEL_SRCS)
 set(GENERATED_DIR ${CMAKE_BINARY_DIR}/generated/vulkanized/kernel_compiler_tests)
 file(MAKE_DIRECTORY ${GENERATED_DIR})
 
-foreach(kernel_name multi-arg single-assign single-assign-tiled triangular1 with-wg2)
+foreach(kernel_name multi-arg single-assign single-assign-tiled triangular-matrix-access triangular1 with-wg2)
     set(kernel_file "${KERNEL_COMPILER_SOURCE_DIR}/testdata/${kernel_name}.kernel")
     set(output_header "${GENERATED_DIR}/${kernel_name}.h")
     set(output_glsl "${GENERATED_DIR}/${kernel_name}.glsl")

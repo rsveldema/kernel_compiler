@@ -32,6 +32,9 @@ class Visitor:
     def visit_fixed_size_matrix(self, node: _ast.FixedSizeMatrix):
         raise NotImplementedError
 
+    def visit_fixed_size_triangular_matrix(self, node: _ast.FixedSizeTriangularMatrix):
+        raise NotImplementedError
+
     def visit_fixed_size_levels_rows_cols_matrix(
         self, node: _ast.FixedSizeLevelsRowsColsMatrix
     ):

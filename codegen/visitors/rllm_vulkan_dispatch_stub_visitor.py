@@ -37,6 +37,7 @@ class RllmVulkanDispatchStubVisitor(Visitor):
                 ast.FlexibleSizeMatrix,
                 ast.FlexibleRowsColsMatrix,
                 ast.FixedSizeMatrix,
+                ast.FixedSizeTriangularMatrix,
                 ast.FlexibleRowsColsLevelsMatrix,
                 ast.FixedSizeLevelsRowsColsMatrix,
                 ast.FixedSizeObjVectorMatrix,

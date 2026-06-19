@@ -71,6 +71,22 @@ class PrettyPrinter(Visitor):
         inner = "\n".join(inner_lines)
         return f"{indent}fixed_size_matrix<\n{inner}{indent}>"
 
+    def visit_fixed_size_triangular_matrix(self, node: ast.FixedSizeTriangularMatrix):
+        indent = self._indent_str()
+        inner_lines = []
+        if node.elem_type is not None:
+            inner_lines.append(f"{indent}  elem_type: {node.elem_type.accept(self)}")
+        if node.row_size_expr is not None:
+            inner_lines.append(
+                f"{indent}  row_size_expr: {node.row_size_expr.accept(self)}"
+            )
+        if node.col_size_expr is not None:
+            inner_lines.append(
+                f"{indent}  col_size_expr: {node.col_size_expr.accept(self)}"
+            )
+        inner = "\n".join(inner_lines)
+        return f"{indent}fixed_size_triangular_matrix<\n{inner}{indent}>"
+
     def visit_fixed_size_levels_rows_cols_matrix(
         self, node: ast.FixedSizeLevelsRowsColsMatrix
     ):

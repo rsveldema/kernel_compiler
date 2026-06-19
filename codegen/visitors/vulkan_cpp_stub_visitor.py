@@ -144,6 +144,9 @@ class VulkanCppStubVisitor(Visitor):
     def visit_fixed_size_matrix(self, node: ast.FixedSizeMatrix) -> str:
         return ""
 
+    def visit_fixed_size_triangular_matrix(self, node: ast.FixedSizeTriangularMatrix) -> str:
+        return ""
+
     def visit_fixed_size_obj_vector_matrix(self, node: ast.FixedSizeObjVectorMatrix) -> str:
         return ""  # handled in visit_program
 
@@ -251,6 +254,7 @@ class VulkanCppStubVisitor(Visitor):
                 ast.FlexibleSizeMatrix,
                 ast.FlexibleRowsColsMatrix,
                 ast.FixedSizeMatrix,
+                ast.FixedSizeTriangularMatrix,
                 ast.FlexibleRowsColsLevelsMatrix,
                 ast.FixedSizeLevelsRowsColsMatrix,
                 ast.FixedSizeObjVectorMatrix,
@@ -278,6 +282,14 @@ class VulkanCppStubVisitor(Visitor):
             for p in parts:
                 total *= int(p)
             return str(total)
+        elif isinstance(ty, ast.FixedSizeTriangularMatrix):
+            row_expr = getattr(ty, "row_size_expr", None)
+            col_expr = getattr(ty, "col_size_expr", None)
+            row = int(row_expr.value) if isinstance(row_expr, ast.Number) else 1
+            col = int(col_expr.value) if isinstance(col_expr, ast.Number) else row
+            if row != col:
+                raise ValueError("fixed_size_triangular_matrix must be square")
+            return str(row * (row + 1) // 2)
         elif isinstance(ty, (ast.FlexibleRowsMatrix, ast.FlexibleSizeMatrix, ast.FlexibleRowsColsMatrix, ast.FixedSizeMatrix, ast.FixedSizeObjVectorMatrix)):
             parts = []
             for attr in ("row_size_expr", "col_size_expr"):
@@ -322,7 +334,7 @@ class VulkanCppStubVisitor(Visitor):
                 ("Y", self._number_literal(getattr(ty, "row_size_expr", None))),
                 ("Z", self._number_literal(getattr(ty, "col_size_expr", None))),
             ]
-        elif isinstance(ty, (ast.FlexibleRowsMatrix, ast.FlexibleSizeMatrix, ast.FlexibleRowsColsMatrix, ast.FixedSizeMatrix, ast.FixedSizeObjVectorMatrix)):
+        elif isinstance(ty, (ast.FlexibleRowsMatrix, ast.FlexibleSizeMatrix, ast.FlexibleRowsColsMatrix, ast.FixedSizeMatrix, ast.FixedSizeTriangularMatrix, ast.FixedSizeObjVectorMatrix)):
             dims = [
                 ("X", self._number_literal(getattr(ty, "row_size_expr", None))),
                 ("Y", self._number_literal(getattr(ty, "col_size_expr", None))),

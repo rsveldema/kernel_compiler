@@ -5,6 +5,7 @@ Tests the AST parser, visitor pattern, and printer against realistic parfor dump
 
 from codegen.parser import parse
 from codegen.visitors.resolve_array_indices import resolve_array_indices
+from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
 from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
 
 
@@ -58,3 +59,56 @@ END_PROGRAM
 
     assert "float16_t weights[64];" in shader
     assert "weights[((8 * i) + (1 * i))] = float16_t(clamp(src[i], -2.0, 2.0));" in shader
+
+
+def test_vulkan_fixed_size_triangular_matrix_uses_compact_storage():
+    program = parse(
+        """
+PROGRAM("tri.cc:1")
+
+OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, limit<8>(), (scores, out))
+
+PARAMETERS
+        fixed_size_triangular_matrix<float, 8, 8>& scores,
+        fixed_size_vector<float, 8>& out
+
+BEGIN
+        scores[i, j] = out[i] + out[j];
+        out[i] = scores[i, j];
+
+END_PROGRAM
+"""
+    )
+    program = resolve_array_indices(program)
+
+    shader = program.accept(VulkanKernelVisitor())
+
+    assert "float scores[36];" in shader
+    assert "scores[(((i * (i + 1)) / 2) + j)] = (out[i] + out[j]);" in shader
+    assert "out[i] = scores[(((i * (i + 1)) / 2) + j)];" in shader
+
+
+def test_cpp_stub_fixed_size_triangular_matrix_uses_compact_storage():
+    program = parse(
+        """
+PROGRAM("tri.cc:1")
+
+OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(i, j, limit<8>(), (scores))
+
+PARAMETERS
+        fixed_size_triangular_matrix<float, 8, 8>& scores
+
+BEGIN
+        scores[i, j] = 1.0f;
+
+END_PROGRAM
+"""
+    )
+    program = resolve_array_indices(program)
+
+    stub = program.accept(VulkanCppStubVisitor())
+
+    assert "inline constexpr uint32_t scores_X = 8;" in stub
+    assert "inline constexpr uint32_t scores_Y = 8;" in stub
+    assert "float data[36];" in stub
+    assert "KernelType::Triangular" in stub

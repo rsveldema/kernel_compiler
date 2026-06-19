@@ -187,6 +187,14 @@ def _compute_matrix_size(ty: Type, constants: dict[str, str] | None = None) -> i
                 if s > 0:
                     parts *= s
         return parts
+    elif isinstance(ty, FixedSizeTriangularMatrix):
+        row = _extract_size_from_expr(ty.row_size_expr, constants)
+        col = _extract_size_from_expr(ty.col_size_expr, constants)
+        if row <= 0 or col <= 0:
+            return -1
+        if row != col:
+            raise ValueError("fixed_size_triangular_matrix must be square")
+        return row * (row + 1) // 2
     elif isinstance(ty, (FixedSizeMatrix, FlexibleSizeMatrix, FlexibleRowsColsMatrix)):
         for attr in ("row_size_expr", "col_size_expr"):
             expr = getattr(ty, attr, None)
@@ -488,6 +496,9 @@ class VulkanKernelVisitor(Visitor):
         return self._glsl_elem_type(node)
 
     def visit_fixed_size_matrix(self, node: FixedSizeMatrix) -> str:
+        return self._glsl_elem_type(node)
+
+    def visit_fixed_size_triangular_matrix(self, node: FixedSizeTriangularMatrix) -> str:
         return self._glsl_elem_type(node)
 
     def visit_flexible_size_matrix(self, node: FlexibleSizeMatrix) -> str:
@@ -1243,6 +1254,7 @@ class VulkanKernelVisitor(Visitor):
                     FlexibleSizeMatrix,
                     FlexibleRowsColsMatrix,
                     FixedSizeMatrix,
+                    FixedSizeTriangularMatrix,
                     FlexibleRowsColsLevelsMatrix,
                     FixedSizeLevelsRowsColsMatrix,
                     FixedSizeObjVectorMatrix,

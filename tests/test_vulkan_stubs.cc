@@ -19,6 +19,7 @@
 #include "multi-arg.h"
 #include "single-assign.h"
 #include "single-assign-tiled.h"
+#include "triangular-matrix-access.h"
 #include "triangular1.h"
 #include "with-wg2.h"
 
@@ -529,6 +530,75 @@ TEST_F(VulkanTestBase, triangular1_correctness)
             const float expected = j <= i ? attn[idx] * (scores[idx] - row_dot) : raw_sentinel;
             EXPECT_NEAR(actual[idx], expected, 1.0e-4f)
                 << "triangular1 d_raw[" << i << "," << j << "]";
+        }
+    }
+}
+
+// ───────────── Test: fixed_size_triangular_matrix access ──
+
+TEST_F(VulkanTestBase, triangular_matrix_access_correctness)
+{
+    VulkanSession triangular_session(false, "llvmpipe");
+    if (!triangular_session.has_device()) {
+        GTEST_SKIP() << "no Vulkan device available for triangular matrix access test";
+    }
+    if (!selected_device_is_llvmpipe(triangular_session)) {
+        GTEST_SKIP() << "llvmpipe Vulkan device is not available for triangular matrix access test";
+    }
+
+    constexpr uint32_t N = 8;
+    constexpr uint32_t triangular_cells = N * (N + 1) / 2;
+    static_assert(rllm_triangular_matrix_access::tri_in_X == N);
+    static_assert(rllm_triangular_matrix_access::tri_in_Y == N);
+    static_assert(rllm_triangular_matrix_access::tri_out_X == N);
+    static_assert(rllm_triangular_matrix_access::tri_out_Y == N);
+
+    constexpr VkDeviceSize buffer_size_bytes = triangular_cells * sizeof(float);
+    VDynamicHostBuffer input_host(triangular_session, buffer_size_bytes);
+    VDynamicHostBuffer output_host(triangular_session, buffer_size_bytes);
+    float* input = reinterpret_cast<float*>(input_host.bytes());
+    float* output = reinterpret_cast<float*>(output_host.bytes());
+
+    for (uint32_t i = 0; i < N; ++i) {
+        for (uint32_t j = 0; j <= i; ++j) {
+            const size_t idx = static_cast<size_t>(i) * (i + 1) / 2 + j;
+            input[idx] = 10.0f * static_cast<float>(i) + static_cast<float>(j);
+            output[idx] = -999.0f;
+        }
+    }
+
+    VDynamicDeviceBuffer input_buf(triangular_session, buffer_size_bytes);
+    VDynamicDeviceBuffer output_buf(triangular_session, buffer_size_bytes);
+    rllm_triangular_matrix_access::triangular_matrix_access_triangular_access_PushConstants pc{
+        static_cast<int32_t>(N),
+        static_cast<int32_t>(N),
+    };
+
+    rllm_triangular_matrix_access::TriangularMatrixAccessTriangularAccessKernel kernel(
+        triangular_session,
+        TESTDATA_DIR "/triangular-matrix-access.glsl");
+
+    VulkanComputeContext ctx(triangular_session);
+    input_buf.write(ctx, input_host);
+    output_buf.write(ctx, output_host);
+
+    kernel.dispatch(
+        ctx,
+        N,
+        N,
+        input_buf,
+        output_buf,
+        pc);
+
+    output_buf.read(ctx, output_host);
+    const float* actual = reinterpret_cast<const float*>(output_host.bytes());
+
+    for (uint32_t i = 0; i < N; ++i) {
+        for (uint32_t j = 0; j <= i; ++j) {
+            const size_t idx = static_cast<size_t>(i) * (i + 1) / 2 + j;
+            const float expected = input[idx] + 1.0f;
+            EXPECT_FLOAT_EQ(actual[idx], expected)
+                << "triangular matrix output[" << i << "," << j << "]";
         }
     }
 }
