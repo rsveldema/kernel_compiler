@@ -1,0 +1,12 @@
+search
+for (int i = 0; i < wildcard(N); ++i) {
+    wildcard(S)
+}
+replace
+const int chunk_size = (wildcard(N) + rllm_wg_count - 1) / rllm_wg_count;
+const int start_i = local_id * chunk_size;
+const int end_i = start_i + chunk_size;
+for (int i = start_i; i < end_i; ++i) {
+    wildcard(S)
+}
+constraints S != ForStatement
