@@ -32,7 +32,7 @@ endforeach()
 
 # Vulkan kernels: generate headers and GLSL via compile.py
 set(GENERATED_KERNEL_SRCS)
-set(GENERATED_DIR ${CMAKE_BINARY_DIR}/generated/vulkanized/kernels)
+set(GENERATED_DIR ${CMAKE_BINARY_DIR}/generated/vulkanized/kernel_compiler_tests)
 file(MAKE_DIRECTORY ${GENERATED_DIR})
 
 foreach(kernel_name multi-arg single-assign single-assign-tiled triangular1 with-wg2)

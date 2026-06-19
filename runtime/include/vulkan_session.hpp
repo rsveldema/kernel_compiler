@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <mutex>
 #include <type_traits>
@@ -73,7 +74,10 @@ public:
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (std::find(m_kernels.begin(), m_kernels.end(), &kernel) == m_kernels.end())
+        {
             m_kernels.push_back(&kernel);
+            logKernelRegistrationLocked(kernel);
+        }
     }
 
     void recordHostToDevice(AbstractKernel* kernel, size_t bytes);
@@ -82,6 +86,7 @@ public:
     void recordHostToDevice(std::string_view kernel_name, size_t bytes);
     void recordDeviceToHost(std::string_view kernel_name, size_t bytes);
     void resetStatistics();
+    void enableRegistrationLog(const std::string& filename);
 
     std::vector<VStatistics> getStatistics(int top_users)
     {
@@ -125,9 +130,13 @@ private:
     }
 
     VStatistics statisticsFor(const AbstractKernel& kernel) const;
+    void logKernelRegistrationLocked(const AbstractKernel& kernel);
+    bool registrationWasLoggedLocked(const AbstractKernel& kernel) const;
 
     std::mutex m_mutex;
     std::vector<AbstractKernel*> m_kernels;
+    std::vector<std::string> m_logged_kernel_names;
+    std::string m_registration_log_filename;
 };
 
 enum class KernelDimension { OneD, TwoD, ThreeD };
@@ -139,17 +148,20 @@ public:
     explicit AbstractKernel(
         std::string kernel_name,
         KernelDimension dimension = KernelDimension::OneD,
-        KernelType type = KernelType::Vector)
+        KernelType type = KernelType::Vector,
+        std::string generated_descriptor = {})
         : m_kernel_name(std::move(kernel_name))
         , m_dimension(dimension)
         , m_type(type)
+        , m_generated_descriptor(std::move(generated_descriptor))
     {
         ComputeKernelRegistry::instance().registerKernel(*this);
     }
 
-    virtual ~AbstractKernel() = default;
+    virtual ~AbstractKernel() = 0;
 
     const std::string& kernelName() const { return m_kernel_name; }
+    const std::string& generatedDescriptor() const { return m_generated_descriptor; }
 
     KernelDimension dimension() const { return m_dimension; }
     KernelType type() const { return m_type; }
@@ -240,9 +252,12 @@ private:
     std::string m_kernel_name;
     KernelDimension m_dimension;
     KernelType m_type;
+    std::string m_generated_descriptor;
     mutable std::mutex m_mutex;
     VStatistics m_statistics;
 };
+
+inline AbstractKernel::~AbstractKernel() = default;
 
 inline ComputeKernelRegistry::ScopedActiveKernel::ScopedActiveKernel(AbstractKernel& kernel)
     : m_previous(activeKernelSlot())
@@ -306,6 +321,20 @@ inline void ComputeKernelRegistry::resetStatistics()
         kernel->resetStatistics();
 }
 
+inline void ComputeKernelRegistry::enableRegistrationLog(const std::string& filename)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_registration_log_filename = filename;
+    m_logged_kernel_names.clear();
+
+    std::ofstream out(m_registration_log_filename, std::ios::trunc);
+    out << "compute kernels\n";
+    out << "name\ttiled\n";
+
+    for (const auto* kernel : m_kernels)
+        logKernelRegistrationLocked(*kernel);
+}
+
 inline std::string_view ComputeKernelRegistry::activeKernelName()
 {
     const auto* kernel = activeKernel();
@@ -315,6 +344,24 @@ inline std::string_view ComputeKernelRegistry::activeKernelName()
 inline VStatistics ComputeKernelRegistry::statisticsFor(const AbstractKernel& kernel) const
 {
     return kernel.statistics();
+}
+
+inline bool ComputeKernelRegistry::registrationWasLoggedLocked(const AbstractKernel& kernel) const
+{
+    return std::find(m_logged_kernel_names.begin(), m_logged_kernel_names.end(), kernel.kernelName()) !=
+        m_logged_kernel_names.end();
+}
+
+inline void ComputeKernelRegistry::logKernelRegistrationLocked(const AbstractKernel& kernel)
+{
+    if (m_registration_log_filename.empty() || registrationWasLoggedLocked(kernel))
+        return;
+
+    const std::string_view descriptor{kernel.generatedDescriptor()};
+    const bool tiled = descriptor.find("tiling=on") != std::string_view::npos;
+    std::ofstream out(m_registration_log_filename, std::ios::app);
+    out << AbstractKernel::demangleKernelName(kernel.kernelName()) << '\t' << (tiled ? "yes" : "no") << '\n';
+    m_logged_kernel_names.push_back(kernel.kernelName());
 }
 
 

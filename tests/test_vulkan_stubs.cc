@@ -459,73 +459,42 @@ TEST_F(VulkanTestBase, triangular1_correctness)
         GTEST_SKIP() << "llvmpipe Vulkan device is not available for triangular1 test";
     }
 
-    static_assert(rllm_triangular1::d_scores_X == rllm_triangular1::d_raw_X);
-    static_assert(rllm_triangular1::d_scores_Y == rllm_triangular1::d_raw_Y);
-    static_assert(rllm_triangular1::d_scores_Z == rllm_triangular1::d_raw_Z);
-    static_assert(rllm_triangular1::d_scores_X == rllm_triangular1::attn_w_X);
-    static_assert(rllm_triangular1::d_scores_Y == rllm_triangular1::attn_w_Y);
-    static_assert(rllm_triangular1::d_scores_Z == rllm_triangular1::attn_w_Z);
+    static_assert(rllm_triangular1::d_scores_h_X == rllm_triangular1::d_raw_h_X);
+    static_assert(rllm_triangular1::d_scores_h_Y == rllm_triangular1::d_raw_h_Y);
+    static_assert(rllm_triangular1::d_scores_h_X == rllm_triangular1::attn_w_h_X);
+    static_assert(rllm_triangular1::d_scores_h_Y == rllm_triangular1::attn_w_h_Y);
 
-    constexpr uint32_t test_seq_len = std::min(rllm_triangular1::d_scores_Y, 32u);
-    constexpr VkDeviceSize row_size_bytes =
-        static_cast<VkDeviceSize>(test_seq_len) * sizeof(float);
-    constexpr VkDeviceSize declared_level_stride_bytes =
-        static_cast<VkDeviceSize>(rllm_triangular1::d_scores_Z) *
-        static_cast<VkDeviceSize>(rllm_triangular1::d_raw_Z) *
+    constexpr uint32_t test_seq_len = 32;
+    static_assert(test_seq_len <= rllm_triangular1::d_scores_h_X);
+    static_assert(test_seq_len <= rllm_triangular1::d_scores_h_Y);
+    constexpr VkDeviceSize buffer_size_bytes =
+        static_cast<VkDeviceSize>(test_seq_len) *
+        static_cast<VkDeviceSize>(test_seq_len) *
         sizeof(float);
-    constexpr VkDeviceSize declared_row_stride_bytes =
-        static_cast<VkDeviceSize>(rllm_triangular1::d_raw_Z) * sizeof(float);
-    constexpr uint32_t test_level_count = std::min(rllm_triangular1::d_scores_X, 1u);
-    static_assert(test_level_count > 0);
-    constexpr VkDeviceSize d_scores_size_bytes = sizeof(rllm_triangular1::RllmBuffer_d_scores);
-    constexpr VkDeviceSize d_raw_size_bytes = sizeof(rllm_triangular1::RllmBuffer_d_raw);
-    constexpr VkDeviceSize attn_w_size_bytes = sizeof(rllm_triangular1::RllmBuffer_attn_w);
-    const VkDeviceSize max_allocation_size = triangular_session.maxMemoryAllocationSize();
-    const VkDeviceSize required_size = std::max({d_scores_size_bytes, d_raw_size_bytes, attn_w_size_bytes});
-    if (max_allocation_size < required_size) {
-        GTEST_SKIP() << "selected Vulkan device maxMemoryAllocationSize is "
-                     << max_allocation_size << " bytes, but triangular buffers require "
-                     << required_size << " bytes";
-    }
-    float expected_val = 1.0f - static_cast<float>(test_seq_len);
+    constexpr float raw_sentinel = -123.0f;
 
-    std::unique_ptr<VHostBuffer<rllm_triangular1::RllmBuffer_d_scores>> d_scores_h;
-    std::unique_ptr<VHostBuffer<rllm_triangular1::RllmBuffer_d_raw>> d_raw_h;
-    std::unique_ptr<VHostBuffer<rllm_triangular1::RllmBuffer_attn_w>> attn_w_h;
-    try {
-        d_scores_h = std::make_unique<VHostBuffer<rllm_triangular1::RllmBuffer_d_scores>>(triangular_session);
-        d_raw_h = std::make_unique<VHostBuffer<rllm_triangular1::RllmBuffer_d_raw>>(triangular_session);
-        attn_w_h = std::make_unique<VHostBuffer<rllm_triangular1::RllmBuffer_attn_w>>(triangular_session);
-    } catch (const std::runtime_error& e) {
-        GTEST_SKIP() << "selected Vulkan device cannot allocate declared triangular buffers: " << e.what();
-    }
-    for (uint32_t hi = 0; hi < test_level_count; ++hi) {
-        for (uint32_t i = 0; i < test_seq_len; ++i) {
-            const size_t offset =
-                static_cast<size_t>(hi) * rllm_triangular1::d_scores_Z * rllm_triangular1::d_raw_Z +
-                static_cast<size_t>(i) * rllm_triangular1::d_raw_Z;
-            d_scores_h->fill_at(1.0f, offset, test_seq_len);
-            d_raw_h->fill_at(0.0f, offset, test_seq_len);
-            attn_w_h->fill_at(1.0f, offset, test_seq_len);
+    VDynamicHostBuffer d_scores_h(triangular_session, buffer_size_bytes);
+    VDynamicHostBuffer d_raw_h(triangular_session, buffer_size_bytes);
+    VDynamicHostBuffer attn_w_h(triangular_session, buffer_size_bytes);
+    float* scores = reinterpret_cast<float*>(d_scores_h.bytes());
+    float* raw = reinterpret_cast<float*>(d_raw_h.bytes());
+    float* attn = reinterpret_cast<float*>(attn_w_h.bytes());
+    for (uint32_t i = 0; i < test_seq_len; ++i) {
+        for (uint32_t j = 0; j < test_seq_len; ++j) {
+            const size_t idx = static_cast<size_t>(i) * test_seq_len + j;
+            scores[idx] = static_cast<float>(i + j + 1);
+            attn[idx] = 0.25f + 0.03125f * static_cast<float>((i + j) % 5);
+            raw[idx] = raw_sentinel;
         }
     }
 
-    std::unique_ptr<VDeviceBuffer<rllm_triangular1::RllmBuffer_d_scores>> d_scores_buf;
-    std::unique_ptr<VDeviceBuffer<rllm_triangular1::RllmBuffer_d_raw>> d_raw_buf;
-    std::unique_ptr<VDeviceBuffer<rllm_triangular1::RllmBuffer_attn_w>> attn_w_buf;
-    try {
-        d_scores_buf = std::make_unique<VDeviceBuffer<rllm_triangular1::RllmBuffer_d_scores>>(*d_scores_h);
-        d_raw_buf = std::make_unique<VDeviceBuffer<rllm_triangular1::RllmBuffer_d_raw>>(*d_raw_h);
-        attn_w_buf = std::make_unique<VDeviceBuffer<rllm_triangular1::RllmBuffer_attn_w>>(*attn_w_h);
-    } catch (const std::runtime_error& e) {
-        GTEST_SKIP() << "selected Vulkan device cannot allocate declared triangular device buffers: " << e.what();
-    }
+    VDynamicDeviceBuffer d_scores_buf(triangular_session, buffer_size_bytes);
+    VDynamicDeviceBuffer d_raw_buf(triangular_session, buffer_size_bytes);
+    VDynamicDeviceBuffer attn_w_buf(triangular_session, buffer_size_bytes);
     rllm_triangular1::triangular1_TransformerBlock_PushConstants pc{
         static_cast<int32_t>(test_seq_len),
-        static_cast<int32_t>(rllm_triangular1::d_scores_X),
-        static_cast<int32_t>(rllm_triangular1::d_scores_Z),
-        static_cast<int32_t>(rllm_triangular1::d_raw_X),
-        static_cast<int32_t>(rllm_triangular1::d_raw_Z),
+        static_cast<int32_t>(test_seq_len),
+        static_cast<int32_t>(test_seq_len),
     };
 
     rllm_triangular1::Triangular1TransformerBlockKernel kernel(
@@ -533,48 +502,33 @@ TEST_F(VulkanTestBase, triangular1_correctness)
         TESTDATA_DIR "/triangular1.glsl");
 
     VulkanComputeContext ctx(triangular_session);
-    for (uint32_t hi = 0; hi < test_level_count; ++hi) {
-        for (uint32_t i = 0; i < test_seq_len; ++i) {
-            const VkDeviceSize offset =
-                static_cast<VkDeviceSize>(hi) * declared_level_stride_bytes +
-                static_cast<VkDeviceSize>(i) * declared_row_stride_bytes;
-            d_scores_buf->write(ctx, *d_scores_h, row_size_bytes, offset, offset);
-            d_raw_buf->write(ctx, *d_raw_h, row_size_bytes, offset, offset);
-            attn_w_buf->write(ctx, *attn_w_h, row_size_bytes, offset, offset);
-        }
-    }
+    d_scores_buf.write(ctx, d_scores_h);
+    d_raw_buf.write(ctx, d_raw_h);
+    attn_w_buf.write(ctx, attn_w_h);
 
     kernel.dispatch(
         ctx,
-        test_level_count,
         test_seq_len,
         test_seq_len,
-        *d_scores_buf,
-        *d_raw_buf,
-        *attn_w_buf,
+        d_scores_buf,
+        d_raw_buf,
+        attn_w_buf,
         pc);
 
-    /* Read back d_raw (buffer index 1) */
-    for (uint32_t hi = 0; hi < test_level_count; ++hi) {
-        for (uint32_t i = 0; i < test_seq_len; ++i) {
-            const VkDeviceSize offset =
-                static_cast<VkDeviceSize>(hi) * declared_level_stride_bytes +
-                static_cast<VkDeviceSize>(i) * declared_row_stride_bytes;
-            d_raw_buf->read(ctx, *d_raw_h, row_size_bytes, offset, offset);
-        }
-    }
-    const float* actual = d_raw_h->get()->data;
+    d_raw_buf.read(ctx, d_raw_h);
+    const float* actual = reinterpret_cast<const float*>(d_raw_h.bytes());
 
-    for (uint32_t hi = 0; hi < test_level_count; ++hi) {
-        for (uint32_t i = 0; i < test_seq_len; ++i) {
-            for (uint32_t j = 0; j < test_seq_len; ++j) {
-                size_t idx =
-                    static_cast<size_t>(hi) * rllm_triangular1::d_scores_Z * rllm_triangular1::d_raw_Z +
-                    static_cast<size_t>(i) * rllm_triangular1::d_raw_Z +
-                    j;
-                EXPECT_NEAR(actual[idx], expected_val, 1.0f)
-                    << "triangular1 d_raw[" << hi << "," << i << "," << j << "]";
-            }
+    for (uint32_t i = 0; i < test_seq_len; ++i) {
+        float row_dot = 0.0f;
+        for (uint32_t k = 0; k <= i; ++k) {
+            const size_t idx = static_cast<size_t>(i) * test_seq_len + k;
+            row_dot += scores[idx] * attn[idx];
+        }
+        for (uint32_t j = 0; j < test_seq_len; ++j) {
+            const size_t idx = static_cast<size_t>(i) * test_seq_len + j;
+            const float expected = j <= i ? attn[idx] * (scores[idx] - row_dot) : raw_sentinel;
+            EXPECT_NEAR(actual[idx], expected, 1.0e-4f)
+                << "triangular1 d_raw[" << i << "," << j << "]";
         }
     }
 }

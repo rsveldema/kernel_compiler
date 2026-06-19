@@ -573,18 +573,6 @@ class VulkanCppStubVisitor(Visitor):
         wg_z: str,
     ) -> None:
         push_size = f"sizeof({self._kernel_name}_PushConstants)" if all_pc_fields else "0"
-        self._emit(f"class {class_name} : public AbstractKernel {{")
-        self._emit("public:")
-        self._push()
-        self._emit(f"{class_name}(VulkanSession& session, const std::string& glsl_file)")
-        kernel_name_str = '"' + self._namespace_name + '::' + class_name + '|' + self._display_name + '", '
-        kernel_type_str = 'KernelDimension::' + self._cpp_dimension() + ', KernelType::' + self._cpp_type()
-        self._emit('    : AbstractKernel(' + kernel_name_str + kernel_type_str + ')')
-        self._emit(f"    , kernel_(session, glsl_file, {push_size}, {len(buffer_params)})")
-        self._emit("{")
-        self._emit("}")
-        self._emit("")
-
         tiled = bool(node.tiled)
         parallelized = bool(node.parallelized)
         tile_bs = node.tile_block_size
@@ -601,6 +589,20 @@ class VulkanCppStubVisitor(Visitor):
             f"workgroup_count={wg_count};"
             f"shared_memory_tiling={'on' if shared_tiling else 'off'}"
         )
+
+        self._emit(f"class {class_name} : public AbstractKernel {{")
+        self._emit("public:")
+        self._push()
+        self._emit(f"{class_name}(VulkanSession& session, const std::string& glsl_file)")
+        kernel_name_str = '"' + self._namespace_name + '::' + class_name + '|' + self._display_name + '", '
+        kernel_type_str = 'KernelDimension::' + self._cpp_dimension() + ', KernelType::' + self._cpp_type()
+        descriptor_str = '"' + descriptor + '"'
+        self._emit('    : AbstractKernel(' + kernel_name_str + kernel_type_str + ', ' + descriptor_str + ')')
+        self._emit(f"    , kernel_(session, glsl_file, {push_size}, {len(buffer_params)})")
+        self._emit("{")
+        self._emit("}")
+        self._emit("")
+
         self._emit(f"static constexpr const char* generated_descriptor() {{ return \"{descriptor}\"; }}")
         self._emit("")
 
