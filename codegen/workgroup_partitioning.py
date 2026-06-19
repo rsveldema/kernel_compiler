@@ -141,6 +141,17 @@ def _extract_upper_bound(expr):
     return None
 
 
+def _extract_upper_bound_key(expr):
+    concrete = _extract_upper_bound(expr)
+    if concrete is not None:
+        return concrete
+
+    if isinstance(expr, Identifier):
+        return expr.name
+
+    return None
+
+
 def _is_condition_i_lt_N(condition, loop_var_name):
     """Check if condition is of the form ``i < N`` where i == loop_var_name.
 
@@ -164,9 +175,7 @@ def _is_condition_i_lt_N(condition, loop_var_name):
     if op not in ("<", "<="):
         return False
 
-    # RHS must be a concrete bound
-    bound = _extract_upper_bound(rhs)
-    return bound is not None and bound >= 1
+    return _extract_upper_bound_key(rhs) is not None
 
 
 def _get_loop_var_name(node, condition):
@@ -185,11 +194,12 @@ def _find_parallelizable_loops(program) -> list[dict]:
 
     A loop is parallelizable when:
       - It appears directly in body_stmts (not nested inside another loop)
-      - Its condition is ``var < N`` where N is a concrete integer >= 1
+      - Its condition is ``var < N`` where N is a concrete integer >= 1 or
+        an identifier bound such as k_count
       - The loop iterates over the same range as other detected loops (to ensure
         they can share the same workgroup stride)
 
-    Returns a list of dicts: {"loop": node, "upper_bound": int}
+    Returns a list of dicts: {"loop": node, "upper_bound": int | str}
     """
     body_stmts = getattr(program, "body_stmts", []) or []
     seen_bounds = set()  # track which upper bounds we've already accepted
@@ -200,8 +210,8 @@ def _find_parallelizable_loops(program) -> list[dict]:
             condition = getattr(stmt, "condition", None)
             loop_var_name = _get_loop_var_name(stmt, condition)
             if loop_var_name and _is_condition_i_lt_N(condition, loop_var_name):
-                bound = _extract_upper_bound(getattr(condition, "rhs", None))
-                if bound is not None and bound >= 1:
+                bound = _extract_upper_bound_key(getattr(condition, "rhs", None))
+                if bound is not None:
                     if bound not in seen_bounds:
                         results.append({"loop": stmt, "upper_bound": bound})
                         seen_bounds.add(bound)
@@ -210,12 +220,12 @@ def _find_parallelizable_loops(program) -> list[dict]:
             # Range-style: for (const int i : limit<N>())
             init_expr = getattr(stmt, "init_expr", None)
             if init_expr is not None:
-                bound = _extract_upper_bound(init_expr)
-                if bound is not None and bound >= 1:
+                bound = _extract_upper_bound_key(init_expr)
+                if bound is not None:
                     if bound not in seen_bounds:
                         results.append({"loop": stmt, "upper_bound": bound})
                         seen_bounds.add(bound)
 
     # Sort by upper bound descending so larger ranges are processed first
-    results.sort(key=lambda x: x["upper_bound"] or 0, reverse=True)
+    results.sort(key=lambda x: str(x["upper_bound"]), reverse=True)
     return results

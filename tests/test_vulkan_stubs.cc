@@ -7,6 +7,8 @@
 #include <cstring>
 #include <algorithm>
 #include <chrono>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -16,11 +18,13 @@
 #include <vulkan/vulkan_core.h>
 
 // Generated stub headers
+#include "dynamic-atb-acc.h"
 #include "multi-arg.h"
 #include "single-assign.h"
 #include "single-assign-tiled.h"
 #include "triangular-matrix-access.h"
 #include "triangular1.h"
+#include "var-size-loop-tiled.h"
 #include "with-wg2.h"
 
 // Shared Vulkan test infrastructure
@@ -103,6 +107,26 @@ static double dispatch_multi_arg_once(
     return std::chrono::duration<double, std::milli>(end - start).count();
 }
 
+static double dispatch_raw_kernel_once(
+    VulkanComputeKernel& kernel,
+    VulkanSession& session,
+    VBaseDeviceBuffer& c_buf,
+    VBaseHostBuffer& initial_c,
+    const VulkanDimension& dims,
+    void* push_constants,
+    size_t push_constants_size)
+{
+    VulkanComputeContext ctx(session);
+    c_buf.write(ctx, initial_c);
+
+    auto cb = ctx.begin_command_buffer();
+    const auto start = std::chrono::steady_clock::now();
+    kernel.dispatch(cb, push_constants, push_constants_size, dims);
+    ctx.submit_and_wait();
+    const auto end = std::chrono::steady_clock::now();
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
 template <typename T>
 static std::vector<float> read_float_buffer(VulkanComputeContext& context, VDeviceBuffer<T>& buf, VHostBuffer<T>& host)
 {
@@ -126,6 +150,15 @@ static bool selected_device_is_dzn(VulkanSession& session)
     vkGetPhysicalDeviceProperties(session.get_phys_device(), &props);
     return strstr(props.deviceName, "dzn") != nullptr ||
            strstr(props.deviceName, "Direct3D12") != nullptr;
+}
+
+static std::string read_text_file(const std::string& path)
+{
+    std::ifstream file(path);
+    if (!file) {
+        throw std::runtime_error("failed to open " + path);
+    }
+    return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 }
 
 TEST_F(VulkanTestBase, host_device_buffer_copy_bandwidth)
@@ -655,9 +688,8 @@ TEST_F(VulkanTestBase, tiled_kernel_generates_correct_output)
         get_session(),
         TESTDATA_DIR "/single-assign-tiled.glsl");
     const std::string descriptor = rllm_single_assign_tiled::SingleAssignTiledVecmathKernel::generated_descriptor();
-    if (descriptor.find("tiling=on") == std::string::npos) {
-        GTEST_SKIP() << "tiling is not enabled in generated stub descriptor: " << descriptor;
-    }
+    ASSERT_NE(descriptor.find("tiling=on"), std::string::npos)
+        << "tiling is not enabled in generated stub descriptor: " << descriptor;
 
     VulkanComputeContext ctx(get_session());
 
@@ -681,4 +713,268 @@ TEST_F(VulkanTestBase, tiled_kernel_generates_correct_output)
 
     SUCCEED() << "tiled kernel dispatch completed with N=" << N
               << " and produced correct output (all elements = " << push_value << ")";
+}
+
+TEST_F(VulkanTestBase, tiled_variable_size_loop_generates_correct_output)
+{
+    constexpr uint32_t N = 128;
+    constexpr int push_value = 91;
+    constexpr int k_count = 17;
+
+    VHostBuffer<rllm_var_size_loop_tiled::RllmBuffer_dst> readback(get_session());
+    VDeviceBuffer<rllm_var_size_loop_tiled::RllmBuffer_dst> dst_buf(readback);
+
+    rllm_var_size_loop_tiled::VarSizeLoopTiledVecmathKernel kernel(
+        get_session(),
+        TESTDATA_DIR "/var-size-loop-tiled.glsl");
+    const std::string descriptor = rllm_var_size_loop_tiled::VarSizeLoopTiledVecmathKernel::generated_descriptor();
+    ASSERT_NE(descriptor.find("tiling=on"), std::string::npos)
+        << "tiling is not enabled in generated stub descriptor: " << descriptor;
+
+    VulkanComputeContext ctx(get_session());
+
+    kernel.dispatch(
+        ctx,
+        N,
+        dst_buf,
+        rllm_var_size_loop_tiled::var_size_loop_tiled_vecmath_PushConstants{
+            static_cast<int32_t>(N),
+            push_value,
+            k_count,
+            static_cast<int32_t>(N),
+        });
+
+    dst_buf.read(ctx, readback);
+    const int* actual = reinterpret_cast<const int*>(readback.get()->data);
+
+    for (uint32_t i = 0; i < N; ++i) {
+        EXPECT_EQ(actual[i], push_value)
+            << "variable-size tiled kernel produced incorrect value at index " << i;
+    }
+}
+
+TEST_F(VulkanTestBase, dynamic_atb_acc_reduction_loop_is_chunked_by_k_count)
+{
+    const std::string descriptor = rllm_dynamic_atb_acc::DynamicAtbAccVecmathKernel::generated_descriptor();
+    ASSERT_NE(descriptor.find("tiling=on"), std::string::npos)
+        << "tiling is not enabled in generated stub descriptor: " << descriptor;
+    ASSERT_NE(descriptor.find("shared_memory_tiling=on"), std::string::npos)
+        << "shared-memory reduction tiling is not enabled in generated stub descriptor: " << descriptor;
+
+    const std::string glsl = read_text_file(TESTDATA_DIR "/dynamic-atb-acc.glsl");
+    EXPECT_NE(glsl.find("layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;"), std::string::npos);
+    EXPECT_NE(glsl.find("int(gl_WorkGroupID.z) * 16"), std::string::npos);
+    EXPECT_NE(glsl.find("l_idx < ((int(gl_WorkGroupID.z) * 16) + 16) && l_idx < rllm_push.k_count"), std::string::npos);
+    EXPECT_NE(glsl.find("atomicAdd(C["), std::string::npos);
+
+    const std::string header = read_text_file(TESTDATA_DIR "/dynamic-atb-acc.h");
+    EXPECT_NE(header.find("(push_constants.k_count + 16 - 1) / 16"), std::string::npos);
+
+    if (!get_session().shader_buffer_float32_atomic_add_enabled()) {
+        GTEST_SKIP() << "selected Vulkan device does not expose shaderBufferFloat32AtomicAdd";
+    }
+
+    constexpr uint32_t rows = 8;
+    constexpr uint32_t cols = 8;
+    constexpr int k_count = 7;
+    constexpr float expected = 3.0f + 2.0f * static_cast<float>(k_count);
+
+    VHostBuffer<rllm_dynamic_atb_acc::RllmBuffer_A> a(get_session());
+    VHostBuffer<rllm_dynamic_atb_acc::RllmBuffer_B> b(get_session());
+    VHostBuffer<rllm_dynamic_atb_acc::RllmBuffer_C> c(get_session());
+    VHostBuffer<rllm_dynamic_atb_acc::RllmBuffer_C> readback(get_session());
+    a.fill(1.0f);
+    b.fill(2.0f);
+    c.fill(3.0f);
+
+    VDeviceBuffer<rllm_dynamic_atb_acc::RllmBuffer_A> a_buf(a);
+    VDeviceBuffer<rllm_dynamic_atb_acc::RllmBuffer_B> b_buf(b);
+    VDeviceBuffer<rllm_dynamic_atb_acc::RllmBuffer_C> c_buf(c);
+    VulkanComputeContext ctx(get_session());
+    a_buf.write(ctx, a);
+    b_buf.write(ctx, b);
+    c_buf.write(ctx, c);
+
+    rllm_dynamic_atb_acc::DynamicAtbAccVecmathKernel kernel(
+        get_session(),
+        TESTDATA_DIR "/dynamic-atb-acc.glsl");
+
+    kernel.dispatch(
+        ctx,
+        rows,
+        cols,
+        a_buf,
+        b_buf,
+        c_buf,
+        rllm_dynamic_atb_acc::dynamic_atb_acc_vecmath_PushConstants{
+            static_cast<int32_t>(rows),
+            static_cast<int32_t>(cols),
+            k_count,
+        });
+
+    c_buf.read(ctx, readback);
+    for (uint32_t i = 0; i < rows * cols; ++i) {
+        EXPECT_NEAR(readback.get()->data[i], expected, 1.0e-4f)
+            << "dynamic-atb-acc C[" << i << "]";
+    }
+}
+
+TEST_F(VulkanTestBase, dynamic_atb_acc_tiling_is_faster_than_no_tiling)
+{
+    if (!get_session().shader_buffer_float32_atomic_add_enabled()) {
+        GTEST_SKIP() << "selected Vulkan device does not expose shaderBufferFloat32AtomicAdd";
+    }
+
+    constexpr uint32_t rows = 128;
+    constexpr uint32_t cols = 128;
+    constexpr int k_count = 512;
+    constexpr float expected = 2.0f * static_cast<float>(k_count);
+
+    struct PushConstants {
+        int32_t rllm_bound_x;
+        int32_t rllm_bound_y;
+        int32_t k_count;
+    } push_constants{
+        static_cast<int32_t>(rows),
+        static_cast<int32_t>(cols),
+        k_count,
+    };
+
+    VHostBuffer<float[512 * 128]> a(get_session());
+    VHostBuffer<float[512 * 128]> b(get_session());
+    VHostBuffer<float[128 * 128]> c(get_session());
+    VHostBuffer<float[128 * 128]> readback(get_session());
+    a.fill(1.0f);
+    b.fill(2.0f);
+    c.fill(0.0f);
+
+    VDeviceBuffer<float[512 * 128]> a_buf(a);
+    VDeviceBuffer<float[512 * 128]> b_buf(b);
+    VDeviceBuffer<float[128 * 128]> c_buf(c);
+    std::vector<VBaseDeviceBuffer*> bufs{&a_buf, &b_buf, &c_buf};
+
+    VulkanComputeContext transfer_context(get_session());
+    a_buf.write(transfer_context, a);
+    b_buf.write(transfer_context, b);
+
+    VulkanComputeKernel no_tiling(
+        get_session(),
+        TESTDATA_DIR "/dynamic-atb-acc-perf-noopt.glsl",
+        sizeof(PushConstants),
+        bufs.size());
+    write_multi_arg_descriptors(no_tiling, get_device(), bufs);
+
+    const VulkanDimension no_tiling_dims{rows, cols, 1};
+
+    (void)dispatch_raw_kernel_once(
+        no_tiling,
+        get_session(),
+        c_buf,
+        c,
+        no_tiling_dims,
+        &push_constants,
+        sizeof(push_constants));
+    const auto no_tiling_actual = read_float_buffer(transfer_context, c_buf, readback);
+
+    for (uint32_t i = 0; i < no_tiling_actual.size(); ++i) {
+        EXPECT_NEAR(no_tiling_actual[i], expected, 1.0e-4f)
+            << "dynamic-atb-acc no-tiling C[" << i << "]";
+    }
+
+    double best_no_tiling = 1.0e30;
+    for (int i = 0; i < 5; ++i) {
+        best_no_tiling = std::min(
+            best_no_tiling,
+            dispatch_raw_kernel_once(
+                no_tiling,
+                get_session(),
+                c_buf,
+                c,
+                no_tiling_dims,
+                &push_constants,
+                sizeof(push_constants)));
+    }
+
+    const uint32_t chunk_sizes[] = {1, 2, 4, 8, 16, 32, 64};
+    double best_tiled = 1.0e30;
+    uint32_t best_chunk_size = 0;
+
+    for (uint32_t chunk_size : chunk_sizes) {
+        const std::string shader_path =
+            std::string(TESTDATA_DIR) + "/dynamic-atb-acc-perf-chunk-" + std::to_string(chunk_size) + ".glsl";
+        const std::string tiled_glsl = read_text_file(shader_path);
+        ASSERT_NE(tiled_glsl.find("int(gl_WorkGroupID.z) * " + std::to_string(chunk_size)), std::string::npos);
+        ASSERT_NE(tiled_glsl.find("atomicAdd(C["), std::string::npos);
+
+        VulkanComputeKernel tiled(
+            get_session(),
+            shader_path,
+            sizeof(PushConstants),
+            bufs.size());
+        write_multi_arg_descriptors(tiled, get_device(), bufs);
+
+        const VulkanDimension tiled_dims{
+            (rows + 8 - 1) / 8,
+            (cols + 8 - 1) / 8,
+            (static_cast<uint32_t>(k_count) + chunk_size - 1) / chunk_size,
+        };
+
+        (void)dispatch_raw_kernel_once(
+            tiled,
+            get_session(),
+            c_buf,
+            c,
+            tiled_dims,
+            &push_constants,
+            sizeof(push_constants));
+        const auto tiled_actual = read_float_buffer(transfer_context, c_buf, readback);
+
+        ASSERT_EQ(tiled_actual.size(), no_tiling_actual.size());
+        for (uint32_t i = 0; i < tiled_actual.size(); ++i) {
+            EXPECT_NEAR(tiled_actual[i], expected, 1.0e-4f)
+                << "dynamic-atb-acc chunk=" << chunk_size << " C[" << i << "]";
+        }
+
+        double best_chunk = 1.0e30;
+        for (int i = 0; i < 5; ++i) {
+            best_chunk = std::min(
+                best_chunk,
+                dispatch_raw_kernel_once(
+                    tiled,
+                    get_session(),
+                    c_buf,
+                    c,
+                    tiled_dims,
+                    &push_constants,
+                    sizeof(push_constants)));
+        }
+
+        const double chunk_speedup = best_no_tiling / best_chunk;
+        RecordProperty(("dynamic_atb_chunk_" + std::to_string(chunk_size) + "_ms").c_str(), best_chunk);
+        RecordProperty(("dynamic_atb_chunk_" + std::to_string(chunk_size) + "_speedup").c_str(), chunk_speedup);
+        std::cerr << "dynamic_atb_acc chunk=" << chunk_size
+                  << " speedup: " << chunk_speedup << "x"
+                  << " (tiled=" << best_chunk << " ms"
+                  << ", no_tiling=" << best_no_tiling << " ms)\n";
+
+        if (best_chunk < best_tiled) {
+            best_tiled = best_chunk;
+            best_chunk_size = chunk_size;
+        }
+    }
+
+    const double speedup = best_no_tiling / best_tiled;
+    RecordProperty("dynamic_atb_best_chunk_size", best_chunk_size);
+    RecordProperty("dynamic_atb_no_tiling_ms", best_no_tiling);
+    RecordProperty("dynamic_atb_best_tiled_ms", best_tiled);
+    RecordProperty("dynamic_atb_best_speedup", speedup);
+    std::cerr << "dynamic_atb_acc best chunk=" << best_chunk_size
+              << " speedup: " << speedup << "x"
+              << " (tiled=" << best_tiled << " ms"
+              << ", no_tiling=" << best_no_tiling << " ms)\n";
+
+    EXPECT_LT(best_tiled, best_no_tiling)
+        << "dynamic AtB tiling did not improve runtime: best chunk=" << best_chunk_size
+        << ", tiled=" << best_tiled
+        << "ms, no_tiling=" << best_no_tiling << "ms";
 }

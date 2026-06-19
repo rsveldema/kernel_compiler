@@ -564,11 +564,21 @@ class VulkanCppStubVisitor(Visitor):
         elif has_2d:
             x_dim = f"(dispatch_rows + {wg_x} - 1) / {wg_x}"
             y_dim = f"(dispatch_cols + {wg_y} - 1) / {wg_y}"
-            z_dim = str(node.reduction_chunks)
+            if getattr(node, "reduction_bound_var", "") and getattr(node, "reduction_chunk_size", 0):
+                bound = getattr(node, "reduction_bound_var")
+                chunk = getattr(node, "reduction_chunk_size")
+                z_dim = f"(push_constants.{bound} + {chunk} - 1) / {chunk}"
+            else:
+                z_dim = str(node.reduction_chunks)
         else:
             x_dim = f"(dispatch_rows + {wg_x} - 1) / {wg_x}"
             y_dim = "1"
-            z_dim = str(node.reduction_chunks)
+            if getattr(node, "reduction_bound_var", "") and getattr(node, "reduction_chunk_size", 0):
+                bound = getattr(node, "reduction_bound_var")
+                chunk = getattr(node, "reduction_chunk_size")
+                z_dim = f"(push_constants.{bound} + {chunk} - 1) / {chunk}"
+            else:
+                z_dim = str(node.reduction_chunks)
         return x_dim, y_dim, z_dim
 
     def _emit_kernel_class(

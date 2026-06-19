@@ -24,10 +24,11 @@ class Program(AstNode):
         reduction_chunk_size=0,
         reduction_chunks=1,
         reduction_chunk_var="",
+        reduction_bound_var="",
         use_shared_memory_tiling=False,
         shared_memory_chunk_size=1,
         use_cooperative_matrix2=False,
-        cooperative_matrix2_chunk_size=8,
+        cooperative_matrix2_chunk_size=16,
         # Set by perform_tiling() for workgroup partitioning
         parallelized=False,
         workgroup_count=1,
@@ -59,6 +60,7 @@ class Program(AstNode):
         self.reduction_chunk_size = reduction_chunk_size
         self.reduction_chunks = reduction_chunks
         self.reduction_chunk_var = reduction_chunk_var
+        self.reduction_bound_var = reduction_bound_var
         self.use_shared_memory_tiling = use_shared_memory_tiling
         self.shared_memory_chunk_size = shared_memory_chunk_size
         self.use_cooperative_matrix2 = use_cooperative_matrix2

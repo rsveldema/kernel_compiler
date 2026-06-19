@@ -701,6 +701,28 @@ class VulkanKernelVisitor(Visitor):
         inc_op = node.increment_op if node.increment_op else "++"
 
         loop_type = self._glsl_type_name(node.loop_var_type) if node.loop_var_type else "int"
+
+        current_program = getattr(self, "_current_program", None)
+        if (
+            current_program is not None
+            and self._uses_reduction_chunks
+            and node.loop_var_name == getattr(current_program, "reduction_chunk_var", "")
+        ):
+            chunk_size = getattr(current_program, "reduction_chunk_size", 0) or 1
+            block_start = f"(int(gl_WorkGroupID.z) * {chunk_size})"
+            block_end = f"({block_start} + {chunk_size})"
+            lines.append(
+                f"{ind}for ({loop_type} {node.loop_var_name} = {block_start}; "
+                f"{node.loop_var_name} < {block_end} && {node.loop_var_name} < {upper_bound}; {inc_op}{inc_var}) {{"
+            )
+            for stmt in node.body_stmts:
+                if hasattr(stmt, "accept"):
+                    result = stmt.accept(self)
+                    if isinstance(result, str):
+                        lines.append(f"{ind}{result}")
+            lines.append(f"{ind}}}")
+            return "\n".join(lines) + "\n"
+
         lines.append(
             f"{ind}for ({loop_type} {node.loop_var_name} = {lower_bound}; "
             f"{node.loop_var_name} < {upper_bound}; {inc_op}{inc_var}) {{"
@@ -1209,6 +1231,7 @@ class VulkanKernelVisitor(Visitor):
 
 
     def visit_program(self, node: Program) -> str:
+        self._current_program = node
         self._lines = []
         self._indent_level = 0
         self._binding_counter = 0

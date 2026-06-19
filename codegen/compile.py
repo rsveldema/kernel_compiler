@@ -31,7 +31,7 @@ from codegen.visitors.pretty_printer import prettyprint
 from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
 from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
 from codegen.visitors.rllm_vulkan_dispatch_stub_visitor import RllmVulkanDispatchStubVisitor
-from codegen.optim import perform_blocking, perform_cooperative_matrix2
+from codegen.optim import DEFAULT_REDUCTION_CHUNK_SIZE, perform_blocking, perform_cooperative_matrix2
 from codegen.workgroup_partitioning import perform_tiling
 
 log = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ def read_file(filename: str) -> str:
 def optimize(
     program: Program,
     enable_optimizations: bool = True,
-    chunk_size: int = 8,
+    chunk_size: int = DEFAULT_REDUCTION_CHUNK_SIZE,
     optimization_pass: str = "shared-memory",
     enable_parallelization: bool = False,
 ) -> Program:
@@ -65,7 +65,7 @@ def optimize(
 def compile(
     filename: str,
     enable_optimizations: bool = True,
-    chunk_size: int = 8,
+    chunk_size: int = DEFAULT_REDUCTION_CHUNK_SIZE,
     optimization_pass: str = "shared-memory",
     enable_parallelization: bool = False,
 ) -> Program:
@@ -82,7 +82,7 @@ def generate_vulkan(
     filename: str,
     output: str,
     enable_optimizations: bool = True,
-    chunk_size: int = 8,
+    chunk_size: int = DEFAULT_REDUCTION_CHUNK_SIZE,
     optimization_pass: str = "shared-memory",
     rllm_dispatch_stub: str | None = None,
     rllm_spv_path: str | None = None,
@@ -123,7 +123,7 @@ def compile_vulkan(
     input_file: str,
     output_spv: str,
     enable_optimizations: bool = True,
-    chunk_size: int = 8,
+    chunk_size: int = DEFAULT_REDUCTION_CHUNK_SIZE,
     optimization_pass: str = "shared-memory",
     rllm_dispatch_stub: str | None = None,
     rllm_spv_path: str | None = None,
@@ -173,7 +173,7 @@ if __name__ == "__main__":
     _parser.add_argument(
         "--chunk-size",
         type=int,
-        default=8,
+        default=DEFAULT_REDUCTION_CHUNK_SIZE,
         help="Reduction chunk size for shared-memory tiling optimizations",
     )
     _parser.add_argument(

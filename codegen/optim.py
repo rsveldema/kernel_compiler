@@ -6,7 +6,7 @@ from codegen.kast.statement import (
     Assignment,
     Condition,
 )
-from codegen.kast.expression import BinaryExpr, Identifier, Number
+from codegen.kast.expression import ArrayAccess, BinaryExpr, Identifier, Number
 from codegen.kast.workgroup import WorkgroupProperties
 
 # Import parallelization pass from its own module
@@ -14,18 +14,31 @@ from codegen.workgroup_partitioning import perform_tiling, DEFAULT_WORKGROUPS
 
 
 BLOCK_SIZE = 8
+DEFAULT_REDUCTION_CHUNK_SIZE = 16
+MAX_DYNAMIC_REDUCTION_BOUND = 256000
 
 
-def perform_blocking(program: Program, chunk_size: int = BLOCK_SIZE) -> Program:
+def perform_blocking(program: Program, chunk_size: int = DEFAULT_REDUCTION_CHUNK_SIZE) -> Program:
     blocked = False
     reduction_bound = 0
+    reduction_bound_var = ""
+    reduction_chunk_var = ""
+    has_output_accumulation = _has_array_accumulation(program)
     for stmt in program.body_stmts:
         if not isinstance(stmt, ForLoopWithConditionAndIncrement):
             continue
         if _can_block_loop(stmt, program):
             blocked = True
             condition = getattr(stmt, "condition", None)
-            reduction_bound = _extract_number(getattr(condition, "rhs", None)) or reduction_bound
+            reduction_chunk_var = _get_loop_var(stmt) or reduction_chunk_var
+            rhs = getattr(condition, "rhs", None)
+            numeric_bound = _extract_number(rhs)
+            if numeric_bound is not None:
+                reduction_bound = numeric_bound
+                reduction_bound_var = ""
+            elif isinstance(rhs, Identifier):
+                reduction_bound = MAX_DYNAMIC_REDUCTION_BOUND
+                reduction_bound_var = rhs.name
 
     # Mark as tiled only when a blockable inner-product loop was found.  The
     # Vulkan backend lowers this to a real local workgroup size and emits a
@@ -34,9 +47,12 @@ def perform_blocking(program: Program, chunk_size: int = BLOCK_SIZE) -> Program:
     program.tile_block_size = BLOCK_SIZE if blocked else 1
     program.use_shared_memory_tiling = blocked and program.space_dim == 2
     program.shared_memory_chunk_size = chunk_size if program.use_shared_memory_tiling else 1
-    program.reduction_chunk_size = chunk_size if program.use_shared_memory_tiling else 0
+    use_reduction_chunks = program.use_shared_memory_tiling and has_output_accumulation
+    program.reduction_chunk_size = chunk_size if use_reduction_chunks else 0
     program.reduction_chunks = 1
-    if program.use_shared_memory_tiling and reduction_bound:
+    program.reduction_chunk_var = reduction_chunk_var if use_reduction_chunks else ""
+    program.reduction_bound_var = reduction_bound_var if use_reduction_chunks else ""
+    if use_reduction_chunks and reduction_bound:
         program.reduction_chunks = (reduction_bound + chunk_size - 1) // chunk_size
     if blocked and not program.workgroups:
         y_size = BLOCK_SIZE if program.space_dim >= 2 else 1
@@ -50,7 +66,7 @@ def perform_blocking(program: Program, chunk_size: int = BLOCK_SIZE) -> Program:
     return program
 
 
-def perform_cooperative_matrix2(program: Program, chunk_size: int = BLOCK_SIZE) -> Program:
+def perform_cooperative_matrix2(program: Program, chunk_size: int = DEFAULT_REDUCTION_CHUNK_SIZE) -> Program:
     blocked = False
     for stmt in program.body_stmts:
         if not isinstance(stmt, ForLoopWithConditionAndIncrement):
@@ -85,7 +101,9 @@ def _can_block_loop(loop, program):
     if not isinstance(condition, Condition):
         return False
     upper_bound = _extract_number(condition.rhs)
-    if upper_bound is None or upper_bound < BLOCK_SIZE:
+    if upper_bound is None and not isinstance(condition.rhs, Identifier):
+        return False
+    if upper_bound is not None and upper_bound < BLOCK_SIZE:
         return False
     loop_var_name = _get_loop_var(loop)
     if not loop_var_name:
@@ -153,6 +171,24 @@ def _find_accumulators_in_loop(loop):
                     accu.append(name)
                     seen.add(name)
     return accu
+
+
+def _has_array_accumulation(program):
+    def walk_statements(stmts):
+        for stmt in stmts or []:
+            if (
+                isinstance(stmt, Assignment)
+                and stmt.assign_op == "+="
+                and isinstance(getattr(stmt, "lvalue", None), ArrayAccess)
+            ):
+                return True
+            if walk_statements(getattr(stmt, "body_stmts", [])):
+                return True
+            if walk_statements(getattr(stmt, "else_stmts", [])):
+                return True
+        return False
+
+    return walk_statements(getattr(program, "body_stmts", []))
 
 
 def _has_inner_product_pattern(loop):

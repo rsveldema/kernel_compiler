@@ -110,7 +110,11 @@ class TreeRewriter(visitor.Visitor):
         if "step2_guard" in self.pattern_store.patterns:
             body_stmts = self._apply_step2_to_statements(body_stmts)
         if "step3_chunked_loop" in self.pattern_store.patterns:
-            body_stmts = self._apply_step3_to_statements(body_stmts, target_loop_bounds, workgroups)
+            body_stmts = self._apply_step3_to_statements(
+                body_stmts,
+                target_loop_bounds,
+                workgroups,
+            )
 
         node.body_stmts = body_stmts
         return node
@@ -125,6 +129,10 @@ class TreeRewriter(visitor.Visitor):
                 cloned = deepcopy(stmt)
                 cloned.body_stmts = self._apply_step2_to_statements(getattr(cloned, "body_stmts", []) or [])
                 rewritten.append(cloned)
+                continue
+
+            if isinstance(stmt, Declaration):
+                rewritten.append(deepcopy(stmt))
                 continue
 
             cloned = deepcopy(stmt)
@@ -147,7 +155,10 @@ class TreeRewriter(visitor.Visitor):
         for stmt in statements or []:
             if self._is_for_statement(stmt):
                 concrete_bound = self._get_concrete_loop_upper_bound(stmt)
-                if concrete_bound is not None and concrete_bound in target_loop_bounds:
+                variable_bound = self._get_variable_loop_upper_bound(stmt)
+                should_tile_concrete = concrete_bound is not None and concrete_bound in target_loop_bounds
+                should_tile_variable = variable_bound is not None and variable_bound in target_loop_bounds
+                if should_tile_concrete or should_tile_variable:
                     rewritten.extend(self._tile_loop(stmt, workgroups))
                     continue
 
@@ -247,5 +258,11 @@ class TreeRewriter(visitor.Visitor):
                 return int(bound_expr.value)
             except (ValueError, AttributeError):
                 return None
+        return None
+
+    def _get_variable_loop_upper_bound(self, loop):
+        bound_expr = self._get_loop_bound_expr(loop)
+        if isinstance(bound_expr, Identifier):
+            return bound_expr.name
         return None
     
