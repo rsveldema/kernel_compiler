@@ -908,8 +908,11 @@ public:
             using data_type = std::remove_reference_t<decltype(std::declval<T&>().data)>;
             using element_type = std::remove_extent_t<data_type>;
             const size_t capacity = static_cast<size_t>(size() / sizeof(element_type));
-            assert(offset <= capacity);
-            assert(count <= capacity - offset);
+            if (offset > capacity || count > capacity - offset)
+            {
+                std::fprintf(stderr, "VHostBuffer::fill_at out of bounds\n");
+                std::abort();
+            }
             std::fill_n(get()->data + offset, count, value);
         }
         else

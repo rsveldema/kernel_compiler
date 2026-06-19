@@ -6,8 +6,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+include(CTest)
 
-# Enable testing for the project
-enable_testing()
 add_subdirectory(runtime)
-add_subdirectory(tests)
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()

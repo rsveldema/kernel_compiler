@@ -319,7 +319,13 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
         char buf[4096];
         while (auto n = fread(buf, 1, sizeof(buf), fp)) {
             const auto wrote = write(fd, buf, static_cast<size_t>(n));
-            assert(wrote == static_cast<ssize_t>(n));
+            if (wrote != static_cast<ssize_t>(n))
+            {
+                close(fd);
+                pclose(fp);
+                std::fprintf(stderr, "failed to write temporary SPIR-V file\n");
+                std::abort();
+            }
         }
 
         int rc_p = pclose(fp);
