@@ -480,12 +480,13 @@ TEST_F(VulkanTestBase, triangular1_correctness)
     constexpr VkDeviceSize d_scores_size_bytes = sizeof(rllm_triangular1::RllmBuffer_d_scores);
     constexpr VkDeviceSize d_raw_size_bytes = sizeof(rllm_triangular1::RllmBuffer_d_raw);
     constexpr VkDeviceSize attn_w_size_bytes = sizeof(rllm_triangular1::RllmBuffer_attn_w);
-    ASSERT_GE(triangular_session.maxMemoryAllocationSize(), d_scores_size_bytes)
-        << "maxMemoryAllocationSize must cover RllmBuffer_d_scores";
-    ASSERT_GE(triangular_session.maxMemoryAllocationSize(), d_raw_size_bytes)
-        << "maxMemoryAllocationSize must cover RllmBuffer_d_raw";
-    ASSERT_GE(triangular_session.maxMemoryAllocationSize(), attn_w_size_bytes)
-        << "maxMemoryAllocationSize must cover RllmBuffer_attn_w";
+    const VkDeviceSize max_allocation_size = triangular_session.maxMemoryAllocationSize();
+    const VkDeviceSize required_size = std::max({d_scores_size_bytes, d_raw_size_bytes, attn_w_size_bytes});
+    if (max_allocation_size < required_size) {
+        GTEST_SKIP() << "selected Vulkan device maxMemoryAllocationSize is "
+                     << max_allocation_size << " bytes, but triangular buffers require "
+                     << required_size << " bytes";
+    }
     float expected_val = 1.0f - static_cast<float>(test_seq_len);
 
     std::unique_ptr<VHostBuffer<rllm_triangular1::RllmBuffer_d_scores>> d_scores_h;

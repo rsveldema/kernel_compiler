@@ -98,7 +98,13 @@ class VulkanCppStubVisitor(Visitor):
         """Generate the kfloat type aliases header filename and content."""
         kfloat_type = "bfloat_t" if self._use_bfloat16 else "float"
         filename = "_type_aliases.hpp"
-        content = f'#pragma once\nusing kfloat = {kfloat_type};\n'
+        content = (
+            "#pragma once\n"
+            "#include <cstdint>\n"
+            "using float16_t = _Float16;\n"
+            "using bfloat_t = uint16_t;\n"
+            f"using kfloat = {kfloat_type};\n"
+        )
         return (filename, content)
 
 
@@ -295,6 +301,12 @@ class VulkanCppStubVisitor(Visitor):
                 return f"{val}ULL"
             return str(val)
         return "1"
+
+    def _buffer_element_cpp_type(self, ty) -> str:
+        elem_type = getattr(ty, "elem_type", None)
+        if elem_type is None:
+            return "float"
+        return self._cpp_type_str(elem_type)
 
     def _number_literal(self, expr) -> str | None:
         if expr and isinstance(expr, ast.Number):
@@ -505,7 +517,8 @@ class VulkanCppStubVisitor(Visitor):
 
             self._emit(f"struct {sname} {{")
             self._push()
-            self._emit(f"    float data[{size_str}];")
+            elem_type = self._buffer_element_cpp_type(vt)
+            self._emit(f"    {elem_type} data[{size_str}];")
             self._pop()
             self._emit("};")
             self._emit("")
