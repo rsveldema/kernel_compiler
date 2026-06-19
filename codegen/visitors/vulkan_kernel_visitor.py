@@ -886,7 +886,7 @@ class VulkanKernelVisitor(Visitor):
         self._emit(f"const int load_k = load_idx - load_i * {chunk_size};")
         self._emit(f"const int a_row = int(gl_WorkGroupID.x) * {tile_size} + load_i;")
         self._emit("const int a_k = block_start + load_k;")
-        self._emit("if (a_k < 1024) {")
+        self._emit("if (a_row < rllm_push.rllm_bound_x && a_k < 1024) {")
         self._push()
         self._emit("sh_A1[load_i][load_k] = A1[(1024 * a_row) + a_k];")
         self._emit("sh_A2[load_i][load_k] = A2[(1024 * a_row) + a_k];")
@@ -907,7 +907,7 @@ class VulkanKernelVisitor(Visitor):
         self._emit(f"const int load_j = load_idx - load_k * {tile_size};")
         self._emit("const int b_k = block_start + load_k;")
         self._emit(f"const int b_col = int(gl_WorkGroupID.y) * {tile_size} + load_j;")
-        self._emit("if (b_k < 1024) {")
+        self._emit("if (b_k < 1024 && b_col < rllm_push.rllm_bound_y) {")
         self._push()
         self._emit("sh_B1[load_k][load_j] = B1[(1024 * b_k) + b_col];")
         self._emit("sh_B2[load_k][load_j] = B2[(1024 * b_k) + b_col];")
@@ -931,7 +931,11 @@ class VulkanKernelVisitor(Visitor):
         self._pop()
         self._emit("}")
         self._emit("barrier();")
+        self._emit("if (i < rllm_push.rllm_bound_x && j < rllm_push.rllm_bound_y) {")
+        self._push()
         self._emit("atomicAdd(C[(1024 * i) + j], sum1 + sum2 + sum3);")
+        self._pop()
+        self._emit("}")
         self._pop()
         self._emit("}")
 
@@ -1475,6 +1479,14 @@ class VulkanKernelVisitor(Visitor):
         # 2. Initialize params from push constants
         for name, vtype in self._push_constant_fields:
             self._emit(f"{vtype} {name} = rllm_push.{name};")
+
+        if not parallelized and node.loop_vars:
+            parts = []
+            for idx, var in enumerate(node.loop_vars):
+                bound_name = f"rllm_bound_{'xyz'[idx]}"
+                parts.append(f"{var} >= rllm_push.{bound_name}")
+            if parts:
+                self._emit(f"if ({' || '.join(parts)}) return;")
 
         # 3. Triangular guard (if applicable)
         if is_triangular:
