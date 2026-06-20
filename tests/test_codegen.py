@@ -58,6 +58,7 @@ END_PROGRAM
 
     shader = program.accept(VulkanKernelVisitor())
 
+    assert "#extension GL_EXT_shader_16bit_storage : require" in shader
     assert "float16_t weights[64];" in shader
     assert "weights[((8 * i) + (1 * i))] = float16_t(clamp(src[i], -2.0, 2.0));" in shader
     assert "src[i] = (src[i] + float(weights[((8 * i) + (1 * i))]));" in shader

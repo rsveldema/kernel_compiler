@@ -1100,6 +1100,7 @@ class VulkanKernelVisitor(Visitor):
         self._emit("#version 450")
         self._emit("#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require")
         if self._program_uses_float16(node):
+            self._emit("#extension GL_EXT_shader_16bit_storage : require")
             self._emit("#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require")
         self._emit("#extension GL_KHR_shader_subgroup_arithmetic : require")
         self._emit("#extension GL_KHR_shader_subgroup_clustered : require")
