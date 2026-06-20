@@ -21,7 +21,7 @@ PARAMETERS
         int length
 
 BEGIN
-        const float scale = 1.0f / sqrt(float(size_t(128)));
+        const float scale = (1.0f / sqrt(float(size_t(128))));
         dst[i] = scale;
 
 END_PROGRAM
@@ -61,6 +61,31 @@ END_PROGRAM
     assert "weights[((8 * i) + (1 * i))] = float16_t(clamp(src[i], -2.0, 2.0));" in shader
 
 
+def test_vulkan_uses_float_for_normalized_small_float_layout():
+    program = parse(
+        """
+PROGRAM("small.cc:1")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<8>(), (src, weights))
+
+PARAMETERS
+        fixed_size_vector<float, 8>& src,
+        fixed_size_matrix<float, 8, 8>& weights
+
+BEGIN
+        src[i] = weights[i, i];
+
+END_PROGRAM
+"""
+    )
+    program = resolve_array_indices(program)
+
+    shader = program.accept(VulkanKernelVisitor())
+
+    assert "float weights[64];" in shader
+    assert "float16_t weights[64];" not in shader
+
+
 def test_vulkan_fixed_size_triangular_matrix_uses_compact_storage():
     program = parse(
         """
@@ -73,7 +98,7 @@ PARAMETERS
         fixed_size_vector<float, 8>& out
 
 BEGIN
-        scores[i, j] = out[i] + out[j];
+        scores[i, j] = (out[i] + out[j]);
         out[i] = scores[i, j];
 
 END_PROGRAM
@@ -86,6 +111,56 @@ END_PROGRAM
     assert "float scores[36];" in shader
     assert "scores[(((i * (i + 1)) / 2) + j)] = (out[i] + out[j]);" in shader
     assert "out[i] = scores[(((i * (i + 1)) / 2) + j)];" in shader
+
+
+def test_vulkan_preserves_if_comparison_operator():
+    program = parse(
+        """
+PROGRAM("if.cc:1")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<8>(), (values, expected_output_token))
+
+PARAMETERS
+        fixed_size_vector<float, 8>& values,
+        int expected_output_token
+
+BEGIN
+        if (i == expected_output_token)
+            values[i] += 0.9f;
+
+END_PROGRAM
+"""
+    )
+    program = resolve_array_indices(program)
+
+    shader = program.accept(VulkanKernelVisitor())
+
+    assert "if (i == rllm_push.expected_output_token)" in shader
+
+
+def test_vulkan_preserves_binary_operator_precedence():
+    program = parse(
+        """
+PROGRAM("precedence.cc:1")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<8>(), (dst, src, learning_rate))
+
+PARAMETERS
+        fixed_size_vector<float, 8>& dst,
+        fixed_size_vector<float, 8>& src,
+        float learning_rate
+
+BEGIN
+        dst[i] = ((0.9f * dst[i]) + (learning_rate * src[i]));
+
+END_PROGRAM
+"""
+    )
+    program = resolve_array_indices(program)
+
+    shader = program.accept(VulkanKernelVisitor())
+
+    assert "dst[i] = ((0.9 * dst[i]) + (rllm_push.learning_rate * src[i]));" in shader
 
 
 def test_cpp_stub_fixed_size_triangular_matrix_uses_compact_storage():

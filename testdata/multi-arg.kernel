@@ -19,18 +19,18 @@ BEGIN
             {
                 const int k = int(l_idx);
 
-                const float term1 = A1[i, k] * B1[k, j];
+                const float term1 = (A1[i, k] * B1[k, j]);
                 OVERFLOW_CHECK_ADD(sum1, term1);
                 sum1 += term1;
 
-                const float term2 = A2[i, k] * B2[k, j];
+                const float term2 = (A2[i, k] * B2[k, j]);
                 OVERFLOW_CHECK_ADD(sum2, term2);
                 sum2 += term2;
 
-                const float term3 = A3[i, k] * B3[k, j];
+                const float term3 = (A3[i, k] * B3[k, j]);
                 OVERFLOW_CHECK_ADD(sum3, term3);
                 sum3 += term3;
             }
-            C[i, j] += sum1 + sum2 + sum3;
+            C[i, j] += (sum1 + (sum2 + sum3));
 
 END_PROGRAM

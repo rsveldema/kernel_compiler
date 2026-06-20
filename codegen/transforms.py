@@ -51,6 +51,7 @@ _TYPE_NAMES = frozenset((
     "fixed_size_triangular_matrix",
     "flexible_size_matrix", "flexible_cols_matrix", "fixed_size_levels_rows_cols_matrix",
     "flexible_rows_cols_levels_matrix", "fixed_size_obj_vector",
+    "tensorLayout",
 ))
 
 
@@ -81,6 +82,19 @@ def _extract_op_token_from_tree(tree):
         if isinstance(child, Token):
             return child.value
     return None
+
+
+def _find_compare_operator(tree):
+    """Find the first comparison operator token inside a condition tree."""
+    if isinstance(tree, Token) and tree.type in {"LT", "GT", "LTE", "GTE", "EQ", "NEQ"}:
+        return tree.value
+    if isinstance(tree, Tree):
+        for child in tree.children:
+            op = _find_compare_operator(child)
+            if op is not None:
+                return op
+    return None
+
 
 # ── extractors ─────────────────────────────────────────────────────
 
@@ -336,7 +350,16 @@ def transform_expression(expr_tree):
             return LimitExpr(max_val, transform_expression(expr_children[1]))
         return LimitExpr(max_val, max_val)
 
-    # 'expression' wrapper with binary ops
+    if expr_tree.data == "binary_expr":
+        children = expr_tree.children
+        if len(children) == 3:
+            op_val = _extract_op_token_from_tree(children[1])
+            left = transform_expression(children[0])
+            right = transform_expression(children[2])
+            if op_val is not None and left is not None and right is not None:
+                return BinaryExpr(left, op_val, right)
+
+    # 'expression' wrapper
     if expr_tree.data == "expression":
         children = expr_tree.children
         op_val = None
@@ -610,10 +633,11 @@ def _parse_field_access_for_lhs(fa_tree):
     base = Identifier(base_name)
 
     if call_args is not None:
-        assert field is None and not index_groups
-        if base_name == "inc" and call_args:
+        assert not index_groups
+        if field is None and base_name == "inc" and call_args:
             return BinaryExpr(call_args[0], "+", Number(1))
-        return CallExpr(base, call_args)
+        callee = FieldAccess(base=base, field=field) if field is not None else base
+        return CallExpr(callee, call_args)
 
     if index_groups:
         expr = base
@@ -648,9 +672,9 @@ def _resolve_nested_type(node):
         val = node.value
         if val in ("int", "size_t"):
             return Int(val)
-        elif val in ("float", "rlmm_float"):
+        elif val == "float":
             return Float()
-        elif val in ("float16", "rlmm_float_small"):
+        elif val == "float16":
             return Float16()
         return None
 
@@ -662,9 +686,9 @@ def _resolve_nested_type(node):
             val = token.value
             if val in ("int", "size_t"):
                 return Int(val)
-            elif val in ("float", "rlmm_float"):
+            elif val == "float":
                 return Float()
-            elif val in ("float16", "rlmm_float_small"):
+            elif val == "float16":
                 return Float16()
         # Handle compound types (multi-param matrix/vector types)
         if data == "type" and len(node.children) >= 2:
@@ -777,17 +801,20 @@ def _transform_type(type_tree, default_name="int"):
                     _resolve_nested_type(children[1]),
                     transform_expression(expr_children[0]),
                 )
+        elif "tensorLayout" in type_name:
+            # tensorLayout<N>: single dimension parameter
+            if len(expr_children) >= 1:
+                return TensorLayout(transform_expression(expr_children[0]))
         return None
-
 
     # Handle single-child TYPE_LITERAL terminal (scalar types)
     if len(children) == 1 and _is_token(first_child):
         name_val = first_child.value
         if name_val in ("int", "size_t"):
             return Int(name_val)
-        elif name_val in ("float", "rlmm_float"):
+        elif name_val == "float":
             return Float()
-        elif name_val in ("float16", "rlmm_float_small"):
+        elif name_val == "float16":
             return Float16()
         else:
             # Unknown scalar type - fall through to return None for explicit handling
@@ -822,7 +849,9 @@ def _is_overflow_check(stmt_tree):
 
 
 def transform_declaration(stmt_tree):
-    """Transform a declaration tree into Declaration AST."""
+    """Transform a declaration tree into Declaration/SharedDecl AST."""
+    is_shared = stmt_tree.data == "shared_decl"
+    is_tensor_layout = stmt_tree.data == "tensor_layout_decl"
     is_const = stmt_tree.data == "const_decl"
     is_constexpr = stmt_tree.data == "constexpr_decl"
     var_type = None
@@ -838,6 +867,7 @@ def transform_declaration(stmt_tree):
         "flexible_rows_cols_levels_matrix",
     )
 
+    dimensions = []
     for child in stmt_tree.children:
         if isinstance(child, Tree):
             data = child.data
@@ -859,10 +889,37 @@ def transform_declaration(stmt_tree):
                 lvalue = _transform_lvalue(child)
                 if isinstance(lvalue, Identifier):
                     name = lvalue.name
+            if data == "array_index":
+                # Extract dimension expressions from array indexing (e.g., [tile_size][chunk_size])
+                dim_exprs = []
+                for idx_child in child.children:
+                    if isinstance(idx_child, Tree) and idx_child.data == "expression":
+                        dim_exprs.append(transform_expression(idx_child))
+                if dim_exprs:
+                    dimensions.extend(dim_exprs)
         elif isinstance(child, Token):
             # Could be the variable name token directly
             name = child.value
 
+    tensor_layout_dim = None
+    tensor_layout_name = ""
+    tensor_layout_init = None
+    if is_tensor_layout:
+        # children[1] is the dimension expression, children[2] is IDENT name
+        for child in stmt_tree.children:
+            if isinstance(child, Tree) and child.data == "expression":
+                if tensor_layout_dim is None:
+                    tensor_layout_dim = transform_expression(child)
+                else:
+                    tensor_layout_init = transform_expression(child)
+            elif isinstance(child, Token) and child.type == "IDENT":
+                tensor_layout_name = child.value
+
+    if is_tensor_layout:
+        return TensorLayoutDecl(tensor_layout_dim, tensor_layout_name, tensor_layout_init)
+
+    if is_shared:
+        return SharedDecl(is_const, var_type or Int(), name, init_expr, is_constexpr=is_constexpr, dimensions=dimensions)
     return Declaration(is_const, var_type or Int(), name, init_expr, is_constexpr=is_constexpr)
 
 
@@ -944,8 +1001,17 @@ def transform_statement(stmt_tree):
                     isinstance(condition_tree, Tree)
                     and condition_tree.data == "condition"
                 ):
-                    lhs_t = condition_tree.children[0]
-                    rhs_t = condition_tree.children[2]
+                    # Unwrap condition_part if present (compound conditions add this wrapper)
+                    inner_children = []
+                    for c in condition_tree.children:
+                        if isinstance(c, Tree) and c.data == "condition_part":
+                            inner_children.extend(c.children)
+                        else:
+                            inner_children.append(c)
+
+                    # For compound conditions, only use the first part for simple handling
+                    lhs_t = inner_children[0]
+                    rhs_t = inner_children[2]
                     lhs = (
                         _transform_lvalue(lhs_t)
                         if _is_token(lhs_t)
@@ -953,13 +1019,13 @@ def transform_statement(stmt_tree):
                         else None
                     )
                     op_val = ""
-                    for c in condition_tree.children:
+                    for c in inner_children:
                         if _is_token(c):
                             op_val = c.value
                         elif isinstance(c, Tree) and len(c.children) == 1:
-                            inner = c.children[0]
-                            if _is_token(inner):
-                                op_val = inner.value
+                            inner_inner = c.children[0]
+                            if _is_token(inner_inner):
+                                op_val = inner_inner.value
 
                     rhs = (
                         transform_expression(rhs_t) if isinstance(rhs_t, Tree) else None
@@ -972,11 +1038,25 @@ def transform_statement(stmt_tree):
                     stmt_tree.children[2] if len(stmt_tree.children) > 2 else None
                 )
                 if isinstance(inc_tree, Tree):
-                    for c in inc_tree.children:
-                        if _is_token(c) and c.type == "INC_OP":
-                            inc_op = c.value
-                        elif _is_token(c) and c.type == "IDENT":
-                            inc_var = c.value
+                    if inc_tree.data == "inc_compound_inc":
+                        assign_lvalue = None
+                        assign_op = ""
+                        assign_rvalue = None
+                        for c in inc_tree.children:
+                            if _is_token(c) and c.type == "IDENT":
+                                assign_lvalue = Identifier(c.value)
+                            elif _is_token(c) and c.type == "COMP_ASSIGN_INC":
+                                assign_op = c.value
+                            elif isinstance(c, Tree) and c.data == "expression":
+                                assign_rvalue = transform_expression(c)
+                        if assign_lvalue and assign_op and assign_rvalue:
+                            body_stmts.append(Assignment(assign_lvalue, assign_op, assign_rvalue))
+                    else:
+                        for c in inc_tree.children:
+                            if _is_token(c) and c.type == "INC_OP":
+                                inc_op = c.value
+                            elif _is_token(c) and c.type == "IDENT":
+                                inc_var = c.value
 
                 # Extract body from the last child of stmt_tree (after all parsed parts)
                 body_tree = None
@@ -1068,11 +1148,25 @@ def transform_statement(stmt_tree):
                 inc_var = ""
                 inc_op = ""
                 if isinstance(inc_tree, Tree) and inc_tree.data == "increment":
-                    for c in inc_tree.children:
-                        if _is_token(c) and c.type == "IDENT":
-                            inc_var = c.value
-                        elif _is_token(c) and c.type == "INC_OP":
-                            inc_op = c.value
+                    if inc_tree.data == "inc_compound_inc":
+                        assign_lvalue = None
+                        assign_op = ""
+                        assign_rvalue = None
+                        for c in inc_tree.children:
+                            if _is_token(c) and c.type == "IDENT":
+                                assign_lvalue = Identifier(c.value)
+                            elif _is_token(c) and c.type == "COMP_ASSIGN_INC":
+                                assign_op = c.value
+                            elif isinstance(c, Tree) and c.data == "expression":
+                                assign_rvalue = transform_expression(c)
+                        if assign_lvalue and assign_op and assign_rvalue:
+                            body_stmts.append(Assignment(assign_lvalue, assign_op, assign_rvalue))
+                    else:
+                        for c in inc_tree.children:
+                            if _is_token(c) and c.type == "IDENT":
+                                inc_var = c.value
+                            elif _is_token(c) and c.type == "INC_OP":
+                                inc_op = c.value
 
                 # body from children[3] (block or statement)
                 body_tree = (
@@ -1407,16 +1501,15 @@ def transform_statement(stmt_tree):
         condition_tree = stmt_tree.children[0] if len(stmt_tree.children) > 0 else None
         condition = None
         if isinstance(condition_tree, Tree) and condition_tree.data == "condition":
-            lhs_t = condition_tree.children[0]
-            rhs_t = condition_tree.children[2]
-            op_val = ""
+            inner_children = []
             for c in condition_tree.children:
-                if _is_token(c):
-                    op_val = c.value
-                elif isinstance(c, Tree) and len(c.children) == 1:
-                    inner = c.children[0]
-                    if _is_token(inner):
-                        op_val = inner.value
+                if isinstance(c, Tree) and c.data == "condition_part":
+                    inner_children.extend(c.children)
+                else:
+                    inner_children.append(c)
+            lhs_t = inner_children[0]
+            rhs_t = inner_children[2]
+            op_val = _find_compare_operator(condition_tree) or ""
 
             lhs = (
                 _transform_lvalue(lhs_t)
@@ -1449,7 +1542,7 @@ def transform_statement(stmt_tree):
         return If(condition, body_stmts)
 
     # declaration;
-    if data == "decl" or data == "const_decl" or data == "constexpr_decl":
+    if data in ("decl", "const_decl", "constexpr_decl", "shared_decl", "tensor_layout_decl"):
         decl = transform_declaration(stmt_tree)
         return decl
 

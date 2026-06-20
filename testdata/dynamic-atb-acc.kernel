@@ -13,7 +13,7 @@ BEGIN
             for (size_t l_idx = 0; l_idx < (k_count); ++l_idx)
             {
                 const int k = int(l_idx);
-                const float term = A[k, i] * B[k, j];
+                const float term = (A[k, i] * B[k, j]);
                 OVERFLOW_CHECK_ADD(sum, term);
                 sum += term;
             }

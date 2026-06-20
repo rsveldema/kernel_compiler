@@ -85,6 +85,10 @@ def perform_tiling(program: Program, workgroups: int = DEFAULT_WORKGROUPS) -> Pr
     rewrite_context = {
         "workgroups": workgroups,
         "target_loop_bounds": parallelizable_loop_bounds,
+        "tile_size": program.tile_block_size if hasattr(program, "tile_block_size") and program.tile_block_size else 8,
+        "chunk_size": program.shared_memory_chunk_size if hasattr(program, "shared_memory_chunk_size") and program.shared_memory_chunk_size else 128,
+        "bound_k": getattr(program, "bound_k", 1024),
+        "cooperative_matrix2_chunk_size": program.cooperative_matrix2_chunk_size if hasattr(program, "cooperative_matrix2_chunk_size") and program.cooperative_matrix2_chunk_size else 16,
     }
     rewritten_program = TreeRewriter(rewrite_context).visit_program(program)
     body_stmts = getattr(rewritten_program, "body_stmts", []) or []

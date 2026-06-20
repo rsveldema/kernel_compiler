@@ -135,12 +135,14 @@ class SharedDecl(Statement):
         name: str,
         init_expr: Expression | None = None,
         is_constexpr: bool = False,
+        dimensions: list | None = None,
     ):
         self.is_const = is_const
         self.is_constexpr = is_constexpr
         self.var_type = var_type
         self.name = name
         self.init_expr = init_expr
+        self.dimensions = dimensions or []
 
     def accept(self, visitor):
         return visitor.visit_shared_decl(self)
@@ -178,6 +180,7 @@ __all__ = [
     "SharedDecl",
     "RawStatement",
     "WildcardStatement",
+    "TensorLayoutDecl",
     "ReturnStatement",
     "AtomicOp",
 ]
@@ -200,3 +203,16 @@ class AtomicOp(Statement):
 
     def accept(self, visitor):
         return visitor.visit_atomic_op(self)
+
+
+class TensorLayoutDecl(Statement):
+    """tensor_layout declaration in GLSL code generation."""
+
+    def __init__(self, dim_expr: Expression, name: str, init_expr: Expression | None = None):
+        self.dim_expr = dim_expr
+        self.name = name
+        self.init_expr = init_expr
+
+    def accept(self, visitor):
+        return visitor.visit_tensor_layout_decl(self)
+

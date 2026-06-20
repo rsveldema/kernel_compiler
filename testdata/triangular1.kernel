@@ -13,9 +13,9 @@ BEGIN
             float row_dot = 0.f;
             for (const int k : limit<16384>(0, inc(i)))
             {
-                row_dot += d_scores_h[i, k] * attn_w_h[i, k];
+                row_dot += (d_scores_h[i, k] * attn_w_h[i, k]);
             }
-            d_raw_h[i, j] = attn_w_h[i, j] * (d_scores_h[i, j] - row_dot);
+            d_raw_h[i, j] = (attn_w_h[i, j] * (d_scores_h[i, j] - row_dot));
         }
 
 END_PROGRAM

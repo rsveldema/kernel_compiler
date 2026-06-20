@@ -7,6 +7,6 @@ PARAMETERS
         fixed_size_triangular_matrix< float, 8, 8>& tri_out
 
 BEGIN
-        tri_out[i, j] = tri_in[i, j] + 1.0f;
+        tri_out[i, j] = (tri_in[i, j] + 1.0f);
 
 END_PROGRAM

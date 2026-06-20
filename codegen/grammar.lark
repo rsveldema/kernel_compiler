@@ -50,10 +50,11 @@ statement: for_statement
 | atomic_op
 | wildcard_statement
 
-wildcard_statement: wildcard "(" IDENT ")"
+wildcard_statement: wildcard "(" IDENT ")" ";"?
 wildcard_expression: wildcard "(" IDENT ")"
 wildcard: WILDCARD
 WILDCARD: "wildcard"
+SHARED: "shared"
 
 
 atomic_op: ATOMIC_OP "(" expression "," expression ")" ";"
@@ -75,9 +76,12 @@ else_statement: "else" statement
 for_loop_var:  ("const")? type IDENT "=" expression 
 
 // in the AST becomes <expr> <op> <expr>
-condition: lhs compare_operator expression
+condition: condition_part (("&&" | "||") condition_part)*
 
+condition_part: lhs compare_operator expression
 compare_operator: LT | GT | LTE | GTE | EQ | NEQ
+LOGICAL_AND: "&&"
+LOGICAL_OR: "||"
 LT: "<"
 GT: ">"
 LTE: "<="
@@ -85,11 +89,16 @@ GTE: ">="
 EQ: "=="
 NEQ: "!="
 
-increment: IDENT INC_OP -> inc_postfix | INC_OP IDENT -> inc_prefix
+increment: IDENT INC_OP -> inc_postfix
+         | INC_OP IDENT -> inc_prefix
+         | IDENT COMP_ASSIGN_INC expression -> inc_compound_inc
 INC_OP: "++" | "--"
+COMP_ASSIGN_INC: "+=" | "-=" | "*=" | "/="
 
 declaration: "const" type IDENT ("=" expression)? -> const_decl
 | "constexpr" type IDENT "=" expression -> constexpr_decl
+| SHARED type IDENT (array_index)* ("=" expression)? -> shared_decl
+| "tensorLayout" "<" expression ">" IDENT ("=" expression)? -> tensor_layout_decl
 | type IDENT  ("=" expression)? -> decl
 
 // Scalar type terminals (used in TYPE_LITERAL)
@@ -99,6 +108,7 @@ FLOAT_T:  "float"
 FLOAT16_T:"float16"
 TYPE_LITERAL: INT_T | SIZE_T_T | FLOAT_T | FLOAT16_T
 
+TENSOR_LAYOUT: "tensorLayout"
 type: FSV "<" type "," expression ">" ("&")?
     | FRM "<" type "," expression "," expression ">" ("&")?
     | FSM "<" type "," expression "," expression ">" ("&")?
@@ -109,6 +119,7 @@ type: FSV "<" type "," expression ">" ("&")?
     | FRCM "<" type "," expression "," expression ">" ("&")?
     | FCOLM "<" type "," expression "," expression ">" ("&")?
     | FSOV "<" (FSM | FSTM | FLEXSM) "<" type "," expression "," expression ">" "," expression ">" ("&")?
+    | TENSOR_LAYOUT "<" expression ">"
     | TYPE_LITERAL
 
 
@@ -128,8 +139,11 @@ call_args: "("  (expression ("," expression)*)?   ")"
 
 lhs: field_access
 
-expression: base_expr (binary_operator expression)?  ternary_trailer?
+expression: binary_expr ternary_trailer?
+| base_expr ternary_trailer?
 | wildcard_expression
+
+binary_expr: "(" expression binary_operator expression ")"
 
 ternary_trailer: "?" expression ":" expression
 

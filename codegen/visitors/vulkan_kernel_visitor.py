@@ -20,20 +20,6 @@ import math
 import re
 
 
-
-class _ReplacementVisitor(Visitor):
-    """Walk an expression tree and replace identifier names with new expressions."""
-
-    def __init__(self, replacements):
-        self.replacements = replacements
-
-    def visit_identifier(self, node):
-        name = getattr(node, "name", None)
-        if name is not None and name in self.replacements:
-            return prettyprint(self.replacements[name])
-        return name
-
-
 def _substitute_in_expr(expr, replacements):
     """Recursively replace identifier names in an expression tree."""
     if expr is None:
@@ -85,39 +71,6 @@ def _substitute_in_expr(expr, replacements):
 
     return expr
 
-
-def _substitute_variables(stmts, replacements):
-    """Replace loop variable identifiers in statement bodies."""
-    for stmt in (stmts or []):
-        if not hasattr(stmt, "accept"):
-            continue
-
-        def visit(node):
-            if node is None:
-                return
-
-            # Handle lvalue and rvalue of assignments/conditions
-            for attr in ("lvalue",):
-                child = getattr(node, attr, None)
-                if hasattr(child, "accept"):
-                    visit(child)
-            
-            for attr in ("rhs", "lhs", "init_expr"):
-                child = getattr(node, attr, None)
-                if hasattr(child, "accept"):
-                    visit(child)
-
-            # Recurse into rvalue for assignments
-            rvalue = getattr(node, "rvalue", None)
-            if hasattr(rvalue, "accept"):
-                visit(rvalue)
-
-            # Recurse into body_stmts for control flow nodes
-            body = getattr(node, "body_stmts", [])
-            for s in (body or []):
-                visit(s)
-
-        visit(stmt)
 
 _IDENT_RE = re.compile(r"^[A-Za-z_]\w*$")
 _GLSL_RESERVED = {"None", "static_cast"}
@@ -320,12 +273,6 @@ class VulkanKernelVisitor(Visitor):
 
     def _is_shared_memory_multi_arg(self, node: Program) -> bool:
         if not node.use_shared_memory_tiling:
-            return False
-        names = [p.name for p in node.params if isinstance(p, Declaration)]
-        return names == ["A1", "B1", "A2", "B2", "A3", "B3", "C"]
-
-    def _is_cooperative_matrix2_multi_arg(self, node: Program) -> bool:
-        if not node.use_cooperative_matrix2:
             return False
         names = [p.name for p in node.params if isinstance(p, Declaration)]
         return names == ["A1", "B1", "A2", "B2", "A3", "B3", "C"]
@@ -823,7 +770,19 @@ class VulkanKernelVisitor(Visitor):
         init_str = ""
         if node.init_expr is not None:
             init_str = f" = {self._to_str(node.init_expr)}"
-        return f"shared {prefix}{var_type} {node.name}{init_str};"
+        dim_strs = [self._to_str(d) for d in getattr(node, "dimensions", []) or []]
+        dims = "".join(f"[{d}]" for d in dim_strs)
+        return f"shared {prefix}{var_type} {node.name}{dims}{init_str};"
+
+    def visit_tensor_layout_decl(self, node) -> str:
+        """Emit a tensor_layout declaration (tensorLayout<N> variable)."""
+        prefix = "const " if getattr(node, "is_const", False) else ""
+        dim_str = self._to_str(getattr(node, "dim_expr", None))
+        name = getattr(node, "name", "?")
+        init_str = ""
+        if getattr(node, "init_expr", None) is not None:
+            init_str = f" = {self._to_str(node.init_expr)}"
+        return f"{prefix}tensorLayoutNV<{dim_str}> {name}{init_str};"
 
     def visit_raw_statement(self, node: RawStatement) -> str:
         return node.text.rstrip()
@@ -860,138 +819,8 @@ class VulkanKernelVisitor(Visitor):
                 wg_z = self._to_str(wg.z_expr) if wg.z_expr else wg_z
         return wg_x, wg_y, wg_z
 
-    def _emit_shared_memory_multi_arg_body(self, tile_size: int, chunk_size: int) -> None:
-        self._emit(f"shared float sh_A1[{tile_size}][{chunk_size}];")
-        self._emit(f"shared float sh_A2[{tile_size}][{chunk_size}];")
-        self._emit(f"shared float sh_A3[{tile_size}][{chunk_size}];")
-        self._emit(f"shared float sh_B1[{chunk_size}][{tile_size}];")
-        self._emit(f"shared float sh_B2[{chunk_size}][{tile_size}];")
-        self._emit(f"shared float sh_B3[{chunk_size}][{tile_size}];")
-        self._emit("")
-        self._emit("void main() {")
-        self._push()
-        self._emit("const int i = int(gl_GlobalInvocationID.x);")
-        self._emit("const int j = int(gl_GlobalInvocationID.y);")
-        self._emit("const int local_i = int(gl_LocalInvocationID.x);")
-        self._emit("const int local_j = int(gl_LocalInvocationID.y);")
-        self._emit(f"const int local_linear = local_i * {tile_size} + local_j;")
-        self._emit(f"const int block_start = int(gl_WorkGroupID.z) * {chunk_size};")
-        self._emit("float sum1 = 0.0;")
-        self._emit("float sum2 = 0.0;")
-        self._emit("float sum3 = 0.0;")
-        self._emit("")
-        self._emit(f"for (int load_idx = local_linear; load_idx < {tile_size * chunk_size}; load_idx += {tile_size * tile_size}) {{")
-        self._push()
-        self._emit(f"const int load_i = load_idx / {chunk_size};")
-        self._emit(f"const int load_k = load_idx - load_i * {chunk_size};")
-        self._emit(f"const int a_row = int(gl_WorkGroupID.x) * {tile_size} + load_i;")
-        self._emit("const int a_k = block_start + load_k;")
-        self._emit("if (a_row < rllm_push.rllm_bound_x && a_k < 1024) {")
-        self._push()
-        self._emit("sh_A1[load_i][load_k] = A1[(1024 * a_row) + a_k];")
-        self._emit("sh_A2[load_i][load_k] = A2[(1024 * a_row) + a_k];")
-        self._emit("sh_A3[load_i][load_k] = A3[(1024 * a_row) + a_k];")
-        self._pop()
-        self._emit("} else {")
-        self._push()
-        self._emit("sh_A1[load_i][load_k] = 0.0;")
-        self._emit("sh_A2[load_i][load_k] = 0.0;")
-        self._emit("sh_A3[load_i][load_k] = 0.0;")
-        self._pop()
-        self._emit("}")
-        self._pop()
-        self._emit("}")
-        self._emit(f"for (int load_idx = local_linear; load_idx < {chunk_size * tile_size}; load_idx += {tile_size * tile_size}) {{")
-        self._push()
-        self._emit(f"const int load_k = load_idx / {tile_size};")
-        self._emit(f"const int load_j = load_idx - load_k * {tile_size};")
-        self._emit("const int b_k = block_start + load_k;")
-        self._emit(f"const int b_col = int(gl_WorkGroupID.y) * {tile_size} + load_j;")
-        self._emit("if (b_k < 1024 && b_col < rllm_push.rllm_bound_y) {")
-        self._push()
-        self._emit("sh_B1[load_k][load_j] = B1[(1024 * b_k) + b_col];")
-        self._emit("sh_B2[load_k][load_j] = B2[(1024 * b_k) + b_col];")
-        self._emit("sh_B3[load_k][load_j] = B3[(1024 * b_k) + b_col];")
-        self._pop()
-        self._emit("} else {")
-        self._push()
-        self._emit("sh_B1[load_k][load_j] = 0.0;")
-        self._emit("sh_B2[load_k][load_j] = 0.0;")
-        self._emit("sh_B3[load_k][load_j] = 0.0;")
-        self._pop()
-        self._emit("}")
-        self._pop()
-        self._emit("}")
-        self._emit("barrier();")
-        self._emit(f"for (int kk = 0; kk < {chunk_size}; ++kk) {{")
-        self._push()
-        self._emit("sum1 += sh_A1[local_i][kk] * sh_B1[kk][local_j];")
-        self._emit("sum2 += sh_A2[local_i][kk] * sh_B2[kk][local_j];")
-        self._emit("sum3 += sh_A3[local_i][kk] * sh_B3[kk][local_j];")
-        self._pop()
-        self._emit("}")
-        self._emit("barrier();")
-        self._emit("if (i < rllm_push.rllm_bound_x && j < rllm_push.rllm_bound_y) {")
-        self._push()
-        self._emit("atomicAdd(C[(1024 * i) + j], sum1 + sum2 + sum3);")
-        self._pop()
-        self._emit("}")
-        self._pop()
         self._emit("}")
 
-    def _emit_cooperative_matrix2_multi_arg_body(self, tile_size: int, chunk_size: int) -> None:
-        self._emit("void main() {")
-        self._push()
-        self._emit("const uint tile_row = gl_WorkGroupID.x;")
-        self._emit("const uint tile_col = gl_WorkGroupID.y;")
-        self._emit("")
-        self._emit("tensorLayoutNV<2> tensorLayoutA = createTensorLayoutNV(2);")
-        self._emit("tensorLayoutNV<2> tensorLayoutB = createTensorLayoutNV(2);")
-        self._emit("tensorLayoutNV<2> tensorLayoutC = createTensorLayoutNV(2);")
-        self._emit("tensorLayoutA = setTensorLayoutDimensionNV(tensorLayoutA, 1024, 1024);")
-        self._emit("tensorLayoutB = setTensorLayoutDimensionNV(tensorLayoutB, 1024, 1024);")
-        self._emit("tensorLayoutC = setTensorLayoutDimensionNV(tensorLayoutC, 1024, 1024);")
-        self._emit("")
-        self._emit(
-            f"coopmat<float, gl_ScopeWorkgroup, {tile_size}, {tile_size}, gl_MatrixUseAccumulator> result = "
-            f"coopmat<float, gl_ScopeWorkgroup, {tile_size}, {tile_size}, gl_MatrixUseAccumulator>(0.0);"
-        )
-        self._emit("")
-        self._emit(f"for (uint chunkK = 0; chunkK < 1024; chunkK += {chunk_size}) {{")
-        self._push()
-        for suffix in ("1", "2", "3"):
-            self._emit(
-                f"coopmat<float, gl_ScopeWorkgroup, {tile_size}, {chunk_size}, gl_MatrixUseA> matrixA{suffix};"
-            )
-            self._emit(
-                f"coopmat<float, gl_ScopeWorkgroup, {chunk_size}, {tile_size}, gl_MatrixUseB> matrixB{suffix};"
-            )
-            self._emit(
-                f"coopMatLoadTensorNV(matrixA{suffix}, A{suffix}, 0, "
-                f"sliceTensorLayoutNV(tensorLayoutA, {tile_size} * tile_row, {tile_size}, chunkK, {chunk_size}));"
-            )
-            self._emit(
-                f"coopMatLoadTensorNV(matrixB{suffix}, B{suffix}, 0, "
-                f"sliceTensorLayoutNV(tensorLayoutB, chunkK, {chunk_size}, {tile_size} * tile_col, {tile_size}));"
-            )
-            self._emit(f"result = coopMatMulAdd(matrixA{suffix}, matrixB{suffix}, result);")
-        self._pop()
-        self._emit("}")
-        self._emit("")
-        self._emit(
-            f"coopmat<float, gl_ScopeWorkgroup, {tile_size}, {tile_size}, gl_MatrixUseAccumulator> matrixC;"
-        )
-        self._emit(
-            f"coopMatLoadTensorNV(matrixC, C, 0, "
-            f"sliceTensorLayoutNV(tensorLayoutC, {tile_size} * tile_row, {tile_size}, {tile_size} * tile_col, {tile_size}));"
-        )
-        self._emit("result = result + matrixC;")
-        self._emit(
-            f"coopMatStoreTensorNV(result, C, 0, "
-            f"sliceTensorLayoutNV(tensorLayoutC, {tile_size} * tile_row, {tile_size}, {tile_size} * tile_col, {tile_size}));"
-        )
-        self._pop()
-        self._emit("}")
 
     # ── Program visitor (main entry point) ────────────────────────────
 
@@ -1016,6 +845,7 @@ class VulkanKernelVisitor(Visitor):
         """
         result = []
         for stmt in stmts:
+            #assert False, "shoult not be needed. a tkernel should have flattened the loop"
             if isinstance(stmt, ForLoopWithConditionAndIncrement) and                getattr(stmt, "loop_var_name", "").startswith("tile_"):
                 # Skip this tile loop, flatten its body instead
                 inner_stmts = getattr(stmt, "body_stmts", [])
@@ -1058,6 +888,7 @@ class VulkanKernelVisitor(Visitor):
         # all references to loop variables resolve to the global indices computed
         # from gl_GlobalInvocationID and workgroup partitioning.
         if parallelized:
+            #assert False, "tkernel files should have replaced this loop construct"
             return self._emit_parallel_body_stmt(stmt, node)
 
         # ── Non-parallelized path: emit normally with substitution. ───────
@@ -1419,22 +1250,6 @@ class VulkanKernelVisitor(Visitor):
                 self._binding_counter += 1
 
             self._ssbo_map[param.name] = (is_3d, vt)
-
-        if self._is_shared_memory_multi_arg(node):
-            self._emit("")
-            self._emit_shared_memory_multi_arg_body(
-                node.tile_block_size,
-                node.shared_memory_chunk_size,
-            )
-            return self.result()
-
-        if self._is_cooperative_matrix2_multi_arg(node):
-            self._emit("")
-            self._emit_cooperative_matrix2_multi_arg_body(
-                node.tile_block_size,
-                node.cooperative_matrix2_chunk_size,
-            )
-            return self.result()
 
         # ── Main function ──
         self._emit("")

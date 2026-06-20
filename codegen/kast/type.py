@@ -173,6 +173,7 @@ __all__ = [
     "FlexibleRowsColsMatrix",
     "FlexibleSizeMatrix",
     "FixedSizeObjVectorMatrix",
+    "TensorLayout",
 ]
 
 
@@ -191,3 +192,14 @@ class FlexibleRowsColsMatrix(Type):
 
     def accept(self, visitor):
         return visitor.visit_flexible_rows_cols_matrix(self)
+
+
+class TensorLayout(Type):
+    """tensorLayout<N> — GLSL tensor layout with dimension N."""
+
+    def __init__(self, dim_expr: Expression):
+        self.dim_expr = dim_expr
+
+    def accept(self, visitor):
+        return visitor.visit_tensor_layout(self)
+
