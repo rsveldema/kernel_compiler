@@ -115,6 +115,8 @@ class VulkanCppStubVisitor(Visitor):
             return "float"
         if isinstance(ty, ast.Float16):
             return "bfloat_t" if self._use_bfloat16 else "float16_t"
+        if isinstance(ty, ast.CoopMat):
+            return "void"
         return "unknown_type"
 
     def _class_name(self, kernel_name: str) -> str:
@@ -130,6 +132,12 @@ class VulkanCppStubVisitor(Visitor):
 
     def visit_float(self, node: ast.Float) -> str:
         return "float"
+
+    def visit_float16(self, node: ast.Float16) -> str:
+        return "bfloat_t" if self._use_bfloat16 else "float16_t"
+
+    def visit_coop_mat(self, node: ast.CoopMat) -> str:
+        return "void"
 
     def visit_fixed_size_vector(self, node: ast.FixedSizeVector) -> str:
         elem = self._cpp_type_str(node.elem_type) if node.elem_type else "float"
@@ -239,6 +247,9 @@ class VulkanCppStubVisitor(Visitor):
 
     def visit_raw_statement(self, node: ast.RawStatement) -> str:
         return node.text.rstrip()
+
+    def visit_call_statement(self, node: ast.CallStatement) -> str:
+        return f"{node.call_expr.accept(self)};"
 
     def visit_wildcard_statement(self, node: ast.WildcardStatement) -> str:
         return f"wildcard({node.name})"

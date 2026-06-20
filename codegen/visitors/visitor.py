@@ -23,6 +23,9 @@ class Visitor:
     def visit_float16(self, node: _ast.Float16):
         raise NotImplementedError
 
+    def visit_coop_mat(self, node: _ast.CoopMat):
+        raise NotImplementedError
+
     def visit_fixed_size_vector(self, node: _ast.FixedSizeVector):
         raise NotImplementedError
 
@@ -111,6 +114,9 @@ class Visitor:
         raise NotImplementedError
 
     def visit_raw_statement(self, node: _ast.RawStatement):
+        raise NotImplementedError
+
+    def visit_call_statement(self, node: _ast.CallStatement):
         raise NotImplementedError
 
     def visit_wildcard_statement(self, node: _ast.WildcardStatement):

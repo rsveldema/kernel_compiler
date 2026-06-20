@@ -210,6 +210,12 @@ class VulkanKernelVisitor(Visitor):
         mapped = self._ssbo_map.get(root_name)
         return mapped is not None and self._type_uses_float16(mapped[1])
 
+    def _to_arithmetic_operand(self, node: Expression | None) -> str:
+        value = self._visit_expr_child(node)
+        if isinstance(node, ArrayAccess) and self._lvalue_uses_float16_storage(node):
+            return f"float({value})"
+        return value
+
 
     def _resolve_constexpr_value(self, expr_str: str) -> str | None:
         """Try to resolve an expression string to a plain literal using existing constexpr_map values.
@@ -436,6 +442,14 @@ class VulkanKernelVisitor(Visitor):
             return "bfloat_t"
         return "float16_t"
 
+    def visit_coop_mat(self, node: CoopMat) -> str:
+        elem = self._to_str(node.elem_type)
+        scope = self._to_str(node.scope_expr)
+        rows = self._to_str(node.row_size_expr)
+        cols = self._to_str(node.col_size_expr)
+        use = self._to_str(node.use_expr)
+        return f"coopmat<{elem}, {scope}, {rows}, {cols}, {use}>"
+
     def visit_fixed_size_vector(self, node: FixedSizeVector) -> str:
         return self._glsl_elem_type(node)
 
@@ -564,8 +578,8 @@ class VulkanKernelVisitor(Visitor):
         folded = self._const_eval_expr(node)
         if folded is not None:
             return self._format_constant(*folded)
-        left = self._visit_expr_child(node.left)
-        right = self._visit_expr_child(node.right)
+        left = self._to_arithmetic_operand(node.left)
+        right = self._to_arithmetic_operand(node.right)
         op = node.op or "+"
         return f"({left} {op} {right})"
 
@@ -757,7 +771,7 @@ class VulkanKernelVisitor(Visitor):
     def visit_overflow_check(self, node: OverflowCheck) -> str:
         lvalue = self._to_str(node.lvalue) if node.lvalue else "?"
         operand = self._to_str(node.operand) if node.operand else "?"
-        return f"OVERFLOW_CHECK_ADD({lvalue}, {operand});"
+        return f"// OVERFLOW_CHECK_ADD({lvalue}, {operand});"
 
     def visit_shared_decl(self, node: SharedDecl) -> str:
         # constexpr shared declarations are emitted as preprocessor defines.
@@ -786,6 +800,9 @@ class VulkanKernelVisitor(Visitor):
 
     def visit_raw_statement(self, node: RawStatement) -> str:
         return node.text.rstrip()
+
+    def visit_call_statement(self, node: CallStatement) -> str:
+        return f"{self._to_str(node.call_expr)};"
 
     def visit_wildcard_statement(self, node: WildcardStatement) -> str:
         return f"wildcard({node.name})"

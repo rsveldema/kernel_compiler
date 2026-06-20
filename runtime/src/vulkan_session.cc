@@ -132,6 +132,7 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
     std::vector<const char*> device_extensions;
     void* device_pnext = nullptr;
     VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomic_float_features{};
+    VkPhysicalDevice16BitStorageFeatures storage_16bit_features{};
     VkPhysicalDeviceShaderFloat16Int8Features shader_float16_int8_features{};
 #if RLLM_HAS_VK_COOPMAT2
     VkPhysicalDeviceCooperativeMatrixFeaturesKHR coopmat_features{};
@@ -170,6 +171,23 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
             device_extensions.push_back(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME);
             shader_float16_int8_features.pNext = device_pnext;
             device_pnext = &shader_float16_int8_features;
+        }
+    }
+
+    if (has_device_extension(VK_KHR_16BIT_STORAGE_EXTENSION_NAME))
+    {
+        storage_16bit_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
+
+        VkPhysicalDeviceFeatures2 features2{};
+        features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features2.pNext = &storage_16bit_features;
+        vkGetPhysicalDeviceFeatures2(m_phys_dev, &features2);
+
+        if (storage_16bit_features.storageBuffer16BitAccess)
+        {
+            device_extensions.push_back(VK_KHR_16BIT_STORAGE_EXTENSION_NAME);
+            storage_16bit_features.pNext = device_pnext;
+            device_pnext = &storage_16bit_features;
         }
     }
 

@@ -1,0 +1,49 @@
+// cooperative matrix2 multi-arg pattern (6-matrix batched GEMM)
+// Search for the K-chunk loop and replace it with the cooperative-matrix
+// declaration/setup plus the matrix load loop.
+
+search
+for (int chunkK = wildcard(chunk_start); chunkK < wildcard(chunk_limit); chunkK += wildcard(chunk_size)) {
+    wildcard(chunk_body)
+}
+
+replace
+const int tile_row = int(gl_WorkGroupID.x);
+const int tile_col = int(gl_WorkGroupID.y);
+
+tensorLayout<2> tensorLayoutA = createTensorLayoutNV(2);
+tensorLayout<2> tensorLayoutB = createTensorLayoutNV(2);
+tensorLayout<2> tensorLayoutC = createTensorLayoutNV(2);
+
+tensorLayoutA = setTensorLayoutDimensionNV(tensorLayoutA, 1024, 1024);
+tensorLayoutB = setTensorLayoutDimensionNV(tensorLayoutB, 1024, 1024);
+tensorLayoutC = setTensorLayoutDimensionNV(tensorLayoutC, 1024, 1024);
+
+coopmat<float, gl_ScopeWorkgroup, wildcard(tile_size), wildcard(tile_size), gl_MatrixUseAccumulator> result = coopmat<float, gl_ScopeWorkgroup, wildcard(tile_size), wildcard(tile_size), gl_MatrixUseAccumulator>(0.0);
+
+for (int chunkK = wildcard(chunk_start); chunkK < wildcard(chunk_limit); chunkK += wildcard(chunk_size)) {
+    coopmat<float, gl_ScopeWorkgroup, wildcard(tile_size), wildcard(chunk_size), gl_MatrixUseA> matrixA1;
+    coopmat<float, gl_ScopeWorkgroup, wildcard(chunk_size), wildcard(tile_size), gl_MatrixUseB> matrixB1;
+    coopMatLoadTensorNV(matrixA1, A1, 0, sliceTensorLayoutNV(tensorLayoutA, (wildcard(tile_size) * tile_row), wildcard(tile_size), chunkK, wildcard(chunk_size)));
+    coopMatLoadTensorNV(matrixB1, B1, 0, sliceTensorLayoutNV(tensorLayoutB, chunkK, wildcard(chunk_size), (wildcard(tile_size) * tile_col), wildcard(tile_size)));
+    result = coopMatMulAdd(matrixA1, matrixB1, result);
+
+    coopmat<float, gl_ScopeWorkgroup, wildcard(tile_size), wildcard(chunk_size), gl_MatrixUseA> matrixA2;
+    coopmat<float, gl_ScopeWorkgroup, wildcard(chunk_size), wildcard(tile_size), gl_MatrixUseB> matrixB2;
+    coopMatLoadTensorNV(matrixA2, A2, 0, sliceTensorLayoutNV(tensorLayoutA, (wildcard(tile_size) * tile_row), wildcard(tile_size), chunkK, wildcard(chunk_size)));
+    coopMatLoadTensorNV(matrixB2, B2, 0, sliceTensorLayoutNV(tensorLayoutB, chunkK, wildcard(chunk_size), (wildcard(tile_size) * tile_col), wildcard(tile_size)));
+    result = coopMatMulAdd(matrixA2, matrixB2, result);
+
+    coopmat<float, gl_ScopeWorkgroup, wildcard(tile_size), wildcard(chunk_size), gl_MatrixUseA> matrixA3;
+    coopmat<float, gl_ScopeWorkgroup, wildcard(chunk_size), wildcard(tile_size), gl_MatrixUseB> matrixB3;
+    coopMatLoadTensorNV(matrixA3, A3, 0, sliceTensorLayoutNV(tensorLayoutA, (wildcard(tile_size) * tile_row), wildcard(tile_size), chunkK, wildcard(chunk_size)));
+    coopMatLoadTensorNV(matrixB3, B3, 0, sliceTensorLayoutNV(tensorLayoutB, chunkK, wildcard(chunk_size), (wildcard(tile_size) * tile_col), wildcard(tile_size)));
+    result = coopMatMulAdd(matrixA3, matrixB3, result);
+}
+
+coopmat<float, gl_ScopeWorkgroup, wildcard(tile_size), wildcard(tile_size), gl_MatrixUseAccumulator> matrixC;
+coopMatLoadTensorNV(matrixC, C, 0, sliceTensorLayoutNV(tensorLayoutC, (wildcard(tile_size) * tile_row), wildcard(tile_size), (wildcard(tile_size) * tile_col), wildcard(tile_size)));
+result = (result + matrixC);
+coopMatStoreTensorNV(result, C, 0, sliceTensorLayoutNV(tensorLayoutC, (wildcard(tile_size) * tile_row), wildcard(tile_size), (wildcard(tile_size) * tile_col), wildcard(tile_size)));
+
+constraints (1 == 1)

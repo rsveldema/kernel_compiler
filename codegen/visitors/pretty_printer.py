@@ -29,6 +29,20 @@ class PrettyPrinter(Visitor):
     def visit_float(self, node: ast.Float):
         return f"{self._indent_str()}float"
 
+    def visit_float16(self, node: ast.Float16):
+        return f"{self._indent_str()}float16"
+
+    def visit_coop_mat(self, node: ast.CoopMat):
+        indent = self._indent_str()
+        return (
+            f"{indent}coopmat<"
+            f"{node.elem_type.accept(self)}, "
+            f"{node.scope_expr.accept(self)}, "
+            f"{node.row_size_expr.accept(self)}, "
+            f"{node.col_size_expr.accept(self)}, "
+            f"{node.use_expr.accept(self)}>"
+        )
+
     def visit_fixed_size_vector(self, node: ast.FixedSizeVector):
         indent = self._indent_str()
         inner_lines = []
@@ -292,6 +306,9 @@ class PrettyPrinter(Visitor):
         if not text.endswith(";") and not text.endswith("}"):
             text += ";"
         return f"{self._indent_str()}{text}"
+
+    def visit_call_statement(self, node: ast.CallStatement):
+        return f"{self._indent_str()}{node.call_expr.accept(self)};"
 
     def visit_wildcard_statement(self, node: ast.WildcardStatement):
         return f"{self._indent_str()}wildcard({node.name})"

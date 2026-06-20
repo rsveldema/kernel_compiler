@@ -49,6 +49,7 @@ PARAMETERS
 
 BEGIN
         weights[i, i] = clamp(src[i], -2.0f, 2.0f);
+        src[i] = (src[i] + weights[i, i]);
 
 END_PROGRAM
 """
@@ -59,9 +60,10 @@ END_PROGRAM
 
     assert "float16_t weights[64];" in shader
     assert "weights[((8 * i) + (1 * i))] = float16_t(clamp(src[i], -2.0, 2.0));" in shader
+    assert "src[i] = (src[i] + float(weights[((8 * i) + (1 * i))]));" in shader
 
 
-def test_vulkan_uses_float_for_normalized_small_float_layout():
+def test_vulkan_preserves_float_buffers():
     program = parse(
         """
 PROGRAM("small.cc:1")
@@ -84,6 +86,57 @@ END_PROGRAM
 
     assert "float weights[64];" in shader
     assert "float16_t weights[64];" not in shader
+
+
+def test_vulkan_parses_coopmat_declarations_and_call_statements():
+    program = parse(
+        """
+PROGRAM("coop.cc:1")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<1>(), (x))
+
+PARAMETERS
+        fixed_size_vector<float, 1>& x
+
+BEGIN
+        coopmat<float, gl_ScopeWorkgroup, 8, 16, gl_MatrixUseA> matrixA;
+        coopMatLoadTensorNV(matrixA, x, 0, sliceTensorLayoutNV(tensorLayoutA, 0, 8, 0, 16));
+
+END_PROGRAM
+"""
+    )
+
+    shader = program.accept(VulkanKernelVisitor())
+
+    assert "coopmat<float, gl_ScopeWorkgroup, 8, 16, gl_MatrixUseA> matrixA;" in shader
+    assert "coopMatLoadTensorNV(matrixA, x, 0, sliceTensorLayoutNV(tensorLayoutA, 0, 8, 0, 16));" in shader
+
+
+def test_vulkan_emits_overflow_check_as_comment():
+    program = parse(
+        """
+PROGRAM("overflow.cc:1")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<8>(), (dst, src))
+
+PARAMETERS
+        fixed_size_vector<float, 8>& dst,
+        fixed_size_vector<float, 8>& src
+
+BEGIN
+        const float term = src[i];
+        OVERFLOW_CHECK_ADD(dst[i], term);
+        dst[i] += term;
+
+END_PROGRAM
+"""
+    )
+    program = resolve_array_indices(program)
+
+    shader = program.accept(VulkanKernelVisitor())
+
+    assert "// OVERFLOW_CHECK_ADD(dst[i], term);" in shader
+    assert "\nOVERFLOW_CHECK_ADD(" not in shader
 
 
 def test_vulkan_fixed_size_triangular_matrix_uses_compact_storage():

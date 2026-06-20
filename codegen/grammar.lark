@@ -45,6 +45,7 @@ statement: for_statement
 | declaration ";"
 | assignment ";"
 | "OVERFLOW_CHECK_ADD" "(" lhs "," expression ")" ";"
+| field_access ";" -> call_statement
 | block
 | return_statement
 | atomic_op
@@ -110,6 +111,7 @@ TYPE_LITERAL: INT_T | SIZE_T_T | FLOAT_T | FLOAT16_T
 
 TENSOR_LAYOUT: "tensorLayout"
 type: FSV "<" type "," expression ">" ("&")?
+    | COOPMAT "<" type "," expression "," expression "," expression "," expression ">"
     | FRM "<" type "," expression "," expression ">" ("&")?
     | FSM "<" type "," expression "," expression ">" ("&")?
     | FSTM "<" type "," expression "," expression ">" ("&")?
@@ -184,6 +186,7 @@ FRCM: "flexible_rows_cols_matrix"
 FCOLM: "flexible_cols_matrix"
 FSTM: "fixed_size_triangular_matrix"
 FSOV: "fixed_size_obj_vector"
+COOPMAT: "coopmat"
 
  
 

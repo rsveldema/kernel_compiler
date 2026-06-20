@@ -158,6 +158,16 @@ class RawStatement(Statement):
         return visitor.visit_raw_statement(self)
 
 
+class CallStatement(Statement):
+    """A bare function-call statement."""
+
+    def __init__(self, call_expr: Expression):
+        self.call_expr = call_expr
+
+    def accept(self, visitor):
+        return visitor.visit_call_statement(self)
+
+
 class WildcardStatement(Statement):
     def __init__(self, name: str):
         self.name = name
@@ -179,6 +189,7 @@ __all__ = [
     "OverflowCheck",
     "SharedDecl",
     "RawStatement",
+    "CallStatement",
     "WildcardStatement",
     "TensorLayoutDecl",
     "ReturnStatement",
@@ -215,4 +226,3 @@ class TensorLayoutDecl(Statement):
 
     def accept(self, visitor):
         return visitor.visit_tensor_layout_decl(self)
-

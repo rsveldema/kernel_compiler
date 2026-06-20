@@ -47,6 +47,7 @@ def _token_value(t):
 
 _TYPE_NAMES = frozenset((
     "int", "size_t", "float", "float16",
+    "coopmat",
     "fixed_size_vector", "flexible_rows_matrix", "fixed_size_matrix",
     "fixed_size_triangular_matrix",
     "flexible_size_matrix", "flexible_cols_matrix", "fixed_size_levels_rows_cols_matrix",
@@ -429,6 +430,15 @@ def transform_expression(expr_tree):
     if expr_tree.data == "lhs":
         return _transform_lvalue(expr_tree)
 
+    if expr_tree.data == "field_access":
+        wildcard_result = _maybe_parse_wildcard_from_field_access(expr_tree)
+        if wildcard_result is not None:
+            return wildcard_result
+        cast_result = _maybe_parse_cast_from_field_access(expr_tree)
+        if cast_result is not None:
+            return cast_result
+        return _transform_lvalue(expr_tree)
+
     return None
 
 
@@ -724,7 +734,17 @@ def _transform_type(type_tree, default_name="int"):
             c for c in children[1:] if isinstance(c, Tree) and c.data == "expression"
         ]
 
-        if "fixed_size_obj_vector" in type_name:
+        if "coopmat" in type_name:
+            # coopmat<elem_type, scope, rows, cols, use>
+            if len(expr_children) >= 4:
+                return CoopMat(
+                    _resolve_nested_type(children[1]),
+                    transform_expression(expr_children[0]),
+                    transform_expression(expr_children[1]),
+                    transform_expression(expr_children[2]),
+                    transform_expression(expr_children[3]),
+                )
+        elif "fixed_size_obj_vector" in type_name:
             if len(expr_children) >= 3:
                 return FixedSizeObjVectorMatrix(
                     _resolve_nested_type(children[2]),
@@ -927,21 +947,29 @@ def transform_statement(stmt_tree):
     """Transform a statement Tree to an AST node."""
     data = stmt_tree.data
 
-    if data == "statement":
-        return transform_statement(stmt_tree.children[0])
-
-    if data == "wildcard_statement":
-        for child in stmt_tree.children:
-            if _is_token(child) and child.type == "IDENT":
-                return WildcardStatement(child.value)
-
-    # Overflow check: 2 children [lhs, expression]
+    # Overflow check: statement children are [lhs, expression] because the
+    # literal OVERFLOW_CHECK_ADD token is not preserved in the parse tree.
     if _is_overflow_check(stmt_tree):
         lhs_child, expr_child = stmt_tree.children
         lvalue = _transform_lvalue(lhs_child)
         operand = transform_expression(expr_child)
         if lvalue is not None and operand is not None:
             return OverflowCheck(lvalue, operand)
+
+    if data == "statement":
+        return transform_statement(stmt_tree.children[0])
+
+    if data == "call_statement":
+        for child in stmt_tree.children:
+            if isinstance(child, Tree) and child.data == "field_access":
+                call_expr = transform_expression(child)
+                if call_expr is not None:
+                    return CallStatement(call_expr)
+
+    if data == "wildcard_statement":
+        for child in stmt_tree.children:
+            if _is_token(child) and child.type == "IDENT":
+                return WildcardStatement(child.value)
 
     if data == "atomic_op":
         op = "atomicAdd"

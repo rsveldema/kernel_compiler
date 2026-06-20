@@ -22,17 +22,38 @@ class Int(Type):
 
 
 class Float(Type):
-    """Represents 'float' or 'rlmm_float' types."""
+    """Represents 'float' types."""
 
     def accept(self, visitor):
         return visitor.visit_float(self)
 
 
 class Float16(Type):
-    """Represents 'float16' or 'rlmm_float_small' types."""
+    """Represents 'float16' types."""
 
     def accept(self, visitor):
         return visitor.visit_float16(self)
+
+
+class CoopMat(Type):
+    """coopmat<elem_type, scope_expr, rows_expr, cols_expr, use_expr>."""
+
+    def __init__(
+        self,
+        elem_type: Type,
+        scope_expr: Expression,
+        row_size_expr: Expression,
+        col_size_expr: Expression,
+        use_expr: Expression,
+    ):
+        self.elem_type = elem_type
+        self.scope_expr = scope_expr
+        self.row_size_expr = row_size_expr
+        self.col_size_expr = col_size_expr
+        self.use_expr = use_expr
+
+    def accept(self, visitor):
+        return visitor.visit_coop_mat(self)
 
 
 class FixedSizeVector(Type):
@@ -164,6 +185,7 @@ __all__ = [
     "Int",
     "Float",
     "Float16",
+    "CoopMat",
     "FixedSizeVector",
     "FlexibleRowsMatrix",
     "FixedSizeMatrix",
@@ -202,4 +224,3 @@ class TensorLayout(Type):
 
     def accept(self, visitor):
         return visitor.visit_tensor_layout(self)
-

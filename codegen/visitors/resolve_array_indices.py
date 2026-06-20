@@ -500,6 +500,10 @@ class ResolveArrayIndicesVisitor(Expression):
     def visit_raw_statement(self, node: RawStatement):
         return RawStatement(text=node.text)
 
+    def visit_call_statement(self, node: CallStatement):
+        call_expr = node.call_expr.accept(self) if node.call_expr else None
+        return CallStatement(call_expr)
+
     def visit_atomic_op(self, node: AtomicOp):
         lhs = node.lhs.accept(self) if node.lhs else None
         rhs = node.rhs.accept(self) if node.rhs else None
