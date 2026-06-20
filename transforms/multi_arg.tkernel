@@ -11,7 +11,7 @@ replace
 const int tile_size = wildcard(tile_size);
 const int chunk_size = wildcard(chunk_size);
 const int bound_k = wildcard(bound_k);
-const int block_start = int(gl_WorkGroupID.z) * chunk_size;
+const int block_start = (int(gl_WorkGroupID.z) * chunk_size);
 shared float sh_A1[tile_size][chunk_size];
 shared float sh_A2[tile_size][chunk_size];
 shared float sh_A3[tile_size][chunk_size];
@@ -22,15 +22,15 @@ float sum1 = 0.0;
 float sum2 = 0.0;
 float sum3 = 0.0;
 
-for (int load_idx = wildcard(idx); load_idx < tile_size * chunk_size; load_idx += tile_size * tile_size) {
-    const int load_i = load_idx / chunk_size;
-    const int load_k = load_idx - load_i * chunk_size;
-    const int a_row = int(gl_WorkGroupID.x) * tile_size + load_i;
-    const int a_k = block_start + load_k;
+for (int load_idx = wildcard(idx); load_idx < (tile_size * chunk_size); load_idx += (tile_size * tile_size)) {
+    const int load_i = (load_idx / chunk_size);
+    const int load_k = (load_idx - (load_i * chunk_size));
+    const int a_row = ((int(gl_WorkGroupID.x) * tile_size) + load_i);
+    const int a_k = (block_start + load_k);
     if (a_row < rllm_push.rllm_bound_x && a_k < bound_k) {
-        sh_A1[load_i][load_k] = A1[(bound_k * a_row) + a_k];
-        sh_A2[load_i][load_k] = A2[(bound_k * a_row) + a_k];
-        sh_A3[load_i][load_k] = A3[(bound_k * a_row) + a_k];
+        sh_A1[load_i][load_k] = A1[((bound_k * a_row) + a_k)];
+        sh_A2[load_i][load_k] = A2[((bound_k * a_row) + a_k)];
+        sh_A3[load_i][load_k] = A3[((bound_k * a_row) + a_k)];
     } else {
         sh_A1[load_i][load_k] = 0.0;
         sh_A2[load_i][load_k] = 0.0;
@@ -38,15 +38,15 @@ for (int load_idx = wildcard(idx); load_idx < tile_size * chunk_size; load_idx +
     }
 }
 
-for (int load_idx = wildcard(idx); load_idx < chunk_size * tile_size; load_idx += tile_size * tile_size) {
-    const int load_k = load_idx / tile_size;
-    const int load_j = load_idx - load_k * tile_size;
-    const int b_k = block_start + load_k;
-    const int b_col = int(gl_WorkGroupID.y) * tile_size + load_j;
+for (int load_idx = wildcard(idx); load_idx < (chunk_size * tile_size); load_idx += (tile_size * tile_size)) {
+    const int load_k = (load_idx / tile_size);
+    const int load_j = (load_idx - (load_k * tile_size));
+    const int b_k = (block_start + load_k);
+    const int b_col = ((int(gl_WorkGroupID.y) * tile_size) + load_j);
     if (b_k < bound_k && b_col < rllm_push.rllm_bound_y) {
-        sh_B1[load_k][load_j] = B1[(bound_k * b_k) + b_col];
-        sh_B2[load_k][load_j] = B2[(bound_k * b_k) + b_col];
-        sh_B3[load_k][load_j] = B3[(bound_k * b_k) + b_col];
+        sh_B1[load_k][load_j] = B1[((bound_k * b_k) + b_col)];
+        sh_B2[load_k][load_j] = B2[((bound_k * b_k) + b_col)];
+        sh_B3[load_k][load_j] = B3[((bound_k * b_k) + b_col)];
     } else {
         sh_B1[load_k][load_j] = 0.0;
         sh_B2[load_k][load_j] = 0.0;
@@ -57,15 +57,15 @@ for (int load_idx = wildcard(idx); load_idx < chunk_size * tile_size; load_idx +
 wildcard(workgroup_barrier);
 
 for (int kk = 0; kk < chunk_size; ++kk) {
-    sum1 += sh_A1[local_i][kk] * sh_B1[kk][local_j];
-    sum2 += sh_A2[local_i][kk] * sh_B2[kk][local_j];
-    sum3 += sh_A3[local_i][kk] * sh_B3[kk][local_j];
+    sum1 = (sum1 + (sh_A1[local_i][kk] * sh_B1[kk][local_j]));
+    sum2 = (sum2 + (sh_A2[local_i][kk] * sh_B2[kk][local_j]));
+    sum3 = (sum3 + (sh_A3[local_i][kk] * sh_B3[kk][local_j]));
 }
 
 wildcard(workgroup_barrier);
 
 if (i < rllm_push.rllm_bound_x && j < rllm_push.rllm_bound_y) {
-    atomicAdd(C[(bound_k * i) + j], sum1 + sum2 + sum3);
+    atomicAdd(C[((bound_k * i) + j)], ((sum1 + sum2) + sum3));
 }
 
-constraints wildcard(S) != ForStatement
+constraints (wildcard(S) != ForStatement)

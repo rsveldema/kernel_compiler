@@ -1,6 +1,7 @@
 """Program AST node for code generation."""
 
 from codegen.kast.ast_node import AstNode
+from codegen.kast.workgroup import WorkgroupProperties
 
 
 class Program(AstNode):
@@ -97,4 +98,4 @@ class Program(AstNode):
                 wg.accept(visitor)
 
 
-__all__ = ["Program"]
+__all__ = ["Program", "WorkgroupProperties"]

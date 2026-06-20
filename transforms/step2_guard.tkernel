@@ -5,4 +5,4 @@ if (local_id == 0) {
     wildcard(S)
 }
 wildcard(workgroup_barrier)
-constraints S != ForStatement
+constraints (S != ForStatement)

@@ -240,3 +240,80 @@ END_PROGRAM
     assert "inline constexpr uint32_t scores_Y = 8;" in stub
     assert "float data[36];" in stub
     assert "KernelType::Triangular" in stub
+
+
+
+def test_workgroup_declaration_uses_custom_dispatch_sizes():
+    """Verify workgroup { x: 8, y: 1, z: 1 } is used in vkCmdDispatch."""
+    program = parse(
+        """
+PROGRAM("wg.cc:1")
+workgroup { x: 8, y: 1, z: 1 }
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<1024>(n), (dst))
+
+PARAMETERS
+        fixed_size_vector<float, 1024>& dst
+
+BEGIN
+        dst[i] = (dst[i] * 2.0f);
+
+END_PROGRAM
+"""
+    )
+
+    stub = program.accept(VulkanCppStubVisitor())
+
+    # The dispatch should divide by 8, not 1
+    assert "(dispatch_rows + 8 - 1) / 8" in stub
+    # And the old hardcoded /1 should not appear
+    assert "(dispatch_rows + 1 - 1) / 1" not in stub
+
+
+def test_workgroup_sizes_512x64x1_in_dispatch():
+    """Verify large workgroup sizes from the kernel are reflected in the stub."""
+    program = parse(
+        """
+PROGRAM("bigwg.cc:1")
+workgroup { x: 512, y: 64, z: 1 }
+
+OFFLOAD_PARFOR_2D_PARAM(i, j, limit<512>(n), limit<256>(m), (dst))
+
+PARAMETERS
+        fixed_size_matrix<float, 512, 256>& dst
+
+BEGIN
+        dst[i, j] = (dst[i, j] + 1.0f);
+
+END_PROGRAM
+"""
+    )
+
+    stub = program.accept(VulkanCppStubVisitor())
+
+    assert "(dispatch_rows + 512 - 1) / 512" in stub
+    assert "(dispatch_cols + 64 - 1) / 64" in stub
+
+
+def test_default_workgroup_when_no_declaration():
+    """When no workgroup is declared, the visitor uses 16x1x1 for 1D."""
+    program = parse(
+        """
+PROGRAM("nowg.cc:1")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<1024>(n), (dst))
+
+PARAMETERS
+        fixed_size_vector<float, 1024>& dst
+
+BEGIN
+        dst[i] = (dst[i] * 2.0f);
+
+END_PROGRAM
+"""
+    )
+
+    stub = program.accept(VulkanCppStubVisitor())
+
+    # Default 1D workgroup size is 16x1x1
+    assert "(dispatch_rows + 16 - 1) / 16" in stub

@@ -53,6 +53,37 @@ class RllmVulkanDispatchStubVisitor(Visitor):
     def _ctype(self, ty) -> str:
         return "float" if isinstance(ty, ast.Float) else "int32_t"
 
+    def _to_str(self, node) -> str:
+        if node is None:
+            return ""
+        return node.accept(self)
+
+    def _expr_to_str(self, node) -> str:
+        if node is None:
+            return "1"
+        if isinstance(node, ast.Number):
+            return str(node.value)
+        return node.accept(self)
+
+    def _resolve_workgroup_sizes(self, node: ast.Program) -> tuple[str, str, str]:
+        # Default workgroup sizes: 16x16x1 for 2D/3D, 16x1x1 for 1D
+        if node.space_dim >= 2:
+            wg_x, wg_y, wg_z = "16", "16", "1"
+        else:
+            wg_x, wg_y, wg_z = "16", "1", "1"
+        for wg in node.workgroups:
+            if isinstance(wg, ast.WorkgroupProperties):
+                x_val = self._expr_to_str(wg.x_expr)
+                y_val = self._expr_to_str(wg.y_expr)
+                z_val = self._expr_to_str(wg.z_expr)
+                if x_val.isdigit():
+                    wg_x = x_val
+                if y_val.isdigit():
+                    wg_y = y_val
+                if z_val.isdigit():
+                    wg_z = z_val
+        return wg_x, wg_y, wg_z
+
     def visit_program(self, node: ast.Program) -> str:
         header = node.header.strip('"') if node.header else "kernel:0"
         rel_path, _, line = header.partition(":")
@@ -77,7 +108,7 @@ class RllmVulkanDispatchStubVisitor(Visitor):
             p for p in node.params
             if isinstance(p, ast.Declaration) and p.name
         ]
-        template_params = [f"typename P{i}" for i, _ in enumerate(params)]
+        template_params = ["typename Range"] + [f"typename P{i}" for i, _ in enumerate(params)]
         function_params = [f"P{i}&& {p.name}" for i, p in enumerate(params)]
 
         if node.space_dim >= 3:
@@ -139,7 +170,7 @@ class RllmVulkanDispatchStubVisitor(Visitor):
 
         template_prefix = ""
         if template_params:
-            template_prefix = "template <typename Range, " + ", ".join(template_params) + ", typename... Ignored>" + chr(10)
+            template_prefix = "template <" + ", ".join(template_params) + ", typename... Ignored>" + chr(10)
         else:
             template_prefix = "template <typename Range, typename... Ignored>" + chr(10)
 
@@ -180,7 +211,13 @@ class RllmVulkanDispatchStubVisitor(Visitor):
         result += "#include <rllm_vulkan_runtime.hpp>" + chr(10)
         result += '#include "' + stub_header + '"' + chr(10)
         result += chr(10)
+
+        # Emit workgroup size constants inside namespace so they don't conflict
+        wg_x, wg_y, wg_z = self._resolve_workgroup_sizes(node)
         result += "namespace rllm::vulkan::generated {" + chr(10)
+        result += 'inline constexpr uint32_t ' + stem + '_L' + line_part + '_kernel_wg_x = ' + wg_x + ';' + chr(10)
+        result += 'inline constexpr uint32_t ' + stem + '_L' + line_part + '_kernel_wg_y = ' + wg_y + ';' + chr(10)
+        result += 'inline constexpr uint32_t ' + stem + '_L' + line_part + '_kernel_wg_z = ' + wg_z + ';' + chr(10)
         result += chr(10)
         result += template_prefix
         result += "inline void " + symbol + "(" + joined_function_params + ")" + chr(10)

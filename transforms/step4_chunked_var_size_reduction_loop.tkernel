@@ -3,10 +3,10 @@ for (int i = 0; i < wildcard(N); ++i) {
     wildcard(S)
 }
 replace
-const int block_start_i = int(gl_WorkGroupID.z) * rllm_reduction_chunk_size;
+const int block_start_i = (int(gl_WorkGroupID.z) * rllm_reduction_chunk_size);
 const int block_bound_i = wildcard(N);
-const int block_end_i = min(block_start_i + rllm_reduction_chunk_size, block_bound_i);
+const int block_end_i = min((block_start_i + rllm_reduction_chunk_size), block_bound_i);
 for (int i = block_start_i; i < block_end_i; ++i) {
     wildcard(S)
 }
-constraints S != ForStatement
+constraints (S != ForStatement)

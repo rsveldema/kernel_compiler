@@ -23,13 +23,17 @@ parfor_parameters: "PARAMETERS" decl_list
 
 decl_list: declaration ((";" | ",") declaration)* ";"?
 
-header: "PROGRAM" "(" string ")" workgroup_properties*
+header: "PROGRAM" "(" string ")" program_properties*
 
-workgroup_properties: "workgroup" "{" "x" ":" expression "," "y" ":" expression "," "z" ":" expression "}"
-| "shared" declaration ";"
+program_properties: workgroup_size
+| shared_decl
+
+workgroup_size: "workgroup" "{" "x" ":" expression "," "y" ":" expression "," "z" ":" expression "}"
+
+shared_decl: SHARED declaration ";"
 
 parfor_space: "OFFLOAD_PARFOR_1D_PARAM" "(" IDENT "," expression "," parfor_parameters_list ")" -> parfor_1d_param
-| "OFFLOAD_PARFOR_2D_PARAM" "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" -> parfor_2d_param
+| "OFFLOAD_PARFOR_2D_PARAM" "(" IDENT "," IDENT "," expression ("," expression)? "," parfor_parameters_list ")" -> parfor_2d_param
 | "OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM"       "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" -> parfor_2d_triangular_param
 | "OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM" "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" -> parfor_2d_upper_triangular_param
 | "OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM" "(" IDENT "," IDENT "," IDENT "," expression "," expression "," parfor_parameters_list ")" -> parfor_3d_triangular_param

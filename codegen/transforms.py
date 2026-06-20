@@ -103,8 +103,8 @@ def _find_compare_operator(tree):
 def extract_header(header_tree):
     """Extract string value and workgroup properties from header tree.
 
-    Header tree has: [string, workgroup_properties*, ...]
-    Returns (header_string, list_of_workgroup_properties_trees)
+    Header tree has: [string, program_properties*, ...]
+    Returns (header_string, list_of_workgroup_size_trees)
     """
     header_str = ""
     workgroups = []
@@ -112,7 +112,12 @@ def extract_header(header_tree):
         if isinstance(child, Tree):
             if child.data == "string":
                 header_str = _token_value(child.children[0])
-            elif child.data == "workgroup_properties":
+            elif child.data == "program_properties":
+                for prop in child.children:
+                    if isinstance(prop, Tree) and prop.data == "workgroup_size":
+                        workgroups.append(prop)
+            elif child.data == "workgroup_size":
+                # Direct child (legacy / alternative grammar)
                 workgroups.append(child)
         elif _is_token(child) and child.type == "ESCAPED_STRING":
             header_str = _token_value(child)
@@ -258,8 +263,8 @@ def _transform_workgroup_properties(wg_tree):
     1. workgroup { x: expr, y: expr, z: expr } -> WorkgroupProperties
     2. shared declaration ";" -> SharedDecl
     """
-    if wg_tree.data == "workgroup":
-        # workgroup { x: ..., y: ..., z: ... } case
+    if wg_tree.data == "workgroup_size" and len(wg_tree.children) == 3:
+        # workgroup { x: ..., y: ..., z: ... } case (3 expression children)
         expressions = []
         for child in wg_tree.children:
             if isinstance(child, Tree):
@@ -271,7 +276,7 @@ def _transform_workgroup_properties(wg_tree):
         z_expr = expressions[2] if len(expressions) > 2 else None
         return WorkgroupProperties(x_expr, y_expr, z_expr)
 
-    # shared declaration case
+    # shared declaration case (1 declaration child)
     if isinstance(wg_tree.children[0], Tree):
         decl_tree = wg_tree.children[0]
         is_const = decl_tree.data == "const_decl"

@@ -61,7 +61,7 @@ TEST_F(VulkanTestBase, single_assign_correctness)
     const int* actual = reinterpret_cast<const int*>(readback.get()->data);
 
     for (uint32_t i = 0; i < N; ++i) {
-        EXPECT_EQ(actual[i], push_value) << "single-assign dst[" << i << "]";
+        ASSERT_EQ(actual[i], push_value) << "single-assign dst[" << i << "]";
     }
 }
 
@@ -277,7 +277,7 @@ TEST_F(VulkanTestBase, multi_arg_correctness)
     c_buf.read(ctx, actual);
 
     for (uint32_t i = 0; i < ROWS * COLS; ++i) {
-        EXPECT_NEAR(actual.get()->data[i], expected_val, 1.0f) << "multi-arg C[" << i << "]";
+        ASSERT_NEAR(actual.get()->data[i], expected_val, 1.0f) << "multi-arg C[" << i << "]";
     }
 }
 
@@ -361,7 +361,7 @@ TEST_F(VulkanTestBase, multi_arg_shared_memory_tiling_is_faster)
 
         ASSERT_EQ(shared_actual.size(), sequential_actual.size());
         for (uint32_t i = 0; i < shared_actual.size(); ++i) {
-            EXPECT_NEAR(shared_actual[i], sequential_actual[i], 1.0f)
+            ASSERT_NEAR(shared_actual[i], sequential_actual[i], 1.0f)
                 << "multi-arg chunk=" << chunk_size << " optimized vs sequential C[" << i << "]";
         }
 
@@ -476,7 +476,7 @@ TEST_F(VulkanTestBase, multi_arg_cooperative_matrix2_correctness)
     const auto actual = read_float_buffer(transfer_context, c_buf, readback);
     ASSERT_EQ(actual.size(), ROWS * COLS);
     for (uint32_t i = 0; i < actual.size(); ++i) {
-        EXPECT_NEAR(actual[i], expected_val, 1.0f)
+        ASSERT_NEAR(actual[i], expected_val, 1.0f)
             << "multi-arg coopmat2 chunk=" << CHUNK << " C[" << i << "]";
     }
 }
@@ -561,7 +561,7 @@ TEST_F(VulkanTestBase, triangular1_correctness)
         for (uint32_t j = 0; j < test_seq_len; ++j) {
             const size_t idx = static_cast<size_t>(i) * test_seq_len + j;
             const float expected = j <= i ? attn[idx] * (scores[idx] - row_dot) : raw_sentinel;
-            EXPECT_NEAR(actual[idx], expected, 1.0e-4f)
+            ASSERT_NEAR(actual[idx], expected, 1.0e-4f)
                 << "triangular1 d_raw[" << i << "," << j << "]";
         }
     }
@@ -630,7 +630,7 @@ TEST_F(VulkanTestBase, triangular_matrix_access_correctness)
         for (uint32_t j = 0; j <= i; ++j) {
             const size_t idx = static_cast<size_t>(i) * (i + 1) / 2 + j;
             const float expected = input[idx] + 1.0f;
-            EXPECT_FLOAT_EQ(actual[idx], expected)
+            ASSERT_FLOAT_EQ(actual[idx], expected)
                 << "triangular matrix output[" << i << "," << j << "]";
         }
     }
@@ -707,7 +707,7 @@ TEST_F(VulkanTestBase, tiled_kernel_generates_correct_output)
 
     // Verify tiled loop produces correct results
     for (uint32_t i = 0; i < N; ++i) {
-        EXPECT_EQ(actual[i], push_value)
+        ASSERT_EQ(actual[i], push_value)
             << "tiled kernel produced incorrect value at index " << i;
     }
 
@@ -748,7 +748,7 @@ TEST_F(VulkanTestBase, tiled_variable_size_loop_generates_correct_output)
     const int* actual = reinterpret_cast<const int*>(readback.get()->data);
 
     for (uint32_t i = 0; i < N; ++i) {
-        EXPECT_EQ(actual[i], push_value)
+        ASSERT_EQ(actual[i], push_value)
             << "variable-size tiled kernel produced incorrect value at index " << i;
     }
 }
@@ -814,7 +814,7 @@ TEST_F(VulkanTestBase, dynamic_atb_acc_reduction_loop_is_chunked_by_k_count)
 
     c_buf.read(ctx, readback);
     for (uint32_t i = 0; i < rows * cols; ++i) {
-        EXPECT_NEAR(readback.get()->data[i], expected, 1.0e-4f)
+        ASSERT_NEAR(readback.get()->data[i], expected, 1.0e-4f)
             << "dynamic-atb-acc C[" << i << "]";
     }
 }
@@ -877,7 +877,7 @@ TEST_F(VulkanTestBase, dynamic_atb_acc_tiling_is_faster_than_no_tiling)
     const auto no_tiling_actual = read_float_buffer(transfer_context, c_buf, readback);
 
     for (uint32_t i = 0; i < no_tiling_actual.size(); ++i) {
-        EXPECT_NEAR(no_tiling_actual[i], expected, 1.0e-4f)
+        ASSERT_NEAR(no_tiling_actual[i], expected, 1.0e-4f)
             << "dynamic-atb-acc no-tiling C[" << i << "]";
     }
 
@@ -931,7 +931,7 @@ TEST_F(VulkanTestBase, dynamic_atb_acc_tiling_is_faster_than_no_tiling)
 
         ASSERT_EQ(tiled_actual.size(), no_tiling_actual.size());
         for (uint32_t i = 0; i < tiled_actual.size(); ++i) {
-            EXPECT_NEAR(tiled_actual[i], expected, 1.0e-4f)
+            ASSERT_NEAR(tiled_actual[i], expected, 1.0e-4f)
                 << "dynamic-atb-acc chunk=" << chunk_size << " C[" << i << "]";
         }
 

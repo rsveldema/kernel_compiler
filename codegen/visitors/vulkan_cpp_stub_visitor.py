@@ -425,9 +425,15 @@ class VulkanCppStubVisitor(Visitor):
         return buffer_params, scalar_params, has_matrix_params
 
     def _resolve_workgroup_sizes(self, node: ast.Program) -> tuple[str, str, str]:
-        wg_x, wg_y, wg_z = "1", "1", "1"
+        # Default workgroup sizes: 16x16x1 for 2D/3D, 16x1x1 for 1D
+        if node.space_dim >= 2:
+            wg_x, wg_y, wg_z = "16", "16", "1"
+        else:
+            wg_x, wg_y, wg_z = "16", "1", "1"
+        found_explicit = False
         for wg in node.workgroups:
             if isinstance(wg, ast.WorkgroupProperties):
+                found_explicit = True
                 x_val = self._to_str(wg.x_expr) if wg.x_expr else "1"
                 y_val = self._to_str(wg.y_expr) if wg.y_expr else "1"
                 z_val = self._to_str(wg.z_expr) if wg.z_expr else "1"

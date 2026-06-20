@@ -3,10 +3,10 @@ for (const int i : limit<N>()) {
     wildcard(S)
 }
 replace
-const int chunk_size = (N + rllm_wg_count - 1) / rllm_wg_count;
-const int start_i = local_id * chunk_size;
-const int end_i = start_i + chunk_size;
+const int chunk_size = (((N + rllm_wg_count) - 1) / rllm_wg_count);
+const int start_i = (local_id * chunk_size);
+const int end_i = (start_i + chunk_size);
 for (const int i : limit<chunk_size>(start_i, end_i)) {
     wildcard(S)
 }
-constraints S != ForStatement
+constraints (S != ForStatement)

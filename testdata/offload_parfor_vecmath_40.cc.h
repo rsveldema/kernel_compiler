@@ -11,7 +11,7 @@ namespace rllm_offload_parfor_vecmath_40.cc {
 inline constexpr uint32_t dst_X = 16384;
 
 struct RllmBuffer_dst {
-        float data[16384];
+        int32_t data[16384];
 };
 
 struct offload_parfor_vecmath_40.cc_vecmath_PushConstants {
@@ -22,10 +22,12 @@ struct offload_parfor_vecmath_40.cc_vecmath_PushConstants {
 class OffloadParforVecmath40.ccVecmathKernel : public AbstractKernel {
 public:
     OffloadParforVecmath40.ccVecmathKernel(VulkanSession& session, const std::string& glsl_file)
-        : AbstractKernel("rllm_offload_parfor_vecmath_40.cc::OffloadParforVecmath40.ccVecmathKernel|vecmath:40", KernelDimension::OneD, KernelType::Matrix)
+        : AbstractKernel("rllm_offload_parfor_vecmath_40.cc::OffloadParforVecmath40.ccVecmathKernel|vecmath:40", KernelDimension::OneD, KernelType::Matrix, "tiling=off;parallelized=off;tile_block_size=1;workgroup_count=1;shared_memory_tiling=off")
         , kernel_(session, glsl_file, sizeof(offload_parfor_vecmath_40.cc_vecmath_PushConstants), 1)
     {
     }
+    
+    static constexpr const char* generated_descriptor() { return "tiling=off;parallelized=off;tile_block_size=1;workgroup_count=1;shared_memory_tiling=off"; }
     
     void dispatch(
             VulkanComputeContext& context,
@@ -51,7 +53,7 @@ public:
         vkCmdPushConstants(command_buffer, kernel_.pipeline_layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants), &push_constants);
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, kernel_.pipeline_layout(), 0, 1, &desc_set, 0, nullptr);
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, kernel_.pipeline());
-        vkCmdDispatch(command_buffer, (dispatch_rows + 1 - 1) / 1, 1, 1);
+        vkCmdDispatch(command_buffer, (dispatch_rows + 16 - 1) / 16, 1, 1);
         context.submit_and_wait();
         }
     

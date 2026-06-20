@@ -5,6 +5,7 @@ where K workgroups partition the work (each workgroup processes ceil(N/K) iterat
 """
 
 from codegen.kast.program import Program
+from codegen.kast.workgroup import WorkgroupProperties
 from codegen.kast.statement import (
     ForLoopWithConditionAndIncrement,
     Condition,
@@ -81,6 +82,23 @@ def perform_tiling(program: Program, workgroups: int = DEFAULT_WORKGROUPS) -> Pr
     program.tile_block_size = workgroups
     program.workgroup_count = workgroups
     program.workgroup_size = workgroups
+
+    # Export explicit workgroup size to both GLSL and C++ stub so they are always in sync.
+    # Only set when no WorkgroupProperties already exist (perform_blocking/perform_cooperative_matrix2
+    # may have already created one).
+    if not any(isinstance(wg, WorkgroupProperties) for wg in program.workgroups):
+        space_dim = getattr(program, "space_dim", 0) or len(getattr(program, "loop_vars", []))
+        if space_dim >= 2:
+            wg_x, wg_y, wg_z = 16, 16, 1
+        else:
+            wg_x, wg_y, wg_z = 16, 1, 1
+        program.workgroups.append(
+            WorkgroupProperties(
+                x_expr=Number(str(wg_x)),
+                y_expr=Number(str(wg_y)),
+                z_expr=Number(str(wg_z)),
+            )
+        )
 
     rewrite_context = {
         "workgroups": workgroups,

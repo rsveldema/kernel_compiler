@@ -828,7 +828,11 @@ class VulkanKernelVisitor(Visitor):
         return f"{ind}{node.op}({lhs}, {rhs});"
 
     def _workgroup_size(self, node: Program) -> tuple[str, str, str]:
-        wg_x, wg_y, wg_z = "1", "1", "1"
+        # Default workgroup sizes: 16x16x1 for 2D/3D, 16x1x1 for 1D
+        if node.space_dim >= 2:
+            wg_x, wg_y, wg_z = "16", "16", "1"
+        else:
+            wg_x, wg_y, wg_z = "16", "1", "1"
         for wg in node.workgroups:
             if isinstance(wg, WorkgroupProperties):
                 wg_x = self._to_str(wg.x_expr) if wg.x_expr else wg_x
