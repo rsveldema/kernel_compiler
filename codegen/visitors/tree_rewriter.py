@@ -248,7 +248,11 @@ class TreeRewriter(visitor.Visitor):
         for stmt in statements or []:
             if self._is_for_statement(stmt):
                 cloned = deepcopy(stmt)
-                cloned.body_stmts = self._apply_step2_to_statements(getattr(cloned, "body_stmts", []) or [])
+                # Do NOT recurse into loop bodies — the local_id==0 guard
+                # is only for top-level non-loop statements.  Loop bodies
+                # must stay unguarded so that tiling (step 3) can let each
+                # thread execute its chunk without being blocked by
+                # "if (local_id == 0)".
                 rewritten.append(cloned)
                 continue
 

@@ -256,6 +256,64 @@ def extract_limit_expr(space_tree):
     return None
 
 
+
+# ── workgroup size validation ──────────────────────────────────────
+
+def _evaluate_workgroup_size_value(expr):
+    """Try to evaluate a workgroup size expression to an integer.
+
+    Handles Number (literal) and simple BinaryExpr (e.g. 16*16).
+    Returns None for complex expressions like identifiers.
+    """
+    if isinstance(expr, Number):
+        return expr.value
+    if isinstance(expr, BinaryExpr):
+        left = _evaluate_workgroup_size_value(expr.left)
+        right = _evaluate_workgroup_size_value(expr.right)
+        if left is not None and right is not None:
+            try:
+                if expr.op == "*":
+                    return left * right
+                elif expr.op == "+":
+                    return left + right
+                elif expr.op == "-":
+                    return left - right
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def _validate_workgroup_size(x_val, y_val, z_val, filename=None):
+    """Validate workgroup dimensions against Vulkan limits.
+
+    Vulkan limits:
+      - Total invocations: x * y * z <= 1024
+      - Per dimension: x <= 1024, y <= 1024, z <= 64
+
+    Raises ValueError with a descriptive message if limits are exceeded.
+    """
+    parts = []
+    if x_val is not None and x_val > 1024:
+        parts.append(f"x={x_val} (max 1024)")
+    if y_val is not None and y_val > 1024:
+        parts.append(f"y={y_val} (max 1024)")
+    if z_val is not None and z_val > 64:
+        parts.append(f"z={z_val} (max 64)")
+
+    total = (x_val or 1) * (y_val or 1) * (z_val or 1)
+    if total > 1024:
+        if parts:
+            parts.append(f"total={total} (max 1024)")
+        else:
+            parts.append(f"total={total} (max 1024)")
+
+    if parts:
+        dim_info = ", ".join(parts)
+        file_info = f" in {filename}" if filename else ""
+        raise ValueError(
+            f"Workgroup size exceeds Vulkan limits{file_info}: {dim_info}"
+        )
+
 def _transform_workgroup_properties(wg_tree):
     """Transform workgroup_properties tree to an AST node.
 
@@ -1629,7 +1687,14 @@ def transform(t: Tree) -> Program:
     p.header = header_str
 
     for wg_tree in wg_trees:
-        p.workgroups.append(_transform_workgroup_properties(wg_tree))
+        wg = _transform_workgroup_properties(wg_tree)
+        p.workgroups.append(wg)
+        # Validate workgroup size against Vulkan limits
+        if isinstance(wg, WorkgroupProperties):
+            x_val = _evaluate_workgroup_size_value(wg.x_expr)
+            y_val = _evaluate_workgroup_size_value(wg.y_expr)
+            z_val = _evaluate_workgroup_size_value(wg.z_expr)
+            _validate_workgroup_size(x_val, y_val, z_val, getattr(p, '_source_filename', None))
 
     p.loop_vars, p.space_dim = extract_loop_vars_and_dim(t.children[1])
 

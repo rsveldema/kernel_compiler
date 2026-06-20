@@ -424,6 +424,10 @@ class VulkanCppStubVisitor(Visitor):
 
         return buffer_params, scalar_params, has_matrix_params
 
+    # Vulkan spec minimum required limits (Vulkan 1.4 Table A.29)
+    _MAX_WORKGROUP_SIZE = 1024        # maxWorkGroupSize — per dimension
+    _MAX_WORKGROUP_INVOCATIONS = 1024 # maxWorkGroupInvocations — total
+
     def _resolve_workgroup_sizes(self, node: ast.Program) -> tuple[str, str, str]:
         # Default workgroup sizes: 16x16x1 for 2D/3D, 16x1x1 for 1D
         if node.space_dim >= 2:
@@ -443,6 +447,34 @@ class VulkanCppStubVisitor(Visitor):
                     wg_y = y_val
                 if z_val.isdigit():
                     wg_z = z_val
+        # Validate against Vulkan spec minimum required limits
+        try:
+            x_int, y_int, z_int = int(wg_x), int(wg_y), int(wg_z)
+        except ValueError:
+            # Non-numeric workgroup sizes (e.g. expressions) — can't validate at compile time
+            return wg_x, wg_y, wg_z
+        if x_int > self._MAX_WORKGROUP_SIZE:
+            raise ValueError(
+                f"workgroup x size {x_int} exceeds Vulkan maxWorkGroupSize "
+                f"({self._MAX_WORKGROUP_SIZE})"
+            )
+        if y_int > self._MAX_WORKGROUP_SIZE:
+            raise ValueError(
+                f"workgroup y size {y_int} exceeds Vulkan maxWorkGroupSize "
+                f"({self._MAX_WORKGROUP_SIZE})"
+            )
+        if z_int > self._MAX_WORKGROUP_SIZE:
+            raise ValueError(
+                f"workgroup z size {z_int} exceeds Vulkan maxWorkGroupSize "
+                f"({self._MAX_WORKGROUP_SIZE})"
+            )
+        total = x_int * y_int * z_int
+        if total > self._MAX_WORKGROUP_INVOCATIONS:
+            raise ValueError(
+                f"workgroup total size {x_int}x{y_int}x{z_int}={total} "
+                f"exceeds Vulkan maxWorkGroupInvocations "
+                f"({self._MAX_WORKGROUP_INVOCATIONS})"
+            )
         return wg_x, wg_y, wg_z
 
     def _build_push_constant_fields(

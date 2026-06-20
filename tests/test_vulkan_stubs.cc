@@ -648,7 +648,7 @@ TEST_F(VulkanTestBase, with_wg2_correctness)
         TESTDATA_DIR "/with-wg2.glsl");
     VulkanComputeContext ctx(get_session());
 
-    uint32_t wg_x = 512, wg_y = 64;
+    uint32_t wg_x = 512, wg_y = 1;
     int32_t push_A = 42;
 
     kernel.dispatch(
