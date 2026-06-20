@@ -22,6 +22,14 @@ from codegen.kast.expression import (
     Number,
     BinaryExpr,
     LimitExpr,
+    CastExpr,
+    FieldAccess,
+    ArrayAccess,
+    CallExpr,
+    Identifier,
+    Number,
+    BinaryExpr,
+    LimitExpr,
 )
 from codegen.kast.type import Int, Float
 from codegen.parser import parse_search_replace_pattern
@@ -312,11 +320,6 @@ class TreeRewriter(visitor.Visitor):
             rewritten.append(cloned)
 
         return rewritten
-
-    def _make_shared_decl_stmt(name, dim_names):
-        """Create a SharedDecl AST node for a shared array."""
-        dims = [Identifier(n) for n in dim_names]
-        return SharedDecl(False, Float(), name, None, dimensions=dims)
 
     def _make_shared_decl_stmt(name, dim_names):
         """Create a SharedDecl AST node for a shared array."""

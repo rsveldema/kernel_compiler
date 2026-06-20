@@ -55,7 +55,7 @@ class Program(AstNode):
         self.params = params or []
         self.body_stmts = body_stmts or []
         self.workgroups = workgroups or []
-        # Set by perform_blocking() when tiling is applied
+        # Tiling / reduction metadata (set by workgroup_partitioning or downstream visitors)
         self.tiled = tiled
         self.tile_block_size = tile_block_size
         self.reduction_chunk_size = reduction_chunk_size

@@ -84,8 +84,7 @@ def perform_tiling(program: Program, workgroups: int = DEFAULT_WORKGROUPS) -> Pr
     program.workgroup_size = workgroups
 
     # Export explicit workgroup size to both GLSL and C++ stub so they are always in sync.
-    # Only set when no WorkgroupProperties already exist (perform_blocking/perform_cooperative_matrix2
-    # may have already created one).
+    # Only set when no WorkgroupProperties already exist
     if not any(isinstance(wg, WorkgroupProperties) for wg in program.workgroups):
         space_dim = getattr(program, "space_dim", 0) or len(getattr(program, "loop_vars", []))
         if space_dim >= 2:

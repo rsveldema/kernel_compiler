@@ -31,7 +31,6 @@ from codegen.visitors.pretty_printer import prettyprint
 from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
 from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
 from codegen.visitors.rllm_vulkan_dispatch_stub_visitor import RllmVulkanDispatchStubVisitor
-from codegen.optim import DEFAULT_REDUCTION_CHUNK_SIZE, perform_blocking, perform_cooperative_matrix2
 from codegen.workgroup_partitioning import perform_tiling
 
 log = logging.getLogger(__name__)
@@ -45,15 +44,10 @@ def read_file(filename: str) -> str:
 def optimize(
     program: Program,
     enable_optimizations: bool = True,
-    chunk_size: int = DEFAULT_REDUCTION_CHUNK_SIZE,
-    optimization_pass: str = "shared-memory",
     enable_parallelization: bool = False,
 ) -> Program:
-    if enable_optimizations:
-        if optimization_pass == "coopmat2":
-            program = perform_cooperative_matrix2(program, chunk_size)
-        else:
-            program = perform_blocking(program, chunk_size)
+    # Optimization pass (blocking / cooperative-matrix) removed;
+    # tiling is now handled by the workgroup_partitioning pass below.
     # Apply workgroup partitioning pass when enabled.
     if enable_parallelization:
         program = perform_tiling(program)
@@ -65,8 +59,6 @@ def optimize(
 def compile(
     filename: str,
     enable_optimizations: bool = True,
-    chunk_size: int = DEFAULT_REDUCTION_CHUNK_SIZE,
-    optimization_pass: str = "shared-memory",
     enable_parallelization: bool = False,
 ) -> Program:
     print(f"--------------- parsing: {filename} -----------------")
@@ -74,7 +66,7 @@ def compile(
     ret = parser.parse(text)
     program = transform(ret)
     program._source_filename = filename
-    program = optimize(program, enable_optimizations, chunk_size, optimization_pass, enable_parallelization)
+    program = optimize(program, enable_optimizations, enable_parallelization)
     return program
 
 
@@ -82,14 +74,12 @@ def generate_vulkan(
     filename: str,
     output: str,
     enable_optimizations: bool = True,
-    chunk_size: int = DEFAULT_REDUCTION_CHUNK_SIZE,
-    optimization_pass: str = "shared-memory",
     rllm_dispatch_stub: str | None = None,
     rllm_spv_path: str | None = None,
     use_bfloat16: bool = False,
     enable_parallelization: bool = False,
 ) -> None:
-    program = compile(filename, enable_optimizations, chunk_size, optimization_pass, enable_parallelization)
+    program = compile(filename, enable_optimizations, enable_parallelization)
     visitor = VulkanKernelVisitor(use_bfloat16=use_bfloat16)
     shader = program.accept(visitor)
     with open(output, "w") as f:
@@ -123,18 +113,16 @@ def compile_vulkan(
     input_file: str,
     output_spv: str,
     enable_optimizations: bool = True,
-    chunk_size: int = DEFAULT_REDUCTION_CHUNK_SIZE,
-    optimization_pass: str = "shared-memory",
     rllm_dispatch_stub: str | None = None,
     rllm_spv_path: str | None = None,
     use_bfloat16: bool = False,
     enable_parallelization: bool = False,
 ) -> None:
     glsl_path = input_file.rsplit(".", 1)[0] + ".glsl"
-    generate_vulkan(input_file, glsl_path, enable_optimizations, chunk_size, optimization_pass, rllm_dispatch_stub, rllm_spv_path, use_bfloat16=use_bfloat16, enable_parallelization=enable_parallelization)
+    generate_vulkan(input_file, glsl_path, enable_optimizations, rllm_dispatch_stub, rllm_spv_path, use_bfloat16=use_bfloat16, enable_parallelization=enable_parallelization)
     cmd = [
         "glslc", "-fshader-stage=compute", "-o", output_spv,
-        "--target-env=vulkan1.4" if optimization_pass == "coopmat2" else "--target-env=vulkan1.2", glsl_path,
+        "--target-env=vulkan1.2", glsl_path,
     ]
     print(f"running: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -166,44 +154,25 @@ if __name__ == "__main__":
         help="Generate bfloat (16-bit) instead of float16 in Vulkan/C++ output",
     )
     _parser.add_argument(
-        "--no-optimize",
-        action="store_true",
-        help="Disable optimization passes before code generation",
-    )
-    _parser.add_argument(
-        "--chunk-size",
-        type=int,
-        default=DEFAULT_REDUCTION_CHUNK_SIZE,
-        help="Reduction chunk size for shared-memory tiling optimizations",
-    )
-    _parser.add_argument(
-        "--coopmat2",
-        action="store_true",
-        help="Use the VK_NV_cooperative_matrix2 optimization pass",
-    )
-    _parser.add_argument(
         "--parallelize",
         action="store_true",
         default=False,
         help="Enable workgroup partitioning parallelization pass",
     )
     args = _parser.parse_args()
-    enable_optimizations = not args.no_optimize
+    enable_optimizations = True
     use_bfloat16 = getattr(args, "bfloat16", False)
     enable_parallelization = getattr(args, "parallelize", False)
-    optimization_pass = "coopmat2" if args.coopmat2 else "shared-memory"
-    if args.chunk_size <= 0:
-        _parser.error("--chunk-size must be positive")
 
     if args.vulkan or args.compile:
         if not args.file:
             _parser.error("--vulkan and --compile require an input FILE argument")
         if args.vulkan:
-            generate_vulkan(args.file, args.vulkan, enable_optimizations, args.chunk_size, optimization_pass, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16, enable_parallelization=enable_parallelization)
+            generate_vulkan(args.file, args.vulkan, enable_optimizations, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16, enable_parallelization=enable_parallelization)
         elif args.compile:
-            compile_vulkan(args.file, args.compile, enable_optimizations, args.chunk_size, optimization_pass, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16)
+            compile_vulkan(args.file, args.compile, enable_optimizations, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16)
     else:
         # Default: prettyprint all files
         for path in _sys_mod.argv[1:]:
-            program = compile(path, enable_optimizations, args.chunk_size, optimization_pass)
+            program = compile(path, enable_optimizations)
             print(prettyprint(program))
