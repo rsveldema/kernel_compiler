@@ -19,8 +19,11 @@ search
 replace
     const int i = int(gl_GlobalInvocationID.x);
     const int j = int(gl_GlobalInvocationID.y);
+    const int rllm_chunk_id = int(gl_GlobalInvocationID.z);
+    if (((rllm_chunk_id * wildcard(tile_chunk_size)) >= wildcard(N))) return;
 
-    float sum = 0.f;
+    const int rllm_chunk_start = (rllm_chunk_id * wildcard(tile_chunk_size));
+    const int rllm_chunk_size = wildcard(tile_chunk_size);
 
     shared float rllm_A_tile[(wildcard(tile_size_x) * wildcard(tile_chunk_size))];
     shared float rllm_B_tile[(wildcard(tile_size_y) * wildcard(tile_chunk_size))];
@@ -33,8 +36,33 @@ replace
     const int rllm_workgroup_base_i = (int(gl_WorkGroupID.x) * rllm_tile_size_x);
     const int rllm_workgroup_base_j = (int(gl_WorkGroupID.y) * rllm_tile_size_y);
 
-    for (int rllm_chunk_start = 0; rllm_chunk_start < wildcard(N); rllm_chunk_start += wildcard(tile_chunk_size))
+    const int ax = wildcard(tile_size_x);
+    const int ay = wildcard(tile_size_y);
+    if (ax == ay)
     {
+        for (int rllm_load_slot = rllm_tile_local_linear; rllm_load_slot < (wildcard(tile_size_x) * wildcard(tile_chunk_size)); rllm_load_slot += rllm_tile_local_count)
+        {
+            const int rllm_load_row = (rllm_load_slot / rllm_tile_chunk_size);
+            const int rllm_load_col = (rllm_load_slot % rllm_tile_chunk_size);
+            const int rllm_load_k = (rllm_chunk_start + rllm_load_col);
+            const int rllm_load_i = (rllm_workgroup_base_i + rllm_load_row);
+            const int rllm_load_j = (rllm_workgroup_base_j + rllm_load_row);
+
+            if ((rllm_load_k < wildcard(N)) && (rllm_load_i < rllm_bound_x))
+            {
+                rllm_A_tile[rllm_load_slot] = A[rllm_load_i, rllm_load_k];
+            } else {
+                rllm_A_tile[rllm_load_slot] = 0.f;
+            }
+
+            if ((rllm_load_k < wildcard(N)) && (rllm_load_j < rllm_bound_y))
+            {
+                rllm_B_tile[rllm_load_slot] = float(B[rllm_load_j, rllm_load_k]);
+            } else {
+                rllm_B_tile[rllm_load_slot] = 0.f;
+            }
+        }
+    } else {
         for (int rllm_load_slot = rllm_tile_local_linear; rllm_load_slot < (wildcard(tile_size_x) * wildcard(tile_chunk_size)); rllm_load_slot += rllm_tile_local_count)
         {
             const int rllm_load_row = (rllm_load_slot / rllm_tile_chunk_size);
@@ -62,34 +90,32 @@ replace
                 rllm_B_tile[rllm_load_slot] = 0.f;
             }
         }
-
-        barrier();
-
-        if ((i < rllm_bound_x) && (j < rllm_bound_y))
-        {
-            for (int rllm_inner_k = 0; rllm_inner_k < wildcard(tile_chunk_size); ++rllm_inner_k)
-            {
-                const int rllm_A_slot = ((int(gl_LocalInvocationID.x) * rllm_tile_chunk_size) + rllm_inner_k);
-                const int rllm_B_slot = ((int(gl_LocalInvocationID.y) * rllm_tile_chunk_size) + rllm_inner_k);
-                const float term = (rllm_A_tile[rllm_A_slot] * rllm_B_tile[rllm_B_slot]);
-                OVERFLOW_CHECK_ADD(sum, term);
-                sum += term;
-            }
-        }
-
-        barrier();
     }
 
-    if (i < rllm_bound_x)
+    barrier();
+
+    float sum = 0.f;
+    if ((i < rllm_bound_x) && (j < rllm_bound_y))
     {
-        if (j < rllm_bound_y)
+        for (int rllm_inner_k = 0; rllm_inner_k < rllm_chunk_size; ++rllm_inner_k)
         {
-            C[i, j] = (sum);
+            const int rllm_A_slot = ((int(gl_LocalInvocationID.x) * rllm_tile_chunk_size) + rllm_inner_k);
+            const int rllm_B_slot = ((int(gl_LocalInvocationID.y) * rllm_tile_chunk_size) + rllm_inner_k);
+            const float term = (rllm_A_tile[rllm_A_slot] * rllm_B_tile[rllm_B_slot]);
+            OVERFLOW_CHECK_ADD(sum, term);
+            sum += term;
         }
+    }
+
+    barrier();
+
+    if ((i < rllm_bound_x) && (j < rllm_bound_y)) 
+    {
+        C[i, j] = (sum);
     }
 
 meta {
-    tile_size_x = 4
-    tile_size_y = 4
+    tile_size_x = 16
+    tile_size_y = 16
     tile_chunk_size = 64
 }
