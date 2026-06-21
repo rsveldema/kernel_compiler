@@ -92,8 +92,8 @@ class RllmVulkanDispatchStubVisitor(Visitor):
         symbol = f"__rllm_vulkan_kernel_{stem}_L{line_part}"
 
         src_stem = (
-            Path(getattr(node, "_source_filename", "")).name.rsplit(".", 1)[0].replace("-", "_")
-            if getattr(node, "_source_filename", "")
+            Path(node._source_filename).name.rsplit(".", 1)[0].replace("-", "_")
+            if node._source_filename
             else "kernel"
         )
         stub_stem = Path(self._spv_path).name.rsplit(".", 1)[0]
@@ -137,16 +137,10 @@ class RllmVulkanDispatchStubVisitor(Visitor):
                 seen.add(param.name)
                 push_fields.append((param.name, self._ctype(param.var_type), param.name))
 
-        for tb in getattr(node, "triangular_bounds_raw", []) or []:
+        for tb in node.triangular_bounds_raw:
             if _is_push_identifier(tb) and not tb.lstrip("-").isdigit() and tb not in seen:
                 seen.add(tb)
                 push_fields.append((tb, "int32_t", tb))
-
-        # When parallelized, add workgroup count and offset fields to push constants.
-        _wg_count = getattr(node, "workgroup_count", 1)
-        _parallelized = getattr(node, "parallelized", False)
-        if _parallelized and _wg_count > 1:
-            push_fields.insert(0, ("rllm_wg_count", "int32_t", str(_wg_count)))
 
         dispatch_args = ["rllm::vulkan_runtime::context()", *dim_values]
         mutable_buffers = []
@@ -184,8 +178,6 @@ class RllmVulkanDispatchStubVisitor(Visitor):
             else:
                 mark_lines.append(f"    rllm::vulkan_runtime::mark_device_latest({name}, {level});")
 
-        # Parallelized kernels are still dispatched once; the GPU workgroup grid
-        # and push constants control partitioning inside the shader.
         push_body = chr(10).join(push_lines)
         mark_body = chr(10).join(mark_lines) + (chr(10) if mark_lines else "")
 

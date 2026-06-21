@@ -1,0 +1,86 @@
+// optimizes ("vecmath.cc:225")
+
+search
+    float sum1 = 0.f;
+    float sum2 = 0.f;
+    float sum3 = 0.f;
+    for (int l_idx = 0; l_idx < wildcard(N); ++l_idx)
+    {
+        const int k = int(l_idx);
+        const float a = A[i, k];
+        const float term1 = (a * B1[j, k]);
+        OVERFLOW_CHECK_ADD(sum1, term1);
+        sum1 += term1;
+
+        const float term2 = (a * B2[j, k]);
+        OVERFLOW_CHECK_ADD(sum2, term2);
+        sum2 += term2;
+
+        const float term3 = (a * B3[j, k]);
+        OVERFLOW_CHECK_ADD(sum3, term3);
+        sum3 += term3;
+    }
+    C1[i, j] = (sum1);
+    C2[i, j] = (sum2);
+    C3[i, j] = (sum3);
+
+
+replace
+    float sum1 = 0.f;
+    float sum2 = 0.f;
+    float sum3 = 0.f;
+
+    const int num_workgroups = 16;
+    const int rllm_reduction_chunk_size = (wildcard(N) / num_workgroups);
+
+    const int block_start_i = (int(gl_WorkGroupID.z) * rllm_reduction_chunk_size);
+    const int block_end_i = min((block_start_i + rllm_reduction_chunk_size), wildcard(N));
+
+    for (int l_idx = block_start_i; l_idx < block_end_i; ++l_idx)
+    {
+        const int k = int(l_idx);
+        const float a = A[i, k];
+        const float term1 = (a * B1[j, k]);
+        OVERFLOW_CHECK_ADD(sum1, term1);
+        sum1 += term1;
+
+        const float term2 = (a * B2[j, k]);
+        OVERFLOW_CHECK_ADD(sum2, term2);
+        sum2 += term2;
+
+        const float term3 = (a * B3[j, k]);
+        OVERFLOW_CHECK_ADD(sum3, term3);
+        sum3 += term3;
+    }
+
+    shared float rllm_reduction_resultA[16];
+    shared float rllm_reduction_resultB[16];
+    shared float rllm_reduction_resultC[16];
+
+    rllm_reduction_resultA[gl_WorkGroupID.z] = sum1;
+    rllm_reduction_resultB[gl_WorkGroupID.z] = sum2;
+    rllm_reduction_resultC[gl_WorkGroupID.z] = sum3;
+
+    barrier();
+
+    if (gl_WorkGroupID.z == 0)
+    {
+        for (int i=1;i<num_workgroups;i++)
+        {
+            sum1 += rllm_reduction_resultA[i];
+            sum2 += rllm_reduction_resultB[i];
+            sum3 += rllm_reduction_resultC[i];
+        }
+    }
+
+    barrier();
+
+    if (gl_WorkGroupID.z == 0)
+    {
+        C1[i, j] = sum1;
+        C2[i, j] = sum2;
+        C3[i, j] = sum3;
+    }
+
+constraints (S != ForStatement)
+meta { reduction_chunks = 16 }

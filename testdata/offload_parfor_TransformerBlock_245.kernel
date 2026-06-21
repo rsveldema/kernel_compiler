@@ -1,0 +1,26 @@
+PROGRAM("TransformerBlock.cc:245")
+
+OFFLOAD_PARFOR_1D_PARAM(i, softmax_grid, (attn_w_h))
+
+PARAMETERS
+        fixed_size_triangular_matrix<float, 16384, 16384>& attn_w_h = ws.attn_w[hi];
+
+BEGIN
+        {
+            float max_val = attn_w_h[i, 0];
+            for (int j = 1; j <= i; ++j)
+                max_val =  max (max_val, attn_w_h[i, j]);
+
+            float sum_exp = 0.f;
+            for (int j = 0; j <= i; ++j)
+            {
+                attn_w_h[i, j] =  exp ((attn_w_h[i, j] - max_val));
+                sum_exp += attn_w_h[i, j];
+            }
+
+            const float inv = (1.0f / sum_exp);
+            for (int j = 0; j <= i; ++j)
+                attn_w_h[i, j] *= inv;
+        }
+
+END_PROGRAM

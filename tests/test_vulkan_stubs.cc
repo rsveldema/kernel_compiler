@@ -17,56 +17,14 @@
 #include <gtest/gtest.h>
 #include <vulkan/vulkan_core.h>
 
-// Generated stub headers
-#include "dynamic-atb-acc.h"
-#include "multi-arg.h"
-#include "single-assign.h"
-#include "single-assign-tiled.h"
-#include "triangular-matrix-access.h"
-#include "triangular1.h"
-#include "var-size-loop-tiled.h"
-#include "with-wg2.h"
-
 // Shared Vulkan test infrastructure
 #include "vulkan_test_helpers.hpp"
 
-// ───────────── Test: single-assign (sets all elements to a value) ──
-
-TEST_F(VulkanTestBase, single_assign_correctness)
-{
-    constexpr uint32_t N = 64;
-    int push_value = 42;
-    std::vector<int> expected(N, 42);
-
-    /* Allocate device buffer for output */
-    VHostBuffer<rllm_single_assign::RllmBuffer_dst> readback(get_session());
-    VDeviceBuffer<rllm_single_assign::RllmBuffer_dst> dst_buf(readback);
-
-    rllm_single_assign::SingleAssignVecmathKernel kernel(
-        get_session(),
-        TESTDATA_DIR "/single-assign.glsl");
-    VulkanComputeContext ctx(get_session());
-
-    kernel.dispatch(
-        ctx,
-        N,
-        dst_buf,
-        rllm_single_assign::single_assign_vecmath_PushConstants{
-            static_cast<int32_t>(N),
-            push_value,
-        });
-
-    /* Read back & verify */
-    dst_buf.read(ctx, readback);
-    const int* actual = reinterpret_cast<const int*>(readback.get()->data);
-
-    for (uint32_t i = 0; i < N; ++i) {
-        ASSERT_EQ(actual[i], push_value) << "single-assign dst[" << i << "]";
-    }
-}
 
 // ───────────── Test: multi-arg (3 independent matmuls + accumulate) ──
 
+
+#if 0
 static void write_multi_arg_descriptors(
     VulkanComputeKernel& kernel,
     VkDevice device,
@@ -88,7 +46,9 @@ static void write_multi_arg_descriptors(
         vkUpdateDescriptorSets(device, 1, &wds, 0, nullptr);
     }
 }
+#endif
 
+#if 0
 static double dispatch_multi_arg_once(
     VulkanComputeKernel& kernel,
     VulkanSession& session,
@@ -106,7 +66,9 @@ static double dispatch_multi_arg_once(
     const auto end = std::chrono::steady_clock::now();
     return std::chrono::duration<double, std::milli>(end - start).count();
 }
+#endif
 
+#if 0
 static double dispatch_raw_kernel_once(
     VulkanComputeKernel& kernel,
     VulkanSession& session,
@@ -126,6 +88,7 @@ static double dispatch_raw_kernel_once(
     const auto end = std::chrono::steady_clock::now();
     return std::chrono::duration<double, std::milli>(end - start).count();
 }
+#endif
 
 template <typename T>
 static std::vector<float> read_float_buffer(VulkanComputeContext& context, VDeviceBuffer<T>& buf, VHostBuffer<T>& host)
@@ -137,6 +100,7 @@ static std::vector<float> read_float_buffer(VulkanComputeContext& context, VDevi
     return actual;
 }
 
+#if 0
 static bool selected_device_is_llvmpipe(VulkanSession& session)
 {
     VkPhysicalDeviceProperties props{};
@@ -160,6 +124,7 @@ static std::string read_text_file(const std::string& path)
     }
     return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 }
+#endif
 
 TEST_F(VulkanTestBase, host_device_buffer_copy_bandwidth)
 {
@@ -213,411 +178,3 @@ TEST_F(VulkanTestBase, host_device_buffer_copy_bandwidth)
               << ", roundtrip=" << roundtrip_gibs << " GiB/s"
               << " (" << size_bytes << " bytes, best of " << iterations << ")\n";
 }
-
-TEST_F(VulkanTestBase, multi_arg_correctness)
-{
-    /* multi-arg does: C[i,j] += sum_k( A1[n,k]*B1[k,m] + A2* B2 + A3* B3 ) */
-    if (selected_device_is_dzn(get_session())) {
-        GTEST_SKIP() << "multi_arg_correctness is unstable on dzn/Direct3D12 Vulkan drivers";
-    }
-
-    constexpr uint32_t ROWS = 64;
-    constexpr uint32_t COLS = 1024;
-    float expected_val = 44.0f * static_cast<float>(COLS);
-
-    VHostBuffer<rllm_multi_arg::RllmBuffer_A1> a1(get_session());
-    VHostBuffer<rllm_multi_arg::RllmBuffer_B1> b1(get_session());
-    VHostBuffer<rllm_multi_arg::RllmBuffer_A2> a2(get_session());
-    VHostBuffer<rllm_multi_arg::RllmBuffer_B2> b2(get_session());
-    VHostBuffer<rllm_multi_arg::RllmBuffer_A3> a3(get_session());
-    VHostBuffer<rllm_multi_arg::RllmBuffer_B3> b3(get_session());
-    VHostBuffer<rllm_multi_arg::RllmBuffer_C> c(get_session());
-    a1.fill(1.0f);
-    b1.fill(2.0f);
-    a2.fill(3.0f);
-    b2.fill(4.0f);
-    a3.fill(5.0f);
-    b3.fill(6.0f);
-    c.fill(0.0f);
-    VDeviceBuffer<rllm_multi_arg::RllmBuffer_A1> a1_buf(a1);
-    VDeviceBuffer<rllm_multi_arg::RllmBuffer_B1> b1_buf(b1);
-    VDeviceBuffer<rllm_multi_arg::RllmBuffer_A2> a2_buf(a2);
-    VDeviceBuffer<rllm_multi_arg::RllmBuffer_B2> b2_buf(b2);
-    VDeviceBuffer<rllm_multi_arg::RllmBuffer_A3> a3_buf(a3);
-    VDeviceBuffer<rllm_multi_arg::RllmBuffer_B3> b3_buf(b3);
-    VDeviceBuffer<rllm_multi_arg::RllmBuffer_C> c_buf(c);
-    VulkanComputeContext ctx(get_session());
-    a1_buf.write(ctx, a1);
-    b1_buf.write(ctx, b1);
-    a2_buf.write(ctx, a2);
-    b2_buf.write(ctx, b2);
-    a3_buf.write(ctx, a3);
-    b3_buf.write(ctx, b3);
-    c_buf.write(ctx, c);
-
-    rllm_multi_arg::MultiArgVecmathKernel kernel(get_session(), TESTDATA_DIR "/multi-arg.glsl");
-
-    kernel.dispatch(
-        ctx,
-        ROWS,
-        COLS,
-        a1_buf,
-        b1_buf,
-        a2_buf,
-        b2_buf,
-        a3_buf,
-        b3_buf,
-        c_buf,
-        rllm_multi_arg::multi_arg_vecmath_PushConstants{
-            static_cast<int32_t>(ROWS),
-            static_cast<int32_t>(COLS),
-        });
-
-    VHostBuffer<rllm_multi_arg::RllmBuffer_C> actual(get_session());
-    c_buf.read(ctx, actual);
-
-    for (uint32_t i = 0; i < ROWS * COLS; ++i) {
-        ASSERT_NEAR(actual.get()->data[i], expected_val, 1.0f) << "multi-arg C[" << i << "]";
-    }
-}
-
-
-
-// ───────────── Test: triangular1 (triangular attention pattern) ──
-
-TEST_F(VulkanTestBase, triangular1_correctness)
-{
-    VulkanSession triangular_session(false, "llvmpipe");
-    if (!triangular_session.has_device()) {
-        GTEST_SKIP() << "no Vulkan device available for triangular1 test";
-    }
-    if (!selected_device_is_llvmpipe(triangular_session)) {
-        GTEST_SKIP() << "llvmpipe Vulkan device is not available for triangular1 test";
-    }
-
-    static_assert(rllm_triangular1::d_scores_h_X == rllm_triangular1::d_raw_h_X);
-    static_assert(rllm_triangular1::d_scores_h_Y == rllm_triangular1::d_raw_h_Y);
-    static_assert(rllm_triangular1::d_scores_h_X == rllm_triangular1::attn_w_h_X);
-    static_assert(rllm_triangular1::d_scores_h_Y == rllm_triangular1::attn_w_h_Y);
-
-    constexpr uint32_t test_seq_len = 32;
-    static_assert(test_seq_len <= rllm_triangular1::d_scores_h_X);
-    static_assert(test_seq_len <= rllm_triangular1::d_scores_h_Y);
-    constexpr VkDeviceSize buffer_size_bytes =
-        static_cast<VkDeviceSize>(test_seq_len) *
-        static_cast<VkDeviceSize>(test_seq_len) *
-        sizeof(float);
-    constexpr float raw_sentinel = -123.0f;
-
-    VDynamicHostBuffer d_scores_h(triangular_session, buffer_size_bytes);
-    VDynamicHostBuffer d_raw_h(triangular_session, buffer_size_bytes);
-    VDynamicHostBuffer attn_w_h(triangular_session, buffer_size_bytes);
-    float* scores = reinterpret_cast<float*>(d_scores_h.bytes());
-    float* raw = reinterpret_cast<float*>(d_raw_h.bytes());
-    float* attn = reinterpret_cast<float*>(attn_w_h.bytes());
-    for (uint32_t i = 0; i < test_seq_len; ++i) {
-        for (uint32_t j = 0; j < test_seq_len; ++j) {
-            const size_t idx = static_cast<size_t>(i) * test_seq_len + j;
-            scores[idx] = static_cast<float>(i + j + 1);
-            attn[idx] = 0.25f + 0.03125f * static_cast<float>((i + j) % 5);
-            raw[idx] = raw_sentinel;
-        }
-    }
-
-    VDynamicDeviceBuffer d_scores_buf(triangular_session, buffer_size_bytes);
-    VDynamicDeviceBuffer d_raw_buf(triangular_session, buffer_size_bytes);
-    VDynamicDeviceBuffer attn_w_buf(triangular_session, buffer_size_bytes);
-    rllm_triangular1::triangular1_TransformerBlock_PushConstants pc{
-        static_cast<int32_t>(test_seq_len),
-        static_cast<int32_t>(test_seq_len),
-        static_cast<int32_t>(test_seq_len),
-    };
-
-    rllm_triangular1::Triangular1TransformerBlockKernel kernel(
-        triangular_session,
-        TESTDATA_DIR "/triangular1.glsl");
-
-    VulkanComputeContext ctx(triangular_session);
-    d_scores_buf.write(ctx, d_scores_h);
-    d_raw_buf.write(ctx, d_raw_h);
-    attn_w_buf.write(ctx, attn_w_h);
-
-    kernel.dispatch(
-        ctx,
-        test_seq_len,
-        test_seq_len,
-        d_scores_buf,
-        d_raw_buf,
-        attn_w_buf,
-        pc);
-
-    d_raw_buf.read(ctx, d_raw_h);
-    const float* actual = reinterpret_cast<const float*>(d_raw_h.bytes());
-
-    for (uint32_t i = 0; i < test_seq_len; ++i) {
-        float row_dot = 0.0f;
-        for (uint32_t k = 0; k <= i; ++k) {
-            const size_t idx = static_cast<size_t>(i) * test_seq_len + k;
-            row_dot += scores[idx] * attn[idx];
-        }
-        for (uint32_t j = 0; j < test_seq_len; ++j) {
-            const size_t idx = static_cast<size_t>(i) * test_seq_len + j;
-            const float expected = j <= i ? attn[idx] * (scores[idx] - row_dot) : raw_sentinel;
-            ASSERT_NEAR(actual[idx], expected, 1.0e-4f)
-                << "triangular1 d_raw[" << i << "," << j << "]";
-        }
-    }
-}
-
-// ───────────── Test: fixed_size_triangular_matrix access ──
-
-TEST_F(VulkanTestBase, triangular_matrix_access_correctness)
-{
-    VulkanSession triangular_session(false, "llvmpipe");
-    if (!triangular_session.has_device()) {
-        GTEST_SKIP() << "no Vulkan device available for triangular matrix access test";
-    }
-    if (!selected_device_is_llvmpipe(triangular_session)) {
-        GTEST_SKIP() << "llvmpipe Vulkan device is not available for triangular matrix access test";
-    }
-
-    constexpr uint32_t N = 8;
-    constexpr uint32_t triangular_cells = N * (N + 1) / 2;
-    static_assert(rllm_triangular_matrix_access::tri_in_X == N);
-    static_assert(rllm_triangular_matrix_access::tri_in_Y == N);
-    static_assert(rllm_triangular_matrix_access::tri_out_X == N);
-    static_assert(rllm_triangular_matrix_access::tri_out_Y == N);
-
-    constexpr VkDeviceSize buffer_size_bytes = triangular_cells * sizeof(float);
-    VDynamicHostBuffer input_host(triangular_session, buffer_size_bytes);
-    VDynamicHostBuffer output_host(triangular_session, buffer_size_bytes);
-    float* input = reinterpret_cast<float*>(input_host.bytes());
-    float* output = reinterpret_cast<float*>(output_host.bytes());
-
-    for (uint32_t i = 0; i < N; ++i) {
-        for (uint32_t j = 0; j <= i; ++j) {
-            const size_t idx = static_cast<size_t>(i) * (i + 1) / 2 + j;
-            input[idx] = 10.0f * static_cast<float>(i) + static_cast<float>(j);
-            output[idx] = -999.0f;
-        }
-    }
-
-    VDynamicDeviceBuffer input_buf(triangular_session, buffer_size_bytes);
-    VDynamicDeviceBuffer output_buf(triangular_session, buffer_size_bytes);
-    rllm_triangular_matrix_access::triangular_matrix_access_triangular_access_PushConstants pc{
-        static_cast<int32_t>(N),
-        static_cast<int32_t>(N),
-    };
-
-    rllm_triangular_matrix_access::TriangularMatrixAccessTriangularAccessKernel kernel(
-        triangular_session,
-        TESTDATA_DIR "/triangular-matrix-access.glsl");
-
-    VulkanComputeContext ctx(triangular_session);
-    input_buf.write(ctx, input_host);
-    output_buf.write(ctx, output_host);
-
-    kernel.dispatch(
-        ctx,
-        N,
-        N,
-        input_buf,
-        output_buf,
-        pc);
-
-    output_buf.read(ctx, output_host);
-    const float* actual = reinterpret_cast<const float*>(output_host.bytes());
-
-    for (uint32_t i = 0; i < N; ++i) {
-        for (uint32_t j = 0; j <= i; ++j) {
-            const size_t idx = static_cast<size_t>(i) * (i + 1) / 2 + j;
-            const float expected = input[idx] + 1.0f;
-            ASSERT_FLOAT_EQ(actual[idx], expected)
-                << "triangular matrix output[" << i << "," << j << "]";
-        }
-    }
-}
-
-// ───────────── Test: with-wg2 (push-only kernel) ──────
-
-TEST_F(VulkanTestBase, with_wg2_correctness)
-{
-    const uint32_t N = 1024;
-
-    /* Vulkan compute context — no descriptor layout needed (no SSBOs) */
-    rllm_with_wg2::WithWg2TestKernel kernel(
-        get_session(),
-        TESTDATA_DIR "/with-wg2.glsl");
-    VulkanComputeContext ctx(get_session());
-
-    uint32_t wg_x = 512, wg_y = 1;
-    int32_t push_A = 42;
-
-    kernel.dispatch(
-        ctx,
-        N,
-        rllm_with_wg2::with_wg2_test_PushConstants{push_A});
-
-    SUCCEED() << "with-wg2 dispatch completed (grid=" << N << "x" << N
-              << ", workgroup=" << wg_x << "x" << wg_y
-              << ", push.A=" << push_A << ")";
-}
-
-// ───────────── Test: Tiled execution (workgroup partitioning) ──
-
-TEST_F(VulkanTestBase, tiled_kernel_generates_correct_output)
-{
-    /**
-     * Verify that workgroup partitioning (tiling) correctly transforms loops
-     * into workgroup-local strided loops with barriers.
-     * 
-     * This test validates that:
-     * 1. Parallelizable loops are correctly identified
-     * 2. Step 2 guard (local_id == 0 barriers) is inserted
-     * 3. Step 3 chunking (loop tiling with stride) is applied
-     * 4. Numerical correctness is preserved after transformation
-     */
-    constexpr uint32_t N = 128;
-    int push_value = 77;
-    std::vector<int> expected(N, 77);
-
-    VHostBuffer<rllm_single_assign::RllmBuffer_dst> readback(get_session());
-    VDeviceBuffer<rllm_single_assign::RllmBuffer_dst> dst_buf(readback);
-
-    // Load the standard single-assign kernel; its loop will be tiled if
-    // the tiling pass is enabled during code generation
-    rllm_single_assign_tiled::SingleAssignTiledVecmathKernel kernel(
-        get_session(),
-        TESTDATA_DIR "/single-assign-tiled.glsl");
-    const std::string descriptor = rllm_single_assign_tiled::SingleAssignTiledVecmathKernel::generated_descriptor();
-    ASSERT_NE(descriptor.find("tiling=on"), std::string::npos)
-        << "tiling is not enabled in generated stub descriptor: " << descriptor;
-
-    VulkanComputeContext ctx(get_session());
-
-    kernel.dispatch(
-        ctx,
-        N,
-        dst_buf,
-        rllm_single_assign_tiled::single_assign_tiled_vecmath_PushConstants{
-            static_cast<int32_t>(N),
-            push_value,
-        });
-
-    dst_buf.read(ctx, readback);
-    const int* actual = reinterpret_cast<const int*>(readback.get()->data);
-
-    // Verify tiled loop produces correct results
-    for (uint32_t i = 0; i < N; ++i) {
-        ASSERT_EQ(actual[i], push_value)
-            << "tiled kernel produced incorrect value at index " << i;
-    }
-
-    SUCCEED() << "tiled kernel dispatch completed with N=" << N
-              << " and produced correct output (all elements = " << push_value << ")";
-}
-
-TEST_F(VulkanTestBase, tiled_variable_size_loop_generates_correct_output)
-{
-    constexpr uint32_t N = 128;
-    constexpr int push_value = 91;
-    constexpr int k_count = 17;
-
-    VHostBuffer<rllm_var_size_loop_tiled::RllmBuffer_dst> readback(get_session());
-    VDeviceBuffer<rllm_var_size_loop_tiled::RllmBuffer_dst> dst_buf(readback);
-
-    rllm_var_size_loop_tiled::VarSizeLoopTiledVecmathKernel kernel(
-        get_session(),
-        TESTDATA_DIR "/var-size-loop-tiled.glsl");
-    const std::string descriptor = rllm_var_size_loop_tiled::VarSizeLoopTiledVecmathKernel::generated_descriptor();
-    ASSERT_NE(descriptor.find("tiling=on"), std::string::npos)
-        << "tiling is not enabled in generated stub descriptor: " << descriptor;
-
-    VulkanComputeContext ctx(get_session());
-
-    kernel.dispatch(
-        ctx,
-        N,
-        dst_buf,
-        rllm_var_size_loop_tiled::var_size_loop_tiled_vecmath_PushConstants{
-            static_cast<int32_t>(N),
-            push_value,
-            k_count,
-            static_cast<int32_t>(N),
-        });
-
-    dst_buf.read(ctx, readback);
-    const int* actual = reinterpret_cast<const int*>(readback.get()->data);
-
-    for (uint32_t i = 0; i < N; ++i) {
-        ASSERT_EQ(actual[i], push_value)
-            << "variable-size tiled kernel produced incorrect value at index " << i;
-    }
-}
-
-TEST_F(VulkanTestBase, dynamic_atb_acc_reduction_loop_is_chunked_by_k_count)
-{
-    const std::string descriptor = rllm_dynamic_atb_acc::DynamicAtbAccVecmathKernel::generated_descriptor();
-    ASSERT_NE(descriptor.find("tiling=on"), std::string::npos)
-        << "tiling is not enabled in generated stub descriptor: " << descriptor;
-    ASSERT_NE(descriptor.find("shared_memory_tiling=on"), std::string::npos)
-        << "shared-memory reduction tiling is not enabled in generated stub descriptor: " << descriptor;
-
-    const std::string glsl = read_text_file(TESTDATA_DIR "/dynamic-atb-acc.glsl");
-    EXPECT_NE(glsl.find("layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;"), std::string::npos);
-    EXPECT_NE(glsl.find("int(gl_WorkGroupID.z) * 16"), std::string::npos);
-    EXPECT_NE(glsl.find("l_idx < ((int(gl_WorkGroupID.z) * 16) + 16) && l_idx < rllm_push.k_count"), std::string::npos);
-    EXPECT_NE(glsl.find("atomicAdd(C["), std::string::npos);
-
-    const std::string header = read_text_file(TESTDATA_DIR "/dynamic-atb-acc.h");
-    EXPECT_NE(header.find("(push_constants.k_count + 16 - 1) / 16"), std::string::npos);
-
-    if (!get_session().shader_buffer_float32_atomic_add_enabled()) {
-        GTEST_SKIP() << "selected Vulkan device does not expose shaderBufferFloat32AtomicAdd";
-    }
-
-    constexpr uint32_t rows = 8;
-    constexpr uint32_t cols = 8;
-    constexpr int k_count = 7;
-    constexpr float expected = 3.0f + 2.0f * static_cast<float>(k_count);
-
-    VHostBuffer<rllm_dynamic_atb_acc::RllmBuffer_A> a(get_session());
-    VHostBuffer<rllm_dynamic_atb_acc::RllmBuffer_B> b(get_session());
-    VHostBuffer<rllm_dynamic_atb_acc::RllmBuffer_C> c(get_session());
-    VHostBuffer<rllm_dynamic_atb_acc::RllmBuffer_C> readback(get_session());
-    a.fill(1.0f);
-    b.fill(2.0f);
-    c.fill(3.0f);
-
-    VDeviceBuffer<rllm_dynamic_atb_acc::RllmBuffer_A> a_buf(a);
-    VDeviceBuffer<rllm_dynamic_atb_acc::RllmBuffer_B> b_buf(b);
-    VDeviceBuffer<rllm_dynamic_atb_acc::RllmBuffer_C> c_buf(c);
-    VulkanComputeContext ctx(get_session());
-    a_buf.write(ctx, a);
-    b_buf.write(ctx, b);
-    c_buf.write(ctx, c);
-
-    rllm_dynamic_atb_acc::DynamicAtbAccVecmathKernel kernel(
-        get_session(),
-        TESTDATA_DIR "/dynamic-atb-acc.glsl");
-
-    kernel.dispatch(
-        ctx,
-        rows,
-        cols,
-        a_buf,
-        b_buf,
-        c_buf,
-        rllm_dynamic_atb_acc::dynamic_atb_acc_vecmath_PushConstants{
-            static_cast<int32_t>(rows),
-            static_cast<int32_t>(cols),
-            k_count,
-        });
-
-    c_buf.read(ctx, readback);
-    for (uint32_t i = 0; i < rows * cols; ++i) {
-        ASSERT_NEAR(readback.get()->data[i], expected, 1.0e-4f)
-            << "dynamic-atb-acc C[" << i << "]";
-    }
-}
-

@@ -1,0 +1,31 @@
+PROGRAM("vecmath.cc:474")
+
+OFFLOAD_PARFOR_2D_PARAM(i, j, grid, (A1, A2, B, C1, C2, k_count))
+
+PARAMETERS
+        const flexible_rows_matrix<float, 16384, 4096>& A1,
+        const flexible_rows_matrix<float, 16384, 4096>& A2,
+        const flexible_rows_matrix<float, 16384, 1024>& B,
+        fixed_size_matrix<float, 4096, 1024>& C1,
+        fixed_size_matrix<float, 4096, 1024>& C2,
+        int k_count
+
+BEGIN
+            float sum1 = 0.f;
+            float sum2 = 0.f;
+            for (int l_idx = 0; l_idx < k_count; ++l_idx)
+            {
+                const int k = int(l_idx);
+                const float b = B[k, j];
+                const float term1 = (A1[k, i] * b);
+                OVERFLOW_CHECK_ADD(sum1, term1);
+                sum1 += term1;
+
+                const float term2 = (A2[k, i] * b);
+                OVERFLOW_CHECK_ADD(sum2, term2);
+                sum2 += term2;
+            }
+            C1[i, j] += sum1;
+            C2[i, j] += sum2;
+
+END_PROGRAM

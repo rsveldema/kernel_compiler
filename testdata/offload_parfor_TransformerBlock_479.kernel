@@ -1,0 +1,22 @@
+PROGRAM("TransformerBlock.cc:479")
+
+OFFLOAD_PARFOR_2D_PARAM(i, d_head, dq_grid, (d_Q, d_raw_h, K, seq_len, hStart))
+
+PARAMETERS
+        flexible_rows_matrix<float, 16384, 1024>& d_Q = ws.d_Q;
+        fixed_size_triangular_matrix<float, 16384, 16384>& d_raw_h = ws.d_raw[hi];
+        const flexible_rows_matrix<float, 16384, 1024>& K = fwd.K;
+        const int seq_len = fwd.seq_len;
+        const int hStart = (hi * 128);
+
+BEGIN
+        {
+            const int d = (hStart + int(d_head));
+            const float head_scale = (1.0f /  sqrt (128));
+            float sum_q = 0.f;
+            for (const int j : limit<16384>(0, inc(i)))
+                sum_q += ((d_raw_h[i, j] * head_scale) * K[j, d]);
+            d_Q[i, d] = sum_q;
+        }
+
+END_PROGRAM

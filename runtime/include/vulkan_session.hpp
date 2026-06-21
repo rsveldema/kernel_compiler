@@ -358,9 +358,8 @@ inline void ComputeKernelRegistry::logKernelRegistrationLocked(const AbstractKer
         return;
 
     const std::string_view descriptor{kernel.generatedDescriptor()};
-    const bool tiled = descriptor.find("tiling=on") != std::string_view::npos;
     std::ofstream out(m_registration_log_filename, std::ios::app);
-    out << AbstractKernel::demangleKernelName(kernel.kernelName()) << '\t' << (tiled ? "yes" : "no") << '\n';
+    out << AbstractKernel::demangleKernelName(kernel.kernelName()) << '\t' << descriptor << '\n';
     m_logged_kernel_names.push_back(kernel.kernelName());
 }
 

@@ -1,0 +1,13 @@
+PROGRAM("vecmath.cc:566")
+
+OFFLOAD_PARFOR_2D_PARAM(t, d, grid, (lhs, rhs, dst))
+
+PARAMETERS
+        const flexible_rows_matrix<float, 16384, 1024>& lhs,
+        const flexible_rows_matrix<float, 16384, 1024>& rhs,
+        flexible_rows_matrix<float, 16384, 1024>& dst
+
+BEGIN
+        dst[t, d] = (lhs[t, d] + rhs[t, d]);
+
+END_PROGRAM

@@ -3,6 +3,7 @@
 import sys as _sys_mod
 import os
 
+
 # Ensure project root is on path so 'import codegen' works, and remove the
 # script's own directory so stdlib imports don't resolve to local packages first.
 # Python adds the script directory to sys.path[0] at
@@ -29,9 +30,10 @@ from codegen.kast.program import Program
 from codegen.transforms import transform
 from codegen.visitors.pretty_printer import prettyprint
 from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
+from codegen.visitors.tree_rewriter import TreeRewriter
 from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
 from codegen.visitors.rllm_vulkan_dispatch_stub_visitor import RllmVulkanDispatchStubVisitor
-from codegen.workgroup_partitioning import perform_tiling
+from codegen.visitors.resolve_array_indices import resolve_array_indices
 
 log = logging.getLogger(__name__)
 
@@ -43,30 +45,24 @@ def read_file(filename: str) -> str:
 
 def optimize(
     program: Program,
-    enable_optimizations: bool = True,
-    enable_parallelization: bool = False,
+    enable_optimizations: bool
 ) -> Program:
-    # Optimization pass (blocking / cooperative-matrix) removed;
-    # tiling is now handled by the workgroup_partitioning pass below.
-    # Apply workgroup partitioning pass when enabled.
-    if enable_parallelization:
-        program = perform_tiling(program)
-    from codegen.visitors.resolve_array_indices import resolve_array_indices
-    program = resolve_array_indices(program)
+    if enable_optimizations:
+        program = program.accept(TreeRewriter({}))
     return program
 
 
 def compile(
     filename: str,
     enable_optimizations: bool = True,
-    enable_parallelization: bool = False,
 ) -> Program:
     print(f"--------------- parsing: {filename} -----------------")
     text = read_file(filename)
     ret = parser.parse(text)
     program = transform(ret)
     program._source_filename = filename
-    program = optimize(program, enable_optimizations, enable_parallelization)
+    program = optimize(program, enable_optimizations)
+    program = resolve_array_indices(program)
     return program
 
 
@@ -77,9 +73,8 @@ def generate_vulkan(
     rllm_dispatch_stub: str | None = None,
     rllm_spv_path: str | None = None,
     use_bfloat16: bool = False,
-    enable_parallelization: bool = False,
 ) -> None:
-    program = compile(filename, enable_optimizations, enable_parallelization)
+    program = compile(filename, enable_optimizations)
     visitor = VulkanKernelVisitor(use_bfloat16=use_bfloat16)
     shader = program.accept(visitor)
     with open(output, "w") as f:
@@ -116,10 +111,9 @@ def compile_vulkan(
     rllm_dispatch_stub: str | None = None,
     rllm_spv_path: str | None = None,
     use_bfloat16: bool = False,
-    enable_parallelization: bool = False,
 ) -> None:
     glsl_path = input_file.rsplit(".", 1)[0] + ".glsl"
-    generate_vulkan(input_file, glsl_path, enable_optimizations, rllm_dispatch_stub, rllm_spv_path, use_bfloat16=use_bfloat16, enable_parallelization=enable_parallelization)
+    generate_vulkan(input_file, glsl_path, enable_optimizations, rllm_dispatch_stub, rllm_spv_path, use_bfloat16=use_bfloat16)
     cmd = [
         "glslc", "-fshader-stage=compute", "-o", output_spv,
         "--target-env=vulkan1.2", glsl_path,
@@ -153,22 +147,15 @@ if __name__ == "__main__":
         action="store_true",
         help="Generate bfloat (16-bit) instead of float16 in Vulkan/C++ output",
     )
-    _parser.add_argument(
-        "--parallelize",
-        action="store_true",
-        default=False,
-        help="Enable workgroup partitioning parallelization pass",
-    )
     args = _parser.parse_args()
     enable_optimizations = True
     use_bfloat16 = getattr(args, "bfloat16", False)
-    enable_parallelization = getattr(args, "parallelize", False)
 
     if args.vulkan or args.compile:
         if not args.file:
             _parser.error("--vulkan and --compile require an input FILE argument")
         if args.vulkan:
-            generate_vulkan(args.file, args.vulkan, enable_optimizations, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16, enable_parallelization=enable_parallelization)
+            generate_vulkan(args.file, args.vulkan, enable_optimizations, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16)
         elif args.compile:
             compile_vulkan(args.file, args.compile, enable_optimizations, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16)
     else:

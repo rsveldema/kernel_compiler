@@ -386,8 +386,8 @@ class VulkanCppStubVisitor(Visitor):
             parts = node.header.replace('"', "").split("/")
             basename = parts[-1].rsplit(".", 1)[0] if "." in parts[-1] else parts[-1]
 
-        src_name = getattr(node, "_source_filename", "")
-        if hasattr(node, "_source_filename") and src_name:
+        src_name = node._source_filename
+        if src_name:
             src_stem = src_name.rsplit("/", 1)[-1].rsplit(".", 1)[0].replace("-", "_")
         else:
             src_stem = "kernel"
@@ -504,7 +504,7 @@ class VulkanCppStubVisitor(Visitor):
                 all_pc_fields.append(param)
 
         if is_triangular:
-            for tb in getattr(node, "triangular_bounds_raw", []):
+            for tb in node.triangular_bounds_raw:
                 if tb is None:
                     continue
                 if _is_push_identifier(tb) and tb not in pc_field_names and not tb.lstrip("-").isdigit():
@@ -634,21 +634,16 @@ class VulkanCppStubVisitor(Visitor):
         wg_z: str,
     ) -> None:
         push_size = f"sizeof({self._kernel_name}_PushConstants)" if all_pc_fields else "0"
-        tiled = bool(node.tiled)
-        parallelized = bool(node.parallelized)
         tile_bs = node.tile_block_size
         if tile_bs is None:
             tile_bs = 1
         wg_count = node.workgroup_count
         if wg_count is None:
             wg_count = 1
-        shared_tiling = bool(node.use_shared_memory_tiling)
         descriptor = (
-            f"tiling={'on' if tiled else 'off'};"
-            f"parallelized={'on' if parallelized else 'off'};"
             f"tile_block_size={tile_bs};"
             f"workgroup_count={wg_count};"
-            f"shared_memory_tiling={'on' if shared_tiling else 'off'}"
+            f"tree_transformed={'yes' if node.tree_transformed else 'no'};"
         )
 
         self._emit(f"class {class_name} : public AbstractKernel {{")
@@ -675,7 +670,6 @@ class VulkanCppStubVisitor(Visitor):
         self._push()
 
         x_dim, y_dim, z_dim = self._compute_dispatch_dims(node, has_2d, has_3d, wg_x, wg_y, wg_z)
-        parallelized = bool(node.parallelized)
 
         self._emit("ComputeKernelRegistry::ScopedActiveKernel active_kernel(*this);")
         self._emit("VkCommandBuffer command_buffer = context.begin_command_buffer();")
@@ -707,10 +701,7 @@ class VulkanCppStubVisitor(Visitor):
             )
         self._emit("vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, kernel_.pipeline());")
 
-        if parallelized and wg_count > 1:
-            self._emit(f"vkCmdDispatch(command_buffer, {x_dim}, {y_dim}, {z_dim});")
-        else:
-            self._emit(f"vkCmdDispatch(command_buffer, {x_dim}, {y_dim}, {z_dim});")
+        self._emit(f"vkCmdDispatch(command_buffer, {x_dim}, {y_dim}, {z_dim});")
         self._emit("context.submit_and_wait();")
 
         self._emit("}")

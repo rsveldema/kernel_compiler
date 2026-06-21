@@ -1171,6 +1171,7 @@ def transform_statement(stmt_tree):
                     increment_var=inc_var,
                     increment_op=inc_op,
                     body_stmts=body_stmts,
+                    init_expr=init_expr_for_var,
                 )
 
 
@@ -1445,6 +1446,7 @@ def transform_statement(stmt_tree):
                     increment_var=inc_var,
                     increment_op=inc_op,
                     body_stmts=body_stmts,
+                    init_expr=init_expr_for_var,
                 )
             elif for_lp_data == "for":
                 # Alternative 2: "for" "(" <type> IDENT ":" expression ")" (block | statement)
@@ -1694,7 +1696,7 @@ def transform(t: Tree) -> Program:
             x_val = _evaluate_workgroup_size_value(wg.x_expr)
             y_val = _evaluate_workgroup_size_value(wg.y_expr)
             z_val = _evaluate_workgroup_size_value(wg.z_expr)
-            _validate_workgroup_size(x_val, y_val, z_val, getattr(p, '_source_filename', None))
+            _validate_workgroup_size(x_val, y_val, z_val, p._source_filename)
 
     p.loop_vars, p.space_dim = extract_loop_vars_and_dim(t.children[1])
 
@@ -1705,14 +1707,14 @@ def transform(t: Tree) -> Program:
         if len(limit_result) >= 4:
             p.triangular_kind = limit_result[3]
 
-    if not hasattr(p, "lower_bound_expr"):
+    if p.lower_bound_expr is None:
         if p.space_dim >= 2:
             for c in t.children[1].children:
                 if isinstance(c, Tree) and c.data == "expression":
                     p.grid_name = _extract_grid_name_from_expr(c)
                     break
 
-    if not hasattr(p, "lower_bound_expr"):
+    if p.lower_bound_expr is None:
         expr_tree = _find_expression_tree(t.children[1])
         if expr_tree is not None:
             p.dispatch_size_expr = transform_expression(expr_tree)
@@ -1790,7 +1792,7 @@ def transform(t: Tree) -> Program:
         if len(limit_result) >= 4:
             p.triangular_kind = limit_result[3]
 
-    for bound_name in getattr(p, "triangular_bounds_raw", []) or []:
+    for bound_name in p.triangular_bounds_raw:
         if bound_name in param_type_map and bound_name not in param_names:
             param_names.append(bound_name)
 

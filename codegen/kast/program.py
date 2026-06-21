@@ -26,13 +26,11 @@ class Program(AstNode):
         # Set by perform_tiling() for workgroup partitioning
         workgroup_count=1,
         workgroup_size=1,
-        tiled=False,
-        parallelized=False,
         tile_block_size=1,
-        use_shared_memory_tiling=False,
         _source_filename="",
         _constexpr_defines=None,
         _param_constexpr_defines=None,
+        tree_transformed = False
     ):
         self.reduction_chunks = reduction_chunks
         self.header = header
@@ -63,10 +61,8 @@ class Program(AstNode):
         # Set by perform_tiling() for workgroup partitioning
         self.workgroup_count = workgroup_count
         self.workgroup_size = workgroup_size
-        self.tiled = tiled
-        self.parallelized = parallelized
         self.tile_block_size = tile_block_size
-        self.use_shared_memory_tiling = use_shared_memory_tiling
+        self.tree_transformed = tree_transformed
 
     @property
     def loop_var(self):

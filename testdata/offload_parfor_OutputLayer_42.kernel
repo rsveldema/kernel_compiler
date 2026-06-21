@@ -1,0 +1,16 @@
+PROGRAM("OutputLayer.cc:42")
+
+OFFLOAD_PARFOR_1D_PARAM(v, limit<620>(), (h_last, W_float, inputs))
+
+PARAMETERS
+        const fixed_size_vector<float, 1024>& h_last,
+        const fixed_size_matrix<float, 620, 1024>& W_float,
+        fixed_size_vector<float, 620>& inputs
+
+BEGIN
+        float sum = 0.f;
+        for (const int d : limit<1024>())
+            sum += (h_last[d] * W_float[v, d]);
+        inputs[v] = sum;
+
+END_PROGRAM

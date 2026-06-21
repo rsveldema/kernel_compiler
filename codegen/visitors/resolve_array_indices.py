@@ -482,6 +482,7 @@ class ResolveArrayIndicesVisitor(Expression):
             var_type=node.var_type,
             name=node.name,
             init_expr=init_expr,
+            is_constexpr=node.is_constexpr,
         )
 
     def visit_assignment(self, node: Assignment):
@@ -511,11 +512,14 @@ class ResolveArrayIndicesVisitor(Expression):
 
     def visit_shared_decl(self, node: SharedDecl):
         init_expr = node.init_expr.accept(self) if node.init_expr else None
+        dimensions = [dim.accept(self) if hasattr(dim, "accept") else dim for dim in node.dimensions]
         return SharedDecl(
             is_const=node.is_const,
             var_type=node.var_type,
             name=node.name,
             init_expr=init_expr,
+            is_constexpr=node.is_constexpr,
+            dimensions=dimensions,
         )
 
     def visit_workgroup_properties(self, node: WorkgroupProperties):
@@ -560,27 +564,24 @@ class ResolveArrayIndicesVisitor(Expression):
             if node.dispatch_size_expr
             else None,
             lower_bound_expr=node.lower_bound_expr.accept(self)
-            if getattr(node, "lower_bound_expr", None)
+            if node.lower_bound_expr
             else None,
             upper_bound_expr=node.upper_bound_expr.accept(self)
-            if getattr(node, "upper_bound_expr", None)
+            if node.upper_bound_expr
             else None,
-            triangular_bounds_raw=getattr(node, "triangular_bounds_raw", []),
-            triangular_kind=getattr(node, "triangular_kind", ""),
+            triangular_bounds_raw=node.triangular_bounds_raw,
+            triangular_kind=node.triangular_kind,
             params=params or node.params,
             body_stmts=body_stmts or node.body_stmts,
             workgroups=workgroups or node.workgroups,            
             reduction_chunks=node.reduction_chunks,
             use_cooperative_matrix2=node.use_cooperative_matrix2,
             cooperative_matrix2_chunk_size=node.cooperative_matrix2_chunk_size,
-            _source_filename=getattr(node, '_source_filename', ''),
-            _param_constexpr_defines=getattr(node, '_param_constexpr_defines', []),
+            _source_filename=node._source_filename,
+            _param_constexpr_defines=node._param_constexpr_defines,
             workgroup_count=node.workgroup_count,
             workgroup_size=node.workgroup_size,
-            tiled=node.tiled,
-            parallelized=node.parallelized,
             tile_block_size=node.tile_block_size,
-            use_shared_memory_tiling=node.use_shared_memory_tiling,
         )
 
 
@@ -592,5 +593,5 @@ def resolve_array_indices(program: Program) -> Program:
     each supported matrix/vector type.  Indices that cannot be resolved (unknown
     dimensions) are left unchanged.
     """
-    visitor = ResolveArrayIndicesVisitor(program.params, getattr(program, "space_dim", 0))
+    visitor = ResolveArrayIndicesVisitor(program.params, program.space_dim)
     return program.accept(visitor)

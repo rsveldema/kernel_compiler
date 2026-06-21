@@ -1,0 +1,11 @@
+PROGRAM("OutputLayer.cc:105")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<2>(), (temp_values))
+
+PARAMETERS
+        fixed_size_vector<float, 2>& temp_values
+
+BEGIN
+        temp_values[i] = (i == 0) ? -3.402823e38f : 0.0f;
+
+END_PROGRAM

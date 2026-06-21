@@ -4,9 +4,12 @@ Tests the AST parser, visitor pattern, and printer against realistic parfor dump
 """
 
 from codegen.parser import parse
+from codegen.kast.expression import BinaryExpr, Number
 from codegen.visitors.resolve_array_indices import resolve_array_indices
+from codegen.visitors.tree_rewriter import TreeRewriter
 from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
 from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
+import pytest
 
 
 def test_vulkan_constant_folds_sqrt_and_casts():
@@ -34,6 +37,88 @@ END_PROGRAM
     assert "sqrt" not in shader
     assert "float(size_t" not in shader
     assert "0.0883883476" in shader
+
+
+def test_tkernel_meta_sets_reduction_chunks():
+    program = parse(
+        """
+PROGRAM("vecmath.cc:225")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<8>(), (dst))
+
+PARAMETERS
+        fixed_size_vector<float, 8>& dst
+
+BEGIN
+        dst[i] = (dst[i] + 1.0f);
+
+END_PROGRAM
+"""
+    )
+
+    program = program.accept(TreeRewriter({}))
+    program = resolve_array_indices(program)
+
+    assert program.reduction_chunks == 16
+
+
+def test_tkernel_meta_rejects_unknown_program_fields():
+    program = parse(
+        """
+PROGRAM("vecmath.cc:225")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<8>(), (dst))
+
+PARAMETERS
+        fixed_size_vector<float, 8>& dst
+
+BEGIN
+        dst[i] = (dst[i] + 1.0f);
+
+END_PROGRAM
+"""
+    )
+    pattern = type(
+        "FakePattern",
+        (),
+        {
+            "filename": "optimize_vecmath225.tkernel",
+            "meta": {"does_not_exist": Number(1)},
+        },
+    )()
+
+    with pytest.raises(AttributeError, match="does_not_exist"):
+        TreeRewriter({})._apply_program_meta(program, pattern)
+
+
+def test_tkernel_meta_constant_folds_program_field_values():
+    program = parse(
+        """
+PROGRAM("vecmath.cc:225")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<8>(), (dst))
+
+PARAMETERS
+        fixed_size_vector<float, 8>& dst
+
+BEGIN
+        dst[i] = (dst[i] + 1.0f);
+
+END_PROGRAM
+"""
+    )
+    pattern = type(
+        "FakePattern",
+        (),
+        {
+            "filename": "optimize_vecmath225.tkernel",
+            "meta": {"reduction_chunks": BinaryExpr(Number(8), "*", Number(2))},
+        },
+    )()
+
+    TreeRewriter({})._apply_program_meta(program, pattern)
+
+    assert program.reduction_chunks == 16
 
 
 def test_vulkan_preserves_float16_buffers_and_casts_stores():
