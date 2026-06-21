@@ -40,6 +40,10 @@ set(VECMATH225_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_225.kernel")
 set(VECMATH225_GLSL "${GENERATED_DIR}/vecmath.L225.glsl")
 set(VECMATH225_HEADER "${GENERATED_DIR}/vecmath.L225.h")
 set(VECMATH225_SPV "${GENERATED_DIR}/vecmath.L225.spv")
+set(VECMATH225_NOOPT_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_225_noopt.kernel")
+set(VECMATH225_NOOPT_GLSL "${GENERATED_DIR}/vecmath.L225.noopt.glsl")
+set(VECMATH225_NOOPT_HEADER "${GENERATED_DIR}/vecmath.L225.noopt.h")
+set(VECMATH225_NOOPT_SPV "${GENERATED_DIR}/vecmath.L225.noopt.spv")
 set(VECMATH225_TYPE_ALIASES "${GENERATED_DIR}/_type_aliases.hpp")
 
 add_custom_command(
@@ -83,6 +87,44 @@ list(APPEND GENERATED_KERNEL_SRCS
     "${VECMATH225_HEADER}"
     "${VECMATH225_SPV}"
     "${VECMATH225_TYPE_ALIASES}"
+)
+
+add_custom_command(
+    OUTPUT "${VECMATH225_NOOPT_DUMP}"
+    COMMAND "${CMAKE_COMMAND}" -E copy "${VECMATH225_DUMP}" "${VECMATH225_NOOPT_DUMP}"
+    DEPENDS "${VECMATH225_DUMP}"
+    COMMENT "Copying vecmath:225 parfor dump for no-optimization baseline"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT
+        "${VECMATH225_NOOPT_HEADER}"
+        "${VECMATH225_NOOPT_SPV}"
+    BYPRODUCTS
+        "${VECMATH225_NOOPT_GLSL}"
+    COMMAND "${Python3_EXECUTABLE}" "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
+            "${VECMATH225_NOOPT_DUMP}"
+            --vulkan "${VECMATH225_NOOPT_GLSL}"
+            --no-optimizations
+    COMMAND Vulkan::glslc -fshader-stage=compute --target-env=vulkan1.1
+            "${VECMATH225_NOOPT_GLSL}" -o "${VECMATH225_NOOPT_SPV}"
+    DEPENDS
+        "${VECMATH225_NOOPT_DUMP}"
+        "${VECMATH225_KERNEL}"
+        "${CMAKE_SOURCE_DIR}/offloadize_common.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/parser.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/transforms.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_cpp_stub_visitor.py"
+    WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
+    COMMENT "Generating vecmath:225 no-optimization Vulkan test stub"
+    VERBATIM
+)
+list(APPEND GENERATED_KERNEL_SRCS
+    "${VECMATH225_NOOPT_HEADER}"
+    "${VECMATH225_NOOPT_SPV}"
 )
 
 add_custom_target(all_generated_stubs ALL DEPENDS ${GENERATED_KERNEL_SRCS})

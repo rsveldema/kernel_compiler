@@ -3,6 +3,8 @@
 Tests the AST parser, visitor pattern, and printer against realistic parfor dumps.
 """
 
+from unittest_offload_parfor_helper import parse_kernel
+
 from codegen.parser import parse
 from codegen.kast.expression import BinaryExpr, Number
 from codegen.visitors.resolve_array_indices import resolve_array_indices
@@ -40,21 +42,7 @@ END_PROGRAM
 
 
 def test_tkernel_meta_sets_reduction_chunks():
-    program = parse(
-        """
-PROGRAM("vecmath.cc:225")
-
-OFFLOAD_PARFOR_1D_PARAM(i, limit<8>(), (dst))
-
-PARAMETERS
-        fixed_size_vector<float, 8>& dst
-
-BEGIN
-        dst[i] = (dst[i] + 1.0f);
-
-END_PROGRAM
-"""
-    )
+    program = parse_kernel("offload_parfor_vecmath_225.kernel")
 
     program = program.accept(TreeRewriter({}))
     program = resolve_array_indices(program)

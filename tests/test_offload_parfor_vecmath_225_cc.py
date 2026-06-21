@@ -31,11 +31,12 @@ def test_tree_rewriter_changes_vecmath225_glsl():
 
     assert "const int rllm_reduction_chunk_size" in shader
     assert "layout(local_size_x = 8, local_size_y = 8, local_size_z = 16) in;" in shader
-    assert "shared float rllm_reduction_resultA[16]" in shader
-    assert "shared float rllm_reduction_resultB[16]" in shader
-    assert "shared float rllm_reduction_resultC[16]" in shader
+    assert "shared float rllm_reduction_resultA[1024]" in shader
+    assert "shared float rllm_reduction_resultB[1024]" in shader
+    assert "shared float rllm_reduction_resultC[1024]" in shader
     assert "gl_LocalInvocationID.z" in shader
-    assert "gl_WorkGroupID.z" in shader
-    assert shader.count("barrier();") == 6
+    assert "gl_LocalInvocationID.z == 0" in shader
+    assert "const int rllm_reduction_accumulate_slot" in shader
+    assert shader.count("barrier();") == 3
     assert "for (int l_idx = 0; l_idx < 1024; ++l_idx)" not in shader
     assert "for (int l_idx = block_start_i; l_idx < block_end_i; ++l_idx)" in shader

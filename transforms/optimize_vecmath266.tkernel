@@ -8,7 +8,6 @@ search
 
     float sum1 = 0.f;
     float sum2 = 0.f;
-    float sum3 = 0.f;
     for (int l_idx = 0; l_idx < wildcard(N); ++l_idx)
     {
         const int k = int(l_idx);
@@ -20,15 +19,9 @@ search
         const float term2 = (a * B2[j, k]);
         OVERFLOW_CHECK_ADD(sum2, term2);
         sum2 += term2;
-
-        const float term3 = (a * B3[j, k]);
-        OVERFLOW_CHECK_ADD(sum3, term3);
-        sum3 += term3;
     }
     C1[i, j] = (sum1);
     C2[i, j] = (sum2);
-    C3[i, j] = (sum3);
-
 
 replace
     const int i = int(gl_GlobalInvocationID.x);
@@ -51,11 +44,9 @@ replace
 
     float sum1 = 0.f;
     float sum2 = 0.f;
-    float sum3 = 0.f;
 
     shared float rllm_reduction_resultA[1024];
     shared float rllm_reduction_resultB[1024];
-    shared float rllm_reduction_resultC[1024];
 
     const int rllm_reduction_chunk_size = (wildcard(N) / wildcard(reduction_chunks));
     const int rllm_reduction_local_xy = ((int(gl_LocalInvocationID.y) * 8) + int(gl_LocalInvocationID.x));
@@ -75,17 +66,12 @@ replace
         const float term2 = (a * B2[j, k]);
         OVERFLOW_CHECK_ADD(sum2, term2);
         sum2 += term2;
-
-        const float term3 = (a * B3[j, k]);
-        OVERFLOW_CHECK_ADD(sum3, term3);
-        sum3 += term3;
     }
 
 
     const int rllm_reduction_slot = (rllm_reduction_slot_base + int(gl_LocalInvocationID.z));
     rllm_reduction_resultA[rllm_reduction_slot] = sum1;
     rllm_reduction_resultB[rllm_reduction_slot] = sum2;
-    rllm_reduction_resultC[rllm_reduction_slot] = sum3;
 
     barrier();
 
@@ -93,19 +79,16 @@ replace
     {
         sum1 = 0.f;
         sum2 = 0.f;
-        sum3 = 0.f;
 
         for (int wi = 0; wi < wildcard(reduction_chunks); wi++)
         {
             const int rllm_reduction_accumulate_slot = (rllm_reduction_slot_base + wi);
             sum1 += rllm_reduction_resultA[rllm_reduction_accumulate_slot];
             sum2 += rllm_reduction_resultB[rllm_reduction_accumulate_slot];
-            sum3 += rllm_reduction_resultC[rllm_reduction_accumulate_slot];
         }
 
         C1[i, j] = (sum1);
         C2[i, j] = (sum2);
-        C3[i, j] = (sum3);
     }
 
 // 1024 / 16 = 64 size of shared mem array

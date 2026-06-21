@@ -12,7 +12,55 @@ from codegen.kast.statement import Statement, WildcardStatement
 from codegen.parser import parse_search_replace_pattern
 from codegen.transforms import transform_expression, transform_statement
 from codegen.visitors import visitor
+import logging
 from codegen.visitors.pattern_match_visitor import PatternMatchVisitor
+
+logger = logging.getLogger("tree_rewriter")
+if not logger.handlers:
+    logger.setLevel(logging.DEBUG)
+    _fh = logging.FileHandler("tree-rewrite.log", mode="w")
+    _fh.setLevel(logging.DEBUG)
+    _fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    _fh.setFormatter(_fmt)
+    logger.addHandler(_fh)
+
+
+def _stmt_label(stmt: Statement) -> str:
+    """Generate a human-readable label for a statement for logging."""
+    if stmt is None:
+        return "(None)"
+    t = type(stmt).__name__
+    if hasattr(stmt, 'body_stmts') and stmt.body_stmts:
+        return f"{t}[{len(stmt.body_stmts)} stmts]"
+    if hasattr(stmt, 'body') and stmt.body:
+        return f"{t}[{len(stmt.body)} stmts]"
+    if hasattr(stmt, 'condition'):
+        return f"{t}({stmt.condition})"
+    if hasattr(stmt, 'lhs'):
+        lhs = stmt.lhs
+        if hasattr(lhs, 'name'):
+            return f"{t}(lhs={lhs.name})"
+        return f"{t}(lhs={lhs})"
+    if hasattr(stmt, 'expression'):
+        return f"{t}(expr={stmt.expression})"
+    return t
+
+
+def _expr_label(expr: Expression) -> str:
+    """Generate a human-readable label for an expression for logging."""
+    if expr is None:
+        return "(None)"
+    if isinstance(expr, WildcardExpression):
+        return f"wildcard({expr.name})"
+    if isinstance(expr, Number):
+        return str(expr.value)
+    if isinstance(expr, Identifier):
+        return expr.name
+    if isinstance(expr, BinaryExpr):
+        return f"({_expr_label(expr.left)} {expr.op} {_expr_label(expr.right)})"
+    if isinstance(expr, UnaryMinusExpr):
+        return f"(-{_expr_label(expr.operand)})"
+    return type(expr).__name__
 
 
 class Pattern:
@@ -30,27 +78,62 @@ class Pattern:
     def init(self):
         text = Path(self.filename).read_text()
         self._load_meta_from_text(text)
+        pattern_name = Path(self.filename).stem
+        logger.info("=== Loading pattern file: %s ===", self.filename)
+        logger.info("  optimizes header: %s", self.target_header)
+        logger.info("  raw meta text keys found: %s",
+                     re.findall(r'\b([A-Za-z_][A-Za-z0-9_]*)\s*=', text[text.rfind("meta"):]))
 
         try:
             pattern_tree = parse_search_replace_pattern(text)
-        except Exception:
-            return
+        except Exception as exc:
+            logger.error("  PARSE FAILED for %s: %s", pattern_name, exc)
+            raise RuntimeError(f"Pattern file {self.filename} could not be parsed: {exc}") from exc
+
+        logger.info("  Parse succeeded for %s", pattern_name)
 
         self.search.clear()
         self.replace.clear()
 
         for child in pattern_tree.children:
             if not isinstance(child, Tree):
+                logger.debug("  Skipping non-Tree child: %s", type(child).__name__)
                 continue
 
             if child.data == "search_statements":
                 self.search.extend(self._transform_statements(child))
+                logger.info("  Parsed %d search statement(s):", len(self.search))
+                for i, s in enumerate(self.search):
+                    logger.info("    [%d] %s", i, _stmt_label(s))
             elif child.data == "replace_statements":
                 self.replace.extend(self._transform_statements(child))
+                logger.info("  Parsed %d replace statement(s):", len(self.replace))
+                for i, s in enumerate(self.replace):
+                    logger.info("    [%d] %s", i, _stmt_label(s))
             elif child.data == "constraints":
                 self.constraints = self._transform_constraints(child)
+                logger.info("  Parsed constraint: %s", _expr_label(self.constraints))
             elif child.data == "meta":
                 self.meta.update(self._transform_meta(child))
+                resolved = {k: _expr_label(v) for k, v in self.meta.items()}
+                logger.info("  Parsed meta keys: %s -> %s",
+                             list(self.meta.keys()), resolved)
+            else:
+                logger.debug("  Unknown tree child data: %s", child.data)
+
+        if not self.search and not self.replace:
+            logger.error("  Pattern '%s' has NO search or replace statements after parsing!", pattern_name)
+            raise RuntimeError(
+                f"Pattern file {self.filename} has no search or replace statements after parsing. "
+                f"Check the .tkernel syntax."
+            )
+
+        logger.info("  Pattern %s loaded: search=%d, replace=%d, meta=%s",
+                     pattern_name, len(self.search), len(self.replace),
+                     list(self.meta.keys()))
+        if self.constraints:
+            logger.info("  Pattern %s constraint: %s",
+                         pattern_name, _expr_label(self.constraints))
 
     def _load_meta_from_text(self, text: str) -> None:
         match = re.search(r'\boptimizes\s*\(\s*"([^"]+)"\s*\)', text)
@@ -59,6 +142,7 @@ class Pattern:
 
         meta_text = self._extract_meta_block(text)
         if meta_text is None:
+            logger.debug("  No meta block found in text")
             return
         self.meta.update(self._parse_meta_assignments(meta_text))
 
@@ -97,6 +181,9 @@ class Pattern:
             value = self._parse_meta_value(raw_value)
             if value is not None:
                 assignments[name] = value
+                logger.debug("  Meta assignment: %s = %r (raw: %s)", name, _expr_label(value), raw_value)
+            else:
+                logger.warning("  Meta assignment FAILED to parse: %s = %r", name, raw_value)
 
         return assignments
 
@@ -155,10 +242,14 @@ class Pattern:
                 statement = transform_statement(child)
                 if statement is not None:
                     statements.append(statement)
+                    logger.debug("    Transformed statement: %s", _stmt_label(statement))
             elif isinstance(child, Tree):
                 statement = transform_statement(child)
                 if statement is not None:
                     statements.append(statement)
+                    logger.debug("    Transformed statement (non-standard): %s", _stmt_label(statement))
+            else:
+                logger.debug("    Skipping non-Tree child in statement list: %s", type(child).__name__)
 
         return statements
 
@@ -189,32 +280,119 @@ class Pattern:
         return assignments
 
     def matches(self, node: Program) -> bool:
+        pattern_name = Path(self.filename).stem
+        logger.info("--- Pattern '%s' matching for header '%s' ---", pattern_name, node.header)
+
+        if not self.search:
+            logger.warning("Pattern '%s': search list EMPTY — cannot match!", pattern_name)
+            self.wildcard_statement_map.clear()
+            self.wildcard_expression_map.clear()
+            return False
+
+        if len(self.search) != len(node.body_stmts):
+            logger.info("Pattern '%s': search count %d != body_stmts count %d, no match",
+                         pattern_name, len(self.search), len(node.body_stmts))
+            logger.info("  Search stmt types: %s",
+                         [_stmt_label(s) for s in self.search])
+            logger.info("  Body stmt types: %s",
+                         [_stmt_label(s) for s in node.body_stmts])
+            self.wildcard_statement_map.clear()
+            self.wildcard_expression_map.clear()
+            return False
+
+        logger.info("Pattern '%s': checking %d statements against %d body statements...",
+                     pattern_name, len(self.search), len(node.body_stmts))
+
         matcher = PatternMatchVisitor()
-        if not matcher.matches_statements(self.search, node.body_stmts):
+        match_result = matcher.matches_statements(self.search, node.body_stmts)
+
+        if not match_result:
+            logger.info("Pattern '%s': NO MATCH", pattern_name)
+            logger.info("  Final wildcard bindings: exprs=%s, stmts=%s",
+                         list(matcher.wildcard_expression_map.keys()),
+                         list(matcher.wildcard_statement_map.keys()))
             self.wildcard_statement_map.clear()
             self.wildcard_expression_map.clear()
             return False
 
         self.wildcard_statement_map = matcher.wildcard_statement_map
         self.wildcard_expression_map = matcher.wildcard_expression_map
+
+        logger.info("Pattern '%s': MATCHED!", pattern_name)
+        logger.info("  Wildcard expression bindings:")
+        for k, v in self.wildcard_expression_map.items():
+            logger.info("    %s -> %s", k, _expr_label(v))
+        logger.info("  Wildcard statement bindings:")
+        for k, v in self.wildcard_statement_map.items():
+            logger.info("    %s -> %s", k, _stmt_label(v))
+
+        if self.constraints:
+            # Evaluate constraints against the program (node)
+            try:
+                constraint_val = self._eval_constraint(self.constraints, node)
+                logger.info("  Constraint result: %s = %s",
+                             _expr_label(self.constraints), constraint_val)
+                if not constraint_val:
+                    logger.info("  Constraint evaluated to FALSE — no match")
+                    self.wildcard_statement_map.clear()
+                    self.wildcard_expression_map.clear()
+                    return False
+            except Exception as exc:
+                logger.warning("  Constraint evaluation threw exception: %s", exc)
+                logger.info("  Constraint evaluated with exception — skipping constraint")
+
+        logger.info("Pattern '%s' matched — applying replacement...", pattern_name)
         return True
 
+    def _eval_constraint(self, constraint: Expression, node: Program) -> bool:
+        """Evaluate a constraint expression against the program state."""
+        val = self._eval_constant_expr(constraint)
+        return bool(val)
+
     def apply(self, node: Program):
+        logger.info("--- Pattern '%s' APPLYING replacement ---", Path(self.filename).stem)
+        logger.info("  Replace list has %d statement(s):", len(self.replace))
+        for i, stmt in enumerate(self.replace):
+            logger.info("    [%d] %s", i, _stmt_label(stmt))
+
+        if not self.replace:
+            logger.error("  REPLACE LIST IS EMPTY! Pattern matched but has no replacement statements.")
+            raise RuntimeError(
+                f"Pattern {Path(self.filename).name} matched but has no replacement statements. "
+                f"This is a bug — the pattern matched but cannot produce output."
+            )
+
+        old_count = len(node.body_stmts)
         node.body_stmts = [self._clone_statement(statement) for statement in self.replace]
+        new_count = len(node.body_stmts)
+
+        logger.info("  Replaced %d statements with %d statement(s)", old_count, new_count)
+        logger.info("  New body statements:")
+        for i, stmt in enumerate(node.body_stmts):
+            logger.info("    [%d] %s", i, _stmt_label(stmt))
+
         print(f"TREE TRANSFORMED: {node.header}")
         node.tree_transformed = True
 
     def _clone_statement(self, statement: Statement) -> Statement:
         if isinstance(statement, WildcardStatement):
-            return copy.deepcopy(self.wildcard_statement_map[statement.name])
+            result = copy.deepcopy(self.wildcard_statement_map[statement.name])
+            logger.debug("    WildcardStmt '%s' -> %s", statement.name, _stmt_label(result))
+            return result
         return self._replace_wildcards(copy.deepcopy(statement))
 
     def _replace_wildcards(self, node):
         if isinstance(node, WildcardExpression):
             if node.name in self.wildcard_expression_map:
-                return copy.deepcopy(self.wildcard_expression_map[node.name])
+                result = copy.deepcopy(self.wildcard_expression_map[node.name])
+                logger.debug("      WildcardExpr '%s' -> %s", node.name, _expr_label(result))
+                return result
             if node.name in self.meta:
-                return copy.deepcopy(self.meta[node.name])
+                result = copy.deepcopy(self.meta[node.name])
+                logger.debug("      Meta '%s' -> %s", node.name, _expr_label(result))
+                return result
+            logger.warning("      UNRESOLVED WildcardExpr '%s'!", node.name)
+            return copy.deepcopy(node)
 
         if isinstance(node, list):
             for index, item in enumerate(node):
@@ -247,15 +425,27 @@ class PatternStore:
         transforms_dir = Path(__file__).resolve().parents[2] / "transforms"
         self.patterns.clear()
 
-        for pattern_path in sorted(transforms_dir.glob("*.tkernel")):
+        logger.info("=== PatternStore.init: Scanning transforms directory: %s ===", transforms_dir)
+        tkernel_files = list(transforms_dir.glob("*.tkernel"))
+        logger.info("Found %d .tkernel file(s): %s", len(tkernel_files), [f.name for f in tkernel_files])
+
+        for pattern_path in sorted(tkernel_files):
+            logger.info("--- Loading pattern: %s ---", pattern_path.name)
             try:
                 pattern = Pattern(str(pattern_path))
+                has_content = len(pattern.search) > 0 or len(pattern.replace) > 0
+                status = "OK" if has_content else "EMPTY (parse or init issue)"
+                logger.info("  -> Pattern '%s': search=%d, replace=%d [%s]",
+                             pattern_path.stem, len(pattern.search), len(pattern.replace), status)
+                if not has_content:
+                    logger.error("  -> Pattern '%s' has NO content! Skipping.", pattern_path.stem)
                 self.patterns[pattern_path.stem] = pattern
             except Exception as e:
-                # Skip patterns that can't be parsed (e.g., multi_arg.tkernel uses + which
-                # isn't supported in the grammar's for-loop increment rule). These patterns
-                # are applied programmatically rather than through generic tree matching.
+                logger.error("  -> EXCEPTION loading %s: %s", pattern_path.name, e)
                 print(f"Skipping unparseable pattern {pattern_path.name}: {e}")
+
+        logger.info("=== Loaded %d pattern(s) into store: %s ===",
+                     len(self.patterns), list(self.patterns.keys()))
 
 
 class TreeRewriter(visitor.Visitor):
@@ -274,11 +464,42 @@ class TreeRewriter(visitor.Visitor):
     def visit_program(self, node: Program):
         body_stmts = node.body_stmts
         node.body_stmts = body_stmts
-        for pattern in self.pattern_store.patterns.values():
+        logger.info("=== TreeRewriter.visit_program: %s (%d body statements) ===",
+                     node.header, len(node.body_stmts))
+        logger.info("  Body statement types: %s", [_stmt_label(s) for s in node.body_stmts])
+        logger.info("  Available patterns: %s", list(self.pattern_store.patterns.keys()))
+
+        applied_any = False
+        for pname, pattern in self.pattern_store.patterns.items():
+            logger.info("--- Trying pattern '%s' ---", pname)
+            logger.info("  Pattern: search=%d, replace=%d", len(pattern.search), len(pattern.replace))
+            if pattern.constraints:
+                logger.info("  Pattern has constraint: %s", _expr_label(pattern.constraints))
+            else:
+                logger.info("  Pattern has NO constraint")
 
             if pattern.matches(node):
-                pattern.apply(node)
-                self._apply_program_meta(node, pattern)
+                logger.info("Pattern '%s' matched — applying replacement...", pname)
+                try:
+                    pattern.apply(node)
+                    self._apply_program_meta(node, pattern)
+                    logger.info("  -> Program transformed: %d -> %d statements",
+                                 len(body_stmts), len(node.body_stmts))
+                    applied_any = True
+                except Exception as exc:
+                    logger.error("  -> FAILED to apply pattern '%s': %s", pname, exc)
+                    raise RuntimeError(
+                        f"Pattern '{pname}' matched for header '{node.header}' "
+                        f"but replacement failed: {exc}"
+                    ) from exc
+            else:
+                logger.info("Pattern '%s' did not match, continuing", pname)
+
+        if not applied_any:
+            logger.info("  No patterns applied to '%s'", node.header)
+
+        logger.info("=== visit_program done for %s (transformed=%s) ===",
+                     node.header, getattr(node, 'tree_transformed', False))
         return node
 
     def _apply_program_meta(self, node: Program, pattern: Pattern):
@@ -287,7 +508,9 @@ class TreeRewriter(visitor.Visitor):
                 raise AttributeError(
                     f"{Path(pattern.filename).name}: meta field {name!r} does not exist on Program"
                 )
+            old_val = getattr(node, name, "<MISSING>")
             setattr(node, name, self._constant_fold_meta_value(value_expr, pattern, name))
+            logger.info("  Meta set: %s = %s (was %s)", name, getattr(node, name), old_val)
 
     def _constant_fold_meta_value(self, expr: Expression, pattern: Pattern, name: str):
         try:

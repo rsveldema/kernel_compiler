@@ -21,6 +21,7 @@
 // Shared Vulkan test infrastructure
 #include "vulkan_test_helpers.hpp"
 #include "vecmath.L225.h"
+#include "vecmath.L225.noopt.h"
 
 
 // ───────────── Test: multi-arg (3 independent matmuls + accumulate) ──
@@ -290,4 +291,171 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath225_matches_sequential_cpu)
             EXPECT_NEAR(host_c3.get()->data[out_idx], expected3, 1.0e-2f) << "C3[" << i << ", " << j << "]";
         }
     }
+}
+
+TEST_F(VulkanTestBase, tree_rewritten_vecmath225_dispatch_performance)
+{
+    namespace kernel = rllm_offload_parfor_vecmath_225;
+    namespace baseline_kernel = rllm_offload_parfor_vecmath_225_noopt;
+
+    constexpr uint32_t rows = 64;
+    constexpr uint32_t cols = 64;
+    constexpr uint32_t k_count = kernel::A_Y;
+    constexpr int warmup_iterations = 2;
+    constexpr int measured_iterations = 10;
+
+    VHostBuffer<kernel::RllmBuffer_A> host_a(get_session());
+    VHostBuffer<kernel::RllmBuffer_B1> host_b1(get_session());
+    VHostBuffer<kernel::RllmBuffer_C1> host_c1(get_session());
+    VHostBuffer<kernel::RllmBuffer_B2> host_b2(get_session());
+    VHostBuffer<kernel::RllmBuffer_C2> host_c2(get_session());
+    VHostBuffer<kernel::RllmBuffer_B3> host_b3(get_session());
+    VHostBuffer<kernel::RllmBuffer_C3> host_c3(get_session());
+
+    std::memset(host_a.get(), 0, static_cast<size_t>(host_a.size()));
+    std::memset(host_b1.get(), 0, static_cast<size_t>(host_b1.size()));
+    std::memset(host_b2.get(), 0, static_cast<size_t>(host_b2.size()));
+    std::memset(host_b3.get(), 0, static_cast<size_t>(host_b3.size()));
+
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t k = 0; k < k_count; ++k) {
+            host_a.get()->data[kernel::A_Y * i + k] =
+                0.01f * static_cast<float>(i + 1) + 0.001f * static_cast<float>(static_cast<int>(k % 17) - 8);
+        }
+    }
+    for (uint32_t j = 0; j < cols; ++j) {
+        for (uint32_t k = 0; k < k_count; ++k) {
+            const uint32_t idx = kernel::B1_Y * j + k;
+            host_b1.get()->data[idx] =
+                static_cast<float16_t>(0.02f * static_cast<float>(j + 1) + 0.0005f * static_cast<float>(k % 11));
+            host_b2.get()->data[idx] =
+                static_cast<float16_t>(-0.015f * static_cast<float>(j + 1) + 0.0007f * static_cast<float>(k % 13));
+            host_b3.get()->data[idx] =
+                static_cast<float16_t>(0.01f * static_cast<float>(j + 2) - 0.0003f * static_cast<float>(k % 7));
+        }
+    }
+
+    VDeviceBuffer<kernel::RllmBuffer_A> device_a(host_a);
+    VDeviceBuffer<kernel::RllmBuffer_B1> device_b1(host_b1);
+    VDeviceBuffer<kernel::RllmBuffer_C1> device_c1(host_c1);
+    VDeviceBuffer<kernel::RllmBuffer_B2> device_b2(host_b2);
+    VDeviceBuffer<kernel::RllmBuffer_C2> device_c2(host_c2);
+    VDeviceBuffer<kernel::RllmBuffer_B3> device_b3(host_b3);
+    VDeviceBuffer<kernel::RllmBuffer_C3> device_c3(host_c3);
+
+    VulkanComputeContext context(get_session());
+    device_a.write(context, host_a);
+    device_b1.write(context, host_b1);
+    device_b2.write(context, host_b2);
+    device_b3.write(context, host_b3);
+
+    kernel::OffloadParforVecmath225VecmathKernel vecmath225(
+        get_session(),
+        std::string(TESTDATA_DIR) + "/vecmath.L225.spv");
+    const kernel::offload_parfor_vecmath_225_vecmath_PushConstants push_constants{
+        static_cast<int32_t>(rows),
+        static_cast<int32_t>(cols),
+    };
+    baseline_kernel::OffloadParforVecmath225NooptVecmathKernel baseline_vecmath225(
+        get_session(),
+        std::string(TESTDATA_DIR) + "/vecmath.L225.noopt.spv");
+    const baseline_kernel::offload_parfor_vecmath_225_noopt_vecmath_PushConstants baseline_push_constants{
+        static_cast<int32_t>(rows),
+        static_cast<int32_t>(cols),
+    };
+
+    auto dispatch_transformed_once = [&]() {
+        const auto start = std::chrono::steady_clock::now();
+        vecmath225.dispatch(
+            context,
+            rows,
+            cols,
+            device_a,
+            device_b1,
+            device_c1,
+            device_b2,
+            device_c2,
+            device_b3,
+            device_c3,
+            push_constants);
+        const auto end = std::chrono::steady_clock::now();
+        return std::chrono::duration<double, std::milli>(end - start).count();
+    };
+    auto dispatch_baseline_once = [&]() {
+        const auto start = std::chrono::steady_clock::now();
+        baseline_vecmath225.dispatch(
+            context,
+            rows,
+            cols,
+            device_a,
+            device_b1,
+            device_c1,
+            device_b2,
+            device_c2,
+            device_b3,
+            device_c3,
+            baseline_push_constants);
+        const auto end = std::chrono::steady_clock::now();
+        return std::chrono::duration<double, std::milli>(end - start).count();
+    };
+
+    for (int i = 0; i < warmup_iterations; ++i) {
+        (void)dispatch_baseline_once();
+        (void)dispatch_transformed_once();
+    }
+
+    double best_transformed_ms = 1.0e30;
+    double total_transformed_ms = 0.0;
+    double best_baseline_ms = 1.0e30;
+    double total_baseline_ms = 0.0;
+    for (int i = 0; i < measured_iterations; ++i) {
+        const double baseline_ms = dispatch_baseline_once();
+        const double transformed_ms = dispatch_transformed_once();
+        best_baseline_ms = std::min(best_baseline_ms, baseline_ms);
+        total_baseline_ms += baseline_ms;
+        best_transformed_ms = std::min(best_transformed_ms, transformed_ms);
+        total_transformed_ms += transformed_ms;
+    }
+
+    const double average_transformed_ms = total_transformed_ms / static_cast<double>(measured_iterations);
+    const double average_baseline_ms = total_baseline_ms / static_cast<double>(measured_iterations);
+    const double operations = static_cast<double>(rows) * static_cast<double>(cols) *
+                              static_cast<double>(k_count) * 3.0 * 2.0;
+    const double best_transformed_gflops = operations / (best_transformed_ms / 1000.0) / 1.0e9;
+    const double average_transformed_gflops = operations / (average_transformed_ms / 1000.0) / 1.0e9;
+    const double best_baseline_gflops = operations / (best_baseline_ms / 1000.0) / 1.0e9;
+    const double average_baseline_gflops = operations / (average_baseline_ms / 1000.0) / 1.0e9;
+    const double best_speedup = best_baseline_ms / best_transformed_ms;
+    const double average_speedup = average_baseline_ms / average_transformed_ms;
+
+    ASSERT_GT(best_baseline_ms, 0.0);
+    ASSERT_GT(best_transformed_ms, 0.0);
+
+    RecordProperty("rows", rows);
+    RecordProperty("cols", cols);
+    RecordProperty("k_count", k_count);
+    RecordProperty("iterations", measured_iterations);
+    RecordProperty("baseline_best_ms", best_baseline_ms);
+    RecordProperty("baseline_average_ms", average_baseline_ms);
+    RecordProperty("baseline_best_gflops", best_baseline_gflops);
+    RecordProperty("baseline_average_gflops", average_baseline_gflops);
+    RecordProperty("transformed_best_ms", best_transformed_ms);
+    RecordProperty("transformed_average_ms", average_transformed_ms);
+    RecordProperty("transformed_best_gflops", best_transformed_gflops);
+    RecordProperty("transformed_average_gflops", average_transformed_gflops);
+    RecordProperty("best_speedup", best_speedup);
+    RecordProperty("average_speedup", average_speedup);
+    std::cerr << "vecmath:225 dispatch performance: "
+              << "rows=" << rows
+              << ", cols=" << cols
+              << ", k=" << k_count
+              << ", baseline_best=" << best_baseline_ms << " ms"
+              << ", transformed_best=" << best_transformed_ms << " ms"
+              << ", best_speedup=" << best_speedup << "x"
+              << ", baseline_avg=" << average_baseline_ms << " ms"
+              << ", transformed_avg=" << average_transformed_ms << " ms"
+              << ", avg_speedup=" << average_speedup << "x"
+              << ", baseline_best=" << best_baseline_gflops << " GFLOP/s"
+              << ", transformed_best=" << best_transformed_gflops << " GFLOP/s"
+              << " (" << measured_iterations << " measured iterations)\n";
 }

@@ -147,8 +147,13 @@ if __name__ == "__main__":
         action="store_true",
         help="Generate bfloat (16-bit) instead of float16 in Vulkan/C++ output",
     )
+    _parser.add_argument(
+        "--no-optimizations",
+        action="store_true",
+        help="Disable AST optimization passes such as the .tkernel tree rewriter",
+    )
     args = _parser.parse_args()
-    enable_optimizations = True
+    enable_optimizations = not args.no_optimizations
     use_bfloat16 = getattr(args, "bfloat16", False)
 
     if args.vulkan or args.compile:
