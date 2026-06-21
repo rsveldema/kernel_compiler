@@ -8,6 +8,8 @@ PARAMETERS
         int last_pos
 
 BEGIN
+const int d = int(gl_GlobalInvocationID.x);
+if (d >= rllm_bound_x) return;
         dh[last_pos, d] = dh_last[d];
 
 END_PROGRAM

@@ -12,6 +12,10 @@ PARAMETERS
         float lr
 
 BEGIN
+const int r = int(gl_GlobalInvocationID.x);
+if (r >= rllm_bound_x) return;
+const int c = int(gl_GlobalInvocationID.y);
+if (c >= rllm_bound_y) return;
         const float g1 =  clamp (grad1[r, c], -1.000000, 1.000000);
         vel1[r, c] =  clamp (
             ((0.900000 * vel1[r, c]) + (lr * g1)),

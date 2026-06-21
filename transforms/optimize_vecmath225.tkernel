@@ -1,6 +1,11 @@
 // optimizes ("vecmath.cc:225")
 
 search
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int j = int(gl_GlobalInvocationID.y);
+    if (j >= rllm_bound_y) return;
+
     float sum1 = 0.f;
     float sum2 = 0.f;
     float sum3 = 0.f;
@@ -26,6 +31,26 @@ search
 
 
 replace
+    const int i = int(gl_GlobalInvocationID.x);
+    const int j = int(gl_GlobalInvocationID.y);
+
+    if (i >= rllm_bound_x)
+    {
+        // we must also partake in the barriers 
+        // for threads that are outside of the bounds
+        barrier();
+        barrier();
+        return;
+    }
+    if (j >= rllm_bound_y)
+    {
+        // we must also partake in the barriers 
+        // for threads that are outside of the bounds
+        barrier();
+        barrier();
+        return;
+    }
+
     float sum1 = 0.f;
     float sum2 = 0.f;
     float sum3 = 0.f;
@@ -66,11 +91,11 @@ replace
 
     if (gl_LocalInvocationID.z == 0)
     {
-        for (int i=1;i<num_workgroups;i++)
+        for (int wi=1;wi<num_workgroups;wi++)
         {
-            sum1 += rllm_reduction_resultA[(rllm_local_reduction_offset + i)];
-            sum2 += rllm_reduction_resultB[(rllm_local_reduction_offset + i)];
-            sum3 += rllm_reduction_resultC[(rllm_local_reduction_offset + i)];
+            sum1 += rllm_reduction_resultA[(rllm_local_reduction_offset + wi)];
+            sum2 += rllm_reduction_resultB[(rllm_local_reduction_offset + wi)];
+            sum3 += rllm_reduction_resultC[(rllm_local_reduction_offset + wi)];
         }
     }
 

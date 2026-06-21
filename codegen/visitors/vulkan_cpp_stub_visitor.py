@@ -94,6 +94,7 @@ class VulkanCppStubVisitor(Visitor):
 
     def result(self) -> str:
         return "\n".join(self._lines) + "\n"
+    
     def _generate_type_aliases_header(self) -> tuple[str, str]:
         """Generate the kfloat type aliases header filename and content."""
         kfloat_type = "bfloat_t" if self._use_bfloat16 else "float"

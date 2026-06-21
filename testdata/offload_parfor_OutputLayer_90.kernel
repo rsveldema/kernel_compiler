@@ -10,6 +10,10 @@ PARAMETERS
         float learning_rate
 
 BEGIN
+const int v = int(gl_GlobalInvocationID.x);
+if (v >= rllm_bound_x) return;
+const int d = int(gl_GlobalInvocationID.y);
+if (d >= rllm_bound_y) return;
         const float g =  clamp ((delta[v] * h_last[d]), -1.000000, 1.000000);
         V[v, d] =  clamp (
             ((0.900000 * V[v, d]) + (learning_rate * g)), -0.100000, 0.100000

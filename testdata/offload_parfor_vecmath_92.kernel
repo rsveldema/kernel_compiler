@@ -8,6 +8,8 @@ PARAMETERS
         fixed_size_vector<float, 1024>& dst
 
 BEGIN
+const int d = int(gl_GlobalInvocationID.x);
+if (d >= rllm_bound_x) return;
         dst[d] = src[row, d];
 
 END_PROGRAM

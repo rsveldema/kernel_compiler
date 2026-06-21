@@ -8,6 +8,8 @@ PARAMETERS
         flexible_rows_matrix<float, 16384, 1024>& dx
 
 BEGIN
+const int t = int(gl_GlobalInvocationID.x);
+if (t >= rllm_bound_x) return;
         constexpr float eps = 1e-6f;
 
         float sq = 0.f;

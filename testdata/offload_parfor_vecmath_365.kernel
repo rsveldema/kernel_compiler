@@ -8,6 +8,10 @@ PARAMETERS
         flexible_rows_matrix<float, 16384, 1024>& C
 
 BEGIN
+const int i = int(gl_GlobalInvocationID.x);
+if (i >= rllm_bound_x) return;
+const int j = int(gl_GlobalInvocationID.y);
+if (j >= rllm_bound_y) return;
             float sum = 0.f;
             for (int l_idx = 0; l_idx < 1024; ++l_idx)
             {

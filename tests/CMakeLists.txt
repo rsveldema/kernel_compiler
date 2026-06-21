@@ -36,25 +36,39 @@ set(GENERATED_DIR ${CMAKE_BINARY_DIR}/generated/vulkanized/kernel_compiler_tests
 file(MAKE_DIRECTORY ${GENERATED_DIR})
 
 set(VECMATH225_KERNEL "${KERNEL_COMPILER_SOURCE_DIR}/testdata/offload_parfor_vecmath_225.kernel")
+set(VECMATH225_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_225.kernel")
 set(VECMATH225_GLSL "${GENERATED_DIR}/vecmath.L225.glsl")
 set(VECMATH225_HEADER "${GENERATED_DIR}/vecmath.L225.h")
 set(VECMATH225_SPV "${GENERATED_DIR}/vecmath.L225.spv")
 set(VECMATH225_TYPE_ALIASES "${GENERATED_DIR}/_type_aliases.hpp")
 
 add_custom_command(
+    OUTPUT "${VECMATH225_DUMP}"
+    COMMAND "${Python3_EXECUTABLE}" -c
+        "import sys; sys.path.insert(0, '${KERNEL_COMPILER_SOURCE_DIR}/..'); from pathlib import Path; from offloadize_common import write_parfor_dump_from_kernel; write_parfor_dump_from_kernel(Path('${VECMATH225_KERNEL}'), Path('${GENERATED_DIR}'))"
+    DEPENDS "${VECMATH225_KERNEL}" "${CMAKE_SOURCE_DIR}/offloadize_common.py"
+    WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
+    COMMENT "Generating parfor dump for vecmath:225"
+    VERBATIM
+)
+
+add_custom_command(
     OUTPUT
-        "${VECMATH225_GLSL}"
         "${VECMATH225_HEADER}"
         "${VECMATH225_SPV}"
         "${VECMATH225_TYPE_ALIASES}"
+    BYPRODUCTS
+        "${VECMATH225_GLSL}"
     COMMAND "${Python3_EXECUTABLE}" "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
-            "${VECMATH225_KERNEL}"
+            "${VECMATH225_DUMP}"
             --vulkan "${VECMATH225_GLSL}"
     COMMAND Vulkan::glslc -fshader-stage=compute --target-env=vulkan1.1
             "${VECMATH225_GLSL}" -o "${VECMATH225_SPV}"
     DEPENDS
+        "${VECMATH225_DUMP}"
         "${VECMATH225_KERNEL}"
         "${KERNEL_COMPILER_SOURCE_DIR}/transforms/optimize_vecmath225.tkernel"
+        "${CMAKE_SOURCE_DIR}/offloadize_common.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/parser.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/transforms.py"
@@ -66,7 +80,6 @@ add_custom_command(
     VERBATIM
 )
 list(APPEND GENERATED_KERNEL_SRCS
-    "${VECMATH225_GLSL}"
     "${VECMATH225_HEADER}"
     "${VECMATH225_SPV}"
     "${VECMATH225_TYPE_ALIASES}"

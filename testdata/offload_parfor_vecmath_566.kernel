@@ -8,6 +8,10 @@ PARAMETERS
         flexible_rows_matrix<float, 16384, 1024>& dst
 
 BEGIN
+const int t = int(gl_GlobalInvocationID.x);
+if (t >= rllm_bound_x) return;
+const int d = int(gl_GlobalInvocationID.y);
+if (d >= rllm_bound_y) return;
         dst[t, d] = (lhs[t, d] + rhs[t, d]);
 
 END_PROGRAM

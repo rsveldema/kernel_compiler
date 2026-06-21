@@ -9,6 +9,10 @@ PARAMETERS
         const int active_seq_len = seq_len;
 
 BEGIN
+const int i = int(gl_GlobalInvocationID.x);
+if (i >= rllm_bound_x) return;
+const int j = int(gl_GlobalInvocationID.y);
+if (j >= rllm_bound_y) return;
         {
             float dot = 0.f;
             for (const int d : limit<1024>())

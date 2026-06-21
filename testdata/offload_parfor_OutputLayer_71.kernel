@@ -8,6 +8,8 @@ PARAMETERS
         const fixed_size_matrix<float16, 620, 1024>& W
 
 BEGIN
+const int d = int(gl_GlobalInvocationID.x);
+if (d >= rllm_bound_x) return;
         float sum = dh_last[d];
         for (const int v : limit<620>())
             sum += (delta[v] * W[v, d]);

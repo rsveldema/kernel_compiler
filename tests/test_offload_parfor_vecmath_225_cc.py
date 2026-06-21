@@ -38,6 +38,6 @@ def test_tree_rewriter_changes_vecmath225_glsl():
     assert "shared float rllm_reduction_resultA" in shader
     assert "gl_LocalInvocationID.z" in shader
     assert "gl_WorkGroupID.z" not in shader
-    assert shader.count("barrier();") == 2
+    assert shader.count("barrier();") == 6
     assert "for (int l_idx = block_start_i; l_idx < block_end_i; ++l_idx)" in shader
     assert "for (int l_idx = 0; l_idx < 1024; ++l_idx)" not in shader

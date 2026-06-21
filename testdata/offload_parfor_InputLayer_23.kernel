@@ -9,6 +9,10 @@ PARAMETERS
         float model_dim
 
 BEGIN
+const int pos = int(gl_GlobalInvocationID.x);
+if (pos >= rllm_bound_x) return;
+const int di = int(gl_GlobalInvocationID.y);
+if (di >= rllm_bound_y) return;
         const int tok = tokens[pos];
         const int di_int = di;
         const float emb_val = embeddings[tok, di];

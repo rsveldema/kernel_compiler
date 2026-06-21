@@ -13,6 +13,10 @@ PARAMETERS
         int k_count
 
 BEGIN
+const int i = int(gl_GlobalInvocationID.x);
+if (i >= rllm_bound_x) return;
+const int j = int(gl_GlobalInvocationID.y);
+if (j >= rllm_bound_y) return;
             float sum1 = 0.f;
             float sum2 = 0.f;
             float sum3 = 0.f;

@@ -7,6 +7,8 @@ PARAMETERS
         int T
 
 BEGIN
+const int i = int(gl_GlobalInvocationID.x);
+if (i >= rllm_bound_x) return;
         float max_val = x[i, 0];
         for (const int j : limit<16384>(inc(0), inc(i)))
             max_val =  max (max_val, x[i, j]);

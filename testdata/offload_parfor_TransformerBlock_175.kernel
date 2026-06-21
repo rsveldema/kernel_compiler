@@ -11,6 +11,10 @@ PARAMETERS
         flexible_rows_matrix<float, 16384, 4096>& d_up_pre
 
 BEGIN
+const int t = int(gl_GlobalInvocationID.x);
+if (t >= rllm_bound_x) return;
+const int f = int(gl_GlobalInvocationID.y);
+if (f >= rllm_bound_y) return;
         const float g = gate_pre[t, f];
         const float sg = (1.0f / (1.0f +  exp (-g))); // sigma(g)
         const float silu = (g * sg);

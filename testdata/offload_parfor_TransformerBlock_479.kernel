@@ -10,6 +10,10 @@ PARAMETERS
         const int hStart = (hi * 128);
 
 BEGIN
+const int i = int(gl_GlobalInvocationID.x);
+if (i >= rllm_bound_x) return;
+const int d_head = int(gl_GlobalInvocationID.y);
+if (d_head >= rllm_bound_y) return;
         {
             const int d = (hStart + int(d_head));
             const float head_scale = (1.0f /  sqrt (128));

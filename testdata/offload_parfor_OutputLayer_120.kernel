@@ -7,6 +7,8 @@ PARAMETERS
         fixed_size_vector<float, 2>& temp_values
 
 BEGIN
+const int i = int(gl_GlobalInvocationID.x);
+if (i >= rllm_bound_x) return;
             atomicMax(temp_values[0], inputs[i]);
 
 END_PROGRAM
