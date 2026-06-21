@@ -924,6 +924,10 @@ class VulkanKernelVisitor(Visitor):
         for name, expr in node._param_constexpr_defines:
             constexpr_map[name] = expr
         
+        # Add meta fields (e.g. reduction_chunks from tkernel meta blocks) to constexpr_map
+        if node.reduction_chunks > 1:
+            constexpr_map["reduction_chunks"] = str(node.reduction_chunks)
+        
         # Then merge with body-level constexpr defines
         for name, expr in self._constexpr_defines:
             if name not in constexpr_map:

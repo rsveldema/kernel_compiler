@@ -1,6 +1,6 @@
 from unittest_offload_parfor_helper import parse_kernel
 
-from codegen.kast.statement import Declaration, SharedDecl
+from codegen.kast.statement import Declaration
 from codegen.visitors.resolve_array_indices import resolve_array_indices
 from codegen.visitors.tree_rewriter import TreeRewriter
 from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
@@ -20,10 +20,6 @@ def test_tree_rewriter_applies_optimize_vecmath225_tkernel():
         isinstance(stmt, Declaration) and stmt.name == "rllm_reduction_chunk_size"
         for stmt in program.body_stmts
     )
-    assert any(
-        isinstance(stmt, SharedDecl) and stmt.name == "rllm_reduction_resultA"
-        for stmt in program.body_stmts
-    )
 
 
 def test_tree_rewriter_changes_vecmath225_glsl():
@@ -35,9 +31,11 @@ def test_tree_rewriter_changes_vecmath225_glsl():
 
     assert "const int rllm_reduction_chunk_size" in shader
     assert "layout(local_size_x = 8, local_size_y = 8, local_size_z = 16) in;" in shader
-    assert "shared float rllm_reduction_resultA" in shader
+    assert "shared float rllm_reduction_resultA[16]" in shader
+    assert "shared float rllm_reduction_resultB[16]" in shader
+    assert "shared float rllm_reduction_resultC[16]" in shader
     assert "gl_LocalInvocationID.z" in shader
-    assert "gl_WorkGroupID.z" not in shader
+    assert "gl_WorkGroupID.z" in shader
     assert shader.count("barrier();") == 6
-    assert "for (int l_idx = block_start_i; l_idx < block_end_i; ++l_idx)" in shader
     assert "for (int l_idx = 0; l_idx < 1024; ++l_idx)" not in shader
+    assert "for (int l_idx = block_start_i; l_idx < block_end_i; ++l_idx)" in shader

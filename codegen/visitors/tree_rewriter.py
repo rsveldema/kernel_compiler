@@ -211,7 +211,10 @@ class Pattern:
 
     def _replace_wildcards(self, node):
         if isinstance(node, WildcardExpression):
-            return copy.deepcopy(self.wildcard_expression_map[node.name])
+            if node.name in self.wildcard_expression_map:
+                return copy.deepcopy(self.wildcard_expression_map[node.name])
+            if node.name in self.meta:
+                return copy.deepcopy(self.meta[node.name])
 
         if isinstance(node, list):
             for index, item in enumerate(node):
@@ -224,7 +227,10 @@ class Pattern:
         if hasattr(node, "__dict__"):
             for attr, value in node.__dict__.items():
                 if isinstance(value, WildcardExpression):
-                    setattr(node, attr, copy.deepcopy(self.wildcard_expression_map[value.name]))
+                    if value.name in self.wildcard_expression_map:
+                        setattr(node, attr, copy.deepcopy(self.wildcard_expression_map[value.name]))
+                    elif value.name in self.meta:
+                        setattr(node, attr, copy.deepcopy(self.meta[value.name]))
                 elif isinstance(value, WildcardStatement):
                     setattr(node, attr, copy.deepcopy(self.wildcard_statement_map[value.name]))
                 elif hasattr(value, "__dict__") or isinstance(value, list):

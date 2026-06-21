@@ -34,19 +34,17 @@ replace
     const int i = int(gl_GlobalInvocationID.x);
     const int j = int(gl_GlobalInvocationID.y);
 
-    if (i >= rllm_bound_x)
+    if ((i >= rllm_bound_x))
     {
-        // we must also partake in the barriers 
+        // we must also partake in the barriers
         // for threads that are outside of the bounds
-        barrier();
         barrier();
         return;
     }
-    if (j >= rllm_bound_y)
+    if ((j >= rllm_bound_y))
     {
-        // we must also partake in the barriers 
+        // we must also partake in the barriers
         // for threads that are outside of the bounds
-        barrier();
         barrier();
         return;
     }
@@ -55,12 +53,14 @@ replace
     float sum2 = 0.f;
     float sum3 = 0.f;
 
-    const int num_workgroups = 16;
-    const int rllm_reduction_chunk_size = (wildcard(N) / num_workgroups);
+    shared float rllm_reduction_resultA[wildcard(reduction_chunks)];
+    shared float rllm_reduction_resultB[wildcard(reduction_chunks)];
+    shared float rllm_reduction_resultC[wildcard(reduction_chunks)];
+
+    const int rllm_reduction_chunk_size = (wildcard(N) / wildcard(reduction_chunks));
 
     const int block_start_i = (int(gl_LocalInvocationID.z) * rllm_reduction_chunk_size);
     const int block_end_i = min((block_start_i + rllm_reduction_chunk_size), wildcard(N));
-    const int rllm_local_reduction_offset = (((int(gl_LocalInvocationID.y) * int(gl_WorkGroupSize.x)) + int(gl_LocalInvocationID.x)) * num_workgroups);
 
     for (int l_idx = block_start_i; l_idx < block_end_i; ++l_idx)
     {
@@ -79,34 +79,35 @@ replace
         sum3 += term3;
     }
 
-    shared float rllm_reduction_resultA[1024];
-    shared float rllm_reduction_resultB[1024];
-    shared float rllm_reduction_resultC[1024];
 
-    rllm_reduction_resultA[(rllm_local_reduction_offset + int(gl_LocalInvocationID.z))] = sum1;
-    rllm_reduction_resultB[(rllm_local_reduction_offset + int(gl_LocalInvocationID.z))] = sum2;
-    rllm_reduction_resultC[(rllm_local_reduction_offset + int(gl_LocalInvocationID.z))] = sum3;
+    rllm_reduction_resultA[int(gl_LocalInvocationID.z)] = sum1;
+    rllm_reduction_resultB[int(gl_LocalInvocationID.z)] = sum2;
+    rllm_reduction_resultC[int(gl_LocalInvocationID.z)] = sum3;
 
     barrier();
 
-    if (gl_LocalInvocationID.z == 0)
+    if ((gl_GlobalInvocationID.x == 0))
     {
-        for (int wi=1;wi<num_workgroups;wi++)
+        if ((gl_GlobalInvocationID.y == 0))
         {
-            sum1 += rllm_reduction_resultA[(rllm_local_reduction_offset + wi)];
-            sum2 += rllm_reduction_resultB[(rllm_local_reduction_offset + wi)];
-            sum3 += rllm_reduction_resultC[(rllm_local_reduction_offset + wi)];
+            if ((gl_GlobalInvocationID.z == 0))
+            {
+                sum1 = 0.f;
+                sum2 = 0.f;
+                sum3 = 0.f;
+
+                for (int wi = 1; wi < wildcard(reduction_chunks); wi++)
+                {
+                    sum1 += rllm_reduction_resultA[wi];
+                    sum2 += rllm_reduction_resultB[wi];
+                    sum3 += rllm_reduction_resultC[wi];
+                }
+
+                C1[i, j] = (sum1);
+                C2[i, j] = (sum2);
+                C3[i, j] = (sum3);
+            }
         }
     }
 
-    barrier();
-
-    if (gl_LocalInvocationID.z == 0)
-    {
-        C1[i, j] = sum1;
-        C2[i, j] = sum2;
-        C3[i, j] = sum3;
-    }
-
-constraints (S != ForStatement)
 meta { reduction_chunks = 16 }

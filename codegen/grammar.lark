@@ -4,7 +4,7 @@
 program: header parfor_space parfor_parameters body
 
 // when a search pattern:
-search_replace_pattern: search search_statements replace replace_statements constraints meta
+search_replace_pattern: search search_statements replace replace_statements constraints? meta?
 
 meta: META "{" meta_assign* "}"
 
