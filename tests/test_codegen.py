@@ -7,10 +7,12 @@ from unittest_offload_parfor_helper import parse_kernel
 
 from codegen.parser import parse
 from codegen.kast.expression import BinaryExpr, Number
+from codegen.kast.statement import Declaration, If
 from codegen.visitors.resolve_array_indices import resolve_array_indices
 from codegen.visitors.tree_rewriter import TreeRewriter
 from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
 from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
+from codegen.visitors.rllm_vulkan_dispatch_stub_visitor import RllmVulkanDispatchStubVisitor
 import pytest
 
 
@@ -41,13 +43,44 @@ END_PROGRAM
     assert "0.0883883476" in shader
 
 
+def test_logical_binary_operators_create_binary_expr_ast():
+    program = parse(
+        """
+PROGRAM("logical.cc:1")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<8>(), (dst))
+
+PARAMETERS
+        fixed_size_vector<float, 8>& dst
+
+BEGIN
+        const int mask_and = ((i < 7) && (i > 0));
+        const int mask_or = ((i < 7) || (i > 0));
+        if ((i < 7) && (mask_and != 0)) return;
+        dst[i] = float(mask_and);
+
+END_PROGRAM
+"""
+    )
+
+    declarations = [stmt for stmt in program.body_stmts if isinstance(stmt, Declaration)]
+
+    assert isinstance(declarations[0].init_expr, BinaryExpr)
+    assert declarations[0].init_expr.op == "&&"
+    assert isinstance(declarations[1].init_expr, BinaryExpr)
+    assert declarations[1].init_expr.op == "||"
+    if_stmt = next(stmt for stmt in program.body_stmts if isinstance(stmt, If))
+    assert isinstance(if_stmt.condition, BinaryExpr)
+    assert if_stmt.condition.op == "&&"
+
+
 def test_tkernel_meta_sets_reduction_chunks():
     program = parse_kernel("offload_parfor_vecmath_225.kernel")
 
     program = program.accept(TreeRewriter({}))
     program = resolve_array_indices(program)
 
-    assert program.reduction_chunks == 16
+    assert program.reduction_chunks == 8
 
 
 def test_tkernel_meta_rejects_unknown_program_fields():
@@ -107,6 +140,40 @@ END_PROGRAM
     TreeRewriter({})._apply_program_meta(program, pattern)
 
     assert program.reduction_chunks == 16
+
+
+def test_tile_size_xy_meta_sets_generated_workgroup_size():
+    program = parse(
+        """
+PROGRAM("tile.cc:1")
+
+OFFLOAD_PARFOR_2D_PARAM(i, j, limit<64>(), limit<64>(), (dst))
+
+PARAMETERS
+        fixed_size_matrix<float, 64, 64>& dst
+
+BEGIN
+        dst[i, j] = 1.0f;
+
+END_PROGRAM
+"""
+    )
+    program.tile_size_x = 8
+    program.tile_size_y = 32
+    program.tile_chunk_size = 64
+
+    shader = program.accept(VulkanKernelVisitor())
+    stub = program.accept(VulkanCppStubVisitor())
+    dispatch_stub = program.accept(RllmVulkanDispatchStubVisitor("/tile.spv"))
+
+    assert "layout(local_size_x = 8, local_size_y = 32, local_size_z = 1) in;" in shader
+    assert "(dispatch_rows + 8 - 1) / 8" in stub
+    assert "(dispatch_cols + 32 - 1) / 32" in stub
+    assert "tile_size_x=8;" in stub
+    assert "tile_size_y=32;" in stub
+    assert "tile_chunk_size=64;" in stub
+    assert "tile_L1_kernel_wg_x = 8;" in dispatch_stub
+    assert "tile_L1_kernel_wg_y = 32;" in dispatch_stub
 
 
 def test_vulkan_preserves_float16_buffers_and_casts_stores():

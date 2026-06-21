@@ -23,6 +23,10 @@ class Program(AstNode):
         use_cooperative_matrix2=False,
         cooperative_matrix2_chunk_size=16,
         reduction_chunks=1,
+        tile_size=1,
+        tile_size_x=1,
+        tile_size_y=1,
+        tile_chunk_size=1,
         # Set by perform_tiling() for workgroup partitioning
         workgroup_count=1,
         workgroup_size=1,
@@ -33,6 +37,10 @@ class Program(AstNode):
         tree_transformed = False
     ):
         self.reduction_chunks = reduction_chunks
+        self.tile_size = tile_size
+        self.tile_size_x = tile_size_x
+        self.tile_size_y = tile_size_y
+        self.tile_chunk_size = tile_chunk_size
         self.header = header
         # Loop variables from OFFLOAD_PARFOR_x_PARAM (e.g. ['i'] or ['i', 'j'])
         self.loop_vars = loop_vars or []

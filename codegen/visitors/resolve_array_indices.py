@@ -473,7 +473,14 @@ class ResolveArrayIndicesVisitor(Expression):
                 body_stmts.append(result)
             else:
                 body_stmts.append(s)
-        return If(condition=condition, body_stmts=body_stmts)
+        else_stmts = []
+        for s in node.else_stmts:
+            if hasattr(s, "accept"):
+                result = s.accept(self)
+                else_stmts.append(result)
+            else:
+                else_stmts.append(s)
+        return If(condition=condition, body_stmts=body_stmts, else_stmts=else_stmts)
 
     def visit_declaration(self, node: Declaration):
         init_expr = node.init_expr.accept(self) if node.init_expr else None
@@ -575,6 +582,10 @@ class ResolveArrayIndicesVisitor(Expression):
             body_stmts=body_stmts or node.body_stmts,
             workgroups=workgroups or node.workgroups,            
             reduction_chunks=node.reduction_chunks,
+            tile_size=node.tile_size,
+            tile_size_x=node.tile_size_x,
+            tile_size_y=node.tile_size_y,
+            tile_chunk_size=node.tile_chunk_size,
             use_cooperative_matrix2=node.use_cooperative_matrix2,
             cooperative_matrix2_chunk_size=node.cooperative_matrix2_chunk_size,
             _source_filename=node._source_filename,

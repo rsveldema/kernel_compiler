@@ -448,6 +448,8 @@ class VulkanCppStubVisitor(Visitor):
                     wg_y = y_val
                 if z_val.isdigit():
                     wg_z = z_val
+        if not found_explicit and node.space_dim >= 2 and node.tile_size_x > 1 and node.tile_size_y > 1:
+            wg_x, wg_y, wg_z = str(node.tile_size_x), str(node.tile_size_y), "1"
         if node.reduction_chunks > 1:
             wg_z = str(node.reduction_chunks)
             if node.space_dim >= 2:
@@ -648,6 +650,9 @@ class VulkanCppStubVisitor(Visitor):
             wg_count = 1
         descriptor = (
             f"tile_block_size={tile_bs};"
+            f"tile_size_x={node.tile_size_x};"
+            f"tile_size_y={node.tile_size_y};"
+            f"tile_chunk_size={node.tile_chunk_size};"
             f"workgroup_count={wg_count};"
             f"tree_transformed={'yes' if node.tree_transformed else 'no'};"
         )

@@ -22,6 +22,8 @@
 #include "vulkan_test_helpers.hpp"
 #include "vecmath.L225.h"
 #include "vecmath.L225.noopt.h"
+#include "vecmath.L296.h"
+#include "vecmath.L296.noopt.h"
 
 
 // ───────────── Test: multi-arg (3 independent matmuls + accumulate) ──
@@ -192,7 +194,7 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath225_matches_sequential_cpu)
 
     ASSERT_STREQ(
         kernel::OffloadParforVecmath225VecmathKernel::generated_descriptor(),
-        "tile_block_size=1;workgroup_count=1;tree_transformed=yes;");
+        "tile_block_size=1;tile_size_x=1;tile_size_y=1;tile_chunk_size=1;workgroup_count=1;tree_transformed=yes;");
 
     VHostBuffer<kernel::RllmBuffer_A> host_a(get_session());
     VHostBuffer<kernel::RllmBuffer_B1> host_b1(get_session());
@@ -446,6 +448,149 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath225_dispatch_performance)
     RecordProperty("best_speedup", best_speedup);
     RecordProperty("average_speedup", average_speedup);
     std::cerr << "vecmath:225 dispatch performance: "
+              << "rows=" << rows
+              << ", cols=" << cols
+              << ", k=" << k_count
+              << ", baseline_best=" << best_baseline_ms << " ms"
+              << ", transformed_best=" << best_transformed_ms << " ms"
+              << ", best_speedup=" << best_speedup << "x"
+              << ", baseline_avg=" << average_baseline_ms << " ms"
+              << ", transformed_avg=" << average_transformed_ms << " ms"
+              << ", avg_speedup=" << average_speedup << "x"
+              << ", baseline_best=" << best_baseline_gflops << " GFLOP/s"
+              << ", transformed_best=" << best_transformed_gflops << " GFLOP/s"
+              << " (" << measured_iterations << " measured iterations)\n";
+}
+
+TEST_F(VulkanTestBase, tree_rewritten_vecmath296_tiled_shared_cache_performance)
+{
+    namespace kernel = rllm_offload_parfor_vecmath_296;
+    namespace baseline_kernel = rllm_offload_parfor_vecmath_296_noopt;
+
+    constexpr uint32_t rows = 64;
+    constexpr uint32_t cols = 64;
+    constexpr uint32_t k_count = kernel::A_Y;
+    constexpr int warmup_iterations = 2;
+    constexpr int measured_iterations = 10;
+
+    VHostBuffer<kernel::RllmBuffer_A> host_a(get_session());
+    VHostBuffer<kernel::RllmBuffer_B> host_b(get_session());
+    VHostBuffer<kernel::RllmBuffer_C> host_c(get_session());
+
+    std::memset(host_a.get(), 0, static_cast<size_t>(host_a.size()));
+    std::memset(host_b.get(), 0, static_cast<size_t>(host_b.size()));
+    std::memset(host_c.get(), 0, static_cast<size_t>(host_c.size()));
+
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t k = 0; k < k_count; ++k) {
+            host_a.get()->data[kernel::A_Y * i + k] =
+                0.01f * static_cast<float>(i + 1) + 0.001f * static_cast<float>(static_cast<int>(k % 17) - 8);
+        }
+    }
+    for (uint32_t j = 0; j < cols; ++j) {
+        for (uint32_t k = 0; k < k_count; ++k) {
+            host_b.get()->data[kernel::B_Y * j + k] =
+                static_cast<float16_t>(0.02f * static_cast<float>(j + 1) + 0.0005f * static_cast<float>(k % 11));
+        }
+    }
+
+    VDeviceBuffer<kernel::RllmBuffer_A> device_a(host_a);
+    VDeviceBuffer<kernel::RllmBuffer_B> device_b(host_b);
+    VDeviceBuffer<kernel::RllmBuffer_C> device_c(host_c);
+
+    VulkanComputeContext context(get_session());
+    device_a.write(context, host_a);
+    device_b.write(context, host_b);
+
+    kernel::OffloadParforVecmath296VecmathKernel vecmath296(
+        get_session(),
+        std::string(TESTDATA_DIR) + "/vecmath.L296.spv");
+    const kernel::offload_parfor_vecmath_296_vecmath_PushConstants push_constants{
+        static_cast<int32_t>(rows),
+        static_cast<int32_t>(cols),
+    };
+    baseline_kernel::OffloadParforVecmath296NooptVecmathKernel baseline_vecmath296(
+        get_session(),
+        std::string(TESTDATA_DIR) + "/vecmath.L296.noopt.spv");
+    const baseline_kernel::offload_parfor_vecmath_296_noopt_vecmath_PushConstants baseline_push_constants{
+        static_cast<int32_t>(rows),
+        static_cast<int32_t>(cols),
+    };
+
+    auto dispatch_transformed_once = [&]() {
+        const auto start = std::chrono::steady_clock::now();
+        vecmath296.dispatch(
+            context,
+            rows,
+            cols,
+            device_a,
+            device_b,
+            device_c,
+            push_constants);
+        const auto end = std::chrono::steady_clock::now();
+        return std::chrono::duration<double, std::milli>(end - start).count();
+    };
+    auto dispatch_baseline_once = [&]() {
+        const auto start = std::chrono::steady_clock::now();
+        baseline_vecmath296.dispatch(
+            context,
+            rows,
+            cols,
+            device_a,
+            device_b,
+            device_c,
+            baseline_push_constants);
+        const auto end = std::chrono::steady_clock::now();
+        return std::chrono::duration<double, std::milli>(end - start).count();
+    };
+
+    for (int i = 0; i < warmup_iterations; ++i) {
+        (void)dispatch_baseline_once();
+        (void)dispatch_transformed_once();
+    }
+
+    double best_transformed_ms = 1.0e30;
+    double total_transformed_ms = 0.0;
+    double best_baseline_ms = 1.0e30;
+    double total_baseline_ms = 0.0;
+    for (int i = 0; i < measured_iterations; ++i) {
+        const double baseline_ms = dispatch_baseline_once();
+        const double transformed_ms = dispatch_transformed_once();
+        best_baseline_ms = std::min(best_baseline_ms, baseline_ms);
+        total_baseline_ms += baseline_ms;
+        best_transformed_ms = std::min(best_transformed_ms, transformed_ms);
+        total_transformed_ms += transformed_ms;
+    }
+
+    const double average_transformed_ms = total_transformed_ms / static_cast<double>(measured_iterations);
+    const double average_baseline_ms = total_baseline_ms / static_cast<double>(measured_iterations);
+    const double operations = static_cast<double>(rows) * static_cast<double>(cols) *
+                              static_cast<double>(k_count) * 2.0;
+    const double best_transformed_gflops = operations / (best_transformed_ms / 1000.0) / 1.0e9;
+    const double average_transformed_gflops = operations / (average_transformed_ms / 1000.0) / 1.0e9;
+    const double best_baseline_gflops = operations / (best_baseline_ms / 1000.0) / 1.0e9;
+    const double average_baseline_gflops = operations / (average_baseline_ms / 1000.0) / 1.0e9;
+    const double best_speedup = best_baseline_ms / best_transformed_ms;
+    const double average_speedup = average_baseline_ms / average_transformed_ms;
+
+    ASSERT_GT(best_baseline_ms, 0.0);
+    ASSERT_GT(best_transformed_ms, 0.0);
+
+    RecordProperty("rows", rows);
+    RecordProperty("cols", cols);
+    RecordProperty("k_count", k_count);
+    RecordProperty("iterations", measured_iterations);
+    RecordProperty("baseline_best_ms", best_baseline_ms);
+    RecordProperty("baseline_average_ms", average_baseline_ms);
+    RecordProperty("baseline_best_gflops", best_baseline_gflops);
+    RecordProperty("baseline_average_gflops", average_baseline_gflops);
+    RecordProperty("transformed_best_ms", best_transformed_ms);
+    RecordProperty("transformed_average_ms", average_transformed_ms);
+    RecordProperty("transformed_best_gflops", best_transformed_gflops);
+    RecordProperty("transformed_average_gflops", average_transformed_gflops);
+    RecordProperty("best_speedup", best_speedup);
+    RecordProperty("average_speedup", average_speedup);
+    std::cerr << "vecmath:296 tiled shared-cache performance: "
               << "rows=" << rows
               << ", cols=" << cols
               << ", k=" << k_count

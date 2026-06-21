@@ -806,11 +806,15 @@ class VulkanKernelVisitor(Visitor):
             wg_x, wg_y, wg_z = "16", "16", "1"
         else:
             wg_x, wg_y, wg_z = "16", "1", "1"
+        found_explicit = False
         for wg in node.workgroups:
             if isinstance(wg, WorkgroupProperties):
+                found_explicit = True
                 wg_x = self._to_str(wg.x_expr) if wg.x_expr else wg_x
                 wg_y = self._to_str(wg.y_expr) if wg.y_expr else wg_y
                 wg_z = self._to_str(wg.z_expr) if wg.z_expr else wg_z
+        if not found_explicit and node.space_dim >= 2 and node.tile_size_x > 1 and node.tile_size_y > 1:
+            wg_x, wg_y, wg_z = str(node.tile_size_x), str(node.tile_size_y), "1"
         if node.reduction_chunks > 1:
             wg_z = str(node.reduction_chunks)
             if node.space_dim >= 2:
@@ -927,6 +931,14 @@ class VulkanKernelVisitor(Visitor):
         # Add meta fields (e.g. reduction_chunks from tkernel meta blocks) to constexpr_map
         if node.reduction_chunks > 1:
             constexpr_map["reduction_chunks"] = str(node.reduction_chunks)
+        if node.tile_size > 1:
+            constexpr_map["tile_size"] = str(node.tile_size)
+        if node.tile_size_x > 1:
+            constexpr_map["tile_size_x"] = str(node.tile_size_x)
+        if node.tile_size_y > 1:
+            constexpr_map["tile_size_y"] = str(node.tile_size_y)
+        if node.tile_chunk_size > 1:
+            constexpr_map["tile_chunk_size"] = str(node.tile_chunk_size)
         
         # Then merge with body-level constexpr defines
         for name, expr in self._constexpr_defines:

@@ -71,8 +71,10 @@ class RllmVulkanDispatchStubVisitor(Visitor):
             wg_x, wg_y, wg_z = "16", "16", "1"
         else:
             wg_x, wg_y, wg_z = "16", "1", "1"
+        found_explicit = False
         for wg in node.workgroups:
             if isinstance(wg, ast.WorkgroupProperties):
+                found_explicit = True
                 x_val = self._expr_to_str(wg.x_expr)
                 y_val = self._expr_to_str(wg.y_expr)
                 z_val = self._expr_to_str(wg.z_expr)
@@ -82,6 +84,8 @@ class RllmVulkanDispatchStubVisitor(Visitor):
                     wg_y = y_val
                 if z_val.isdigit():
                     wg_z = z_val
+        if not found_explicit and node.space_dim >= 2 and node.tile_size_x > 1 and node.tile_size_y > 1:
+            wg_x, wg_y, wg_z = str(node.tile_size_x), str(node.tile_size_y), "1"
         return wg_x, wg_y, wg_z
 
     def visit_program(self, node: ast.Program) -> str:

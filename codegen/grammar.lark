@@ -78,7 +78,7 @@ RETURN: "return"
 for_statement: "for" "(" for_loop_var ";" condition ";" increment ")" (block | statement)
 |              "for" "(" "const" type IDENT ":" expression ")" (block | statement)
 
-if_statement: "if" "(" condition ")" statement else_statement?
+if_statement: "if" "(" (condition | expression) ")" statement else_statement?
 
 else_statement: "else" statement
 
@@ -86,12 +86,12 @@ else_statement: "else" statement
 for_loop_var:  ("const")? type IDENT "=" expression 
 
 // in the AST becomes <expr> <op> <expr>
-condition: condition_part (("&&" | "||") condition_part)*
+condition: condition_part
 
 condition_part: lhs compare_operator expression
-compare_operator: LT | GT | LTE | GTE | EQ | NEQ
-LOGICAL_AND: "&&"
-LOGICAL_OR: "||"
+compare_operator: LT | GT | LTE | GTE | EQ | NEQ | LOGICAL_AND | LOGICAL_OR
+LOGICAL_AND.2: "&&"
+LOGICAL_OR.2: "||"
 LT: "<"
 GT: ">"
 LTE: "<="
@@ -150,15 +150,21 @@ call_args: "("  (expression ("," expression)*)?   ")"
 
 lhs: field_access
 
-expression: binary_expr ternary_trailer?
+expression: logical_expr ternary_trailer?
+| binary_expr ternary_trailer?
 | base_expr ternary_trailer?
 | wildcard_expression
 
+logical_expr: logical_operand logical_operator logical_operand
+| "(" expression logical_operator expression ")"
 binary_expr: "(" expression binary_operator expression ")"
+
+?logical_operand: binary_expr | base_expr | wildcard_expression
 
 ternary_trailer: "?" expression ":" expression
 
 binary_operator: arith_operator | compare_operator
+logical_operator: LOGICAL_AND | LOGICAL_OR
 
 ARITH_OP: "*" | "/" | "+" | "&" | "%" 
 arith_operator: ARITH_OP | NEG

@@ -86,8 +86,17 @@ def _extract_op_token_from_tree(tree):
 
 
 def _find_compare_operator(tree):
-    """Find the first comparison operator token inside a condition tree."""
-    if isinstance(tree, Token) and tree.type in {"LT", "GT", "LTE", "GTE", "EQ", "NEQ"}:
+    """Find the first comparison/logical operator token inside a condition tree."""
+    if isinstance(tree, Token) and tree.type in {
+        "LT",
+        "GT",
+        "LTE",
+        "GTE",
+        "EQ",
+        "NEQ",
+        "LOGICAL_AND",
+        "LOGICAL_OR",
+    }:
         return tree.value
     if isinstance(tree, Tree):
         for child in tree.children:
@@ -406,7 +415,7 @@ def transform_expression(expr_tree):
             return LimitExpr(max_val, transform_expression(expr_children[1]))
         return LimitExpr(max_val, max_val)
 
-    if expr_tree.data == "binary_expr":
+    if expr_tree.data in ("binary_expr", "logical_expr"):
         children = expr_tree.children
         if len(children) == 3:
             op_val = _extract_op_token_from_tree(children[1])
@@ -1605,6 +1614,8 @@ def transform_statement(stmt_tree):
             rhs = transform_expression(rhs_t) if isinstance(rhs_t, Tree) else None
             if lhs is not None and rhs is not None:
                 condition = Condition(lhs, op_val, rhs)
+        elif isinstance(condition_tree, Tree) and condition_tree.data == "expression":
+            condition = transform_expression(condition_tree)
 
         body_stmts = []
         if len(stmt_tree.children) > 1:
@@ -1624,7 +1635,27 @@ def transform_statement(stmt_tree):
                         else:
                             body_stmts.append(s)
 
-        return If(condition, body_stmts)
+        else_stmts = []
+        if len(stmt_tree.children) > 2:
+            else_tree = stmt_tree.children[2]
+            if isinstance(else_tree, Tree) and else_tree.data == "else_statement":
+                else_body_tree = else_tree.children[0] if else_tree.children else None
+                if isinstance(else_body_tree, Tree):
+                    if else_body_tree.data == "block":
+                        result = transform_statement(else_body_tree)
+                        if isinstance(result, list):
+                            else_stmts.extend(result)
+                        elif result is not None:
+                            else_stmts.append(result)
+                    else:
+                        s = transform_statement(else_body_tree)
+                        if s is not None:
+                            if isinstance(s, list):
+                                else_stmts.extend(s)
+                            else:
+                                else_stmts.append(s)
+
+        return If(condition, body_stmts, else_stmts)
 
     # declaration;
     if data in ("decl", "const_decl", "constexpr_decl", "shared_decl", "tensor_layout_decl"):
