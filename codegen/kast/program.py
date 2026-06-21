@@ -20,24 +20,21 @@ class Program(AstNode):
         params=None,
         body_stmts=None,
         workgroups=None,
-        tiled=False,
-        tile_block_size=1,
-        reduction_chunk_size=0,
-        reduction_chunks=1,
-        reduction_chunk_var="",
-        reduction_bound_var="",
-        use_shared_memory_tiling=False,
-        shared_memory_chunk_size=1,
         use_cooperative_matrix2=False,
         cooperative_matrix2_chunk_size=16,
+        reduction_chunks=1,
         # Set by perform_tiling() for workgroup partitioning
-        parallelized=False,
         workgroup_count=1,
         workgroup_size=1,
+        tiled=False,
+        parallelized=False,
+        tile_block_size=1,
+        use_shared_memory_tiling=False,
         _source_filename="",
         _constexpr_defines=None,
         _param_constexpr_defines=None,
     ):
+        self.reduction_chunks = reduction_chunks
         self.header = header
         # Loop variables from OFFLOAD_PARFOR_x_PARAM (e.g. ['i'] or ['i', 'j'])
         self.loop_vars = loop_vars or []
@@ -56,14 +53,6 @@ class Program(AstNode):
         self.body_stmts = body_stmts or []
         self.workgroups = workgroups or []
         # Tiling / reduction metadata (set by workgroup_partitioning or downstream visitors)
-        self.tiled = tiled
-        self.tile_block_size = tile_block_size
-        self.reduction_chunk_size = reduction_chunk_size
-        self.reduction_chunks = reduction_chunks
-        self.reduction_chunk_var = reduction_chunk_var
-        self.reduction_bound_var = reduction_bound_var
-        self.use_shared_memory_tiling = use_shared_memory_tiling
-        self.shared_memory_chunk_size = shared_memory_chunk_size
         self.use_cooperative_matrix2 = use_cooperative_matrix2
         self.cooperative_matrix2_chunk_size = cooperative_matrix2_chunk_size
         self._source_filename = _source_filename
@@ -72,9 +61,12 @@ class Program(AstNode):
         # constexpr defines from parameter declarations (for type resolution)
         self._param_constexpr_defines = _param_constexpr_defines or []
         # Set by perform_tiling() for workgroup partitioning
-        self.parallelized = parallelized
         self.workgroup_count = workgroup_count
         self.workgroup_size = workgroup_size
+        self.tiled = tiled
+        self.parallelized = parallelized
+        self.tile_block_size = tile_block_size
+        self.use_shared_memory_tiling = use_shared_memory_tiling
 
     @property
     def loop_var(self):

@@ -1,3 +1,0 @@
-search a[wildcard(index)] = wildcard(xxx);
-replace if (localid == 0) { a[wildcard(index)] = wildcard(xxx); }
-constraints (1 == 1)

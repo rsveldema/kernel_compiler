@@ -4,11 +4,16 @@
 program: header parfor_space parfor_parameters body
 
 // when a search pattern:
-search_replace_pattern: search search_statements replace replace_statements constraints
+search_replace_pattern: search search_statements replace replace_statements constraints meta
+
+meta: META "{" meta_assign* "}"
+
+meta_assign: IDENT "=" expression
+
+META: "meta"
 
 // compile-time evaluated if the replacement should be allowed
 constraints: "constraints" expression
-
 
 search_statements: statement*
 replace_statements: statement*
