@@ -582,6 +582,7 @@ class ResolveArrayIndicesVisitor(Expression):
             workgroup_count=node.workgroup_count,
             workgroup_size=node.workgroup_size,
             tile_block_size=node.tile_block_size,
+            tree_transformed=node.tree_transformed,
         )
 
 

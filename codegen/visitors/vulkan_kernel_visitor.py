@@ -814,6 +814,11 @@ class VulkanKernelVisitor(Visitor):
                 wg_x = self._to_str(wg.x_expr) if wg.x_expr else wg_x
                 wg_y = self._to_str(wg.y_expr) if wg.y_expr else wg_y
                 wg_z = self._to_str(wg.z_expr) if wg.z_expr else wg_z
+        if node.reduction_chunks > 1:
+            wg_z = str(node.reduction_chunks)
+            if node.space_dim >= 2:
+                wg_x = "8"
+                wg_y = "8"
         return wg_x, wg_y, wg_z
 
         self._emit("}")

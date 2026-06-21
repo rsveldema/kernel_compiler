@@ -284,11 +284,10 @@ def _evaluate_workgroup_size_value(expr):
 
 
 def _validate_workgroup_size(x_val, y_val, z_val, filename=None):
-    """Validate workgroup dimensions against Vulkan limits.
+    """Validate workgroup dimensions against Vulkan per-dimension limits.
 
-    Vulkan limits:
-      - Total invocations: x * y * z <= 1024
-      - Per dimension: x <= 1024, y <= 1024, z <= 64
+    Total local invocation count is validated when generating the Vulkan stub,
+    after transform metadata such as reduction_chunks has been applied.
 
     Raises ValueError with a descriptive message if limits are exceeded.
     """
@@ -299,13 +298,6 @@ def _validate_workgroup_size(x_val, y_val, z_val, filename=None):
         parts.append(f"y={y_val} (max 1024)")
     if z_val is not None and z_val > 64:
         parts.append(f"z={z_val} (max 64)")
-
-    total = (x_val or 1) * (y_val or 1) * (z_val or 1)
-    if total > 1024:
-        if parts:
-            parts.append(f"total={total} (max 1024)")
-        else:
-            parts.append(f"total={total} (max 1024)")
 
     if parts:
         dim_info = ", ".join(parts)

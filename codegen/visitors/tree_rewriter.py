@@ -155,6 +155,10 @@ class Pattern:
                 statement = transform_statement(child)
                 if statement is not None:
                     statements.append(statement)
+            elif isinstance(child, Tree):
+                statement = transform_statement(child)
+                if statement is not None:
+                    statements.append(statement)
 
         return statements
 

@@ -35,6 +35,43 @@ set(GENERATED_KERNEL_SRCS)
 set(GENERATED_DIR ${CMAKE_BINARY_DIR}/generated/vulkanized/kernel_compiler_tests)
 file(MAKE_DIRECTORY ${GENERATED_DIR})
 
+set(VECMATH225_KERNEL "${KERNEL_COMPILER_SOURCE_DIR}/testdata/offload_parfor_vecmath_225.kernel")
+set(VECMATH225_GLSL "${GENERATED_DIR}/vecmath.L225.glsl")
+set(VECMATH225_HEADER "${GENERATED_DIR}/vecmath.L225.h")
+set(VECMATH225_SPV "${GENERATED_DIR}/vecmath.L225.spv")
+set(VECMATH225_TYPE_ALIASES "${GENERATED_DIR}/_type_aliases.hpp")
+
+add_custom_command(
+    OUTPUT
+        "${VECMATH225_GLSL}"
+        "${VECMATH225_HEADER}"
+        "${VECMATH225_SPV}"
+        "${VECMATH225_TYPE_ALIASES}"
+    COMMAND "${Python3_EXECUTABLE}" "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
+            "${VECMATH225_KERNEL}"
+            --vulkan "${VECMATH225_GLSL}"
+    COMMAND Vulkan::glslc -fshader-stage=compute --target-env=vulkan1.1
+            "${VECMATH225_GLSL}" -o "${VECMATH225_SPV}"
+    DEPENDS
+        "${VECMATH225_KERNEL}"
+        "${KERNEL_COMPILER_SOURCE_DIR}/transforms/optimize_vecmath225.tkernel"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/parser.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/transforms.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/tree_rewriter.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_cpp_stub_visitor.py"
+    WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
+    COMMENT "Generating vecmath:225 Vulkan test stub"
+    VERBATIM
+)
+list(APPEND GENERATED_KERNEL_SRCS
+    "${VECMATH225_GLSL}"
+    "${VECMATH225_HEADER}"
+    "${VECMATH225_SPV}"
+    "${VECMATH225_TYPE_ALIASES}"
+)
+
 add_custom_target(all_generated_stubs ALL DEPENDS ${GENERATED_KERNEL_SRCS})
 
 

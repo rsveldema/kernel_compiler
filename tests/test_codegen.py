@@ -356,8 +356,32 @@ END_PROGRAM
     assert "(dispatch_rows + 1 - 1) / 1" not in stub
 
 
-def test_workgroup_sizes_512x64x1_in_dispatch():
-    """Verify large workgroup sizes from the kernel are reflected in the stub."""
+def test_workgroup_sizes_512x2x1_in_dispatch():
+    """Verify a large valid workgroup size from the kernel is reflected in the stub."""
+    program = parse(
+        """
+PROGRAM("bigwg.cc:1")
+workgroup { x: 512, y: 2, z: 1 }
+
+OFFLOAD_PARFOR_2D_PARAM(i, j, limit<512>(n), limit<256>(m), (dst))
+
+PARAMETERS
+        fixed_size_matrix<float, 512, 256>& dst
+
+BEGIN
+        dst[i, j] = (dst[i, j] + 1.0f);
+
+END_PROGRAM
+"""
+    )
+
+    stub = program.accept(VulkanCppStubVisitor())
+
+    assert "(dispatch_rows + 512 - 1) / 512" in stub
+    assert "(dispatch_cols + 2 - 1) / 2" in stub
+
+
+def test_stub_generation_rejects_too_many_local_invocations():
     program = parse(
         """
 PROGRAM("bigwg.cc:1")
@@ -375,10 +399,8 @@ END_PROGRAM
 """
     )
 
-    stub = program.accept(VulkanCppStubVisitor())
-
-    assert "(dispatch_rows + 512 - 1) / 512" in stub
-    assert "(dispatch_cols + 64 - 1) / 64" in stub
+    with pytest.raises(ValueError, match="maxWorkGroupInvocations"):
+        program.accept(VulkanCppStubVisitor())
 
 
 def test_default_workgroup_when_no_declaration():

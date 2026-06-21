@@ -33,8 +33,9 @@ replace
     const int num_workgroups = 16;
     const int rllm_reduction_chunk_size = (wildcard(N) / num_workgroups);
 
-    const int block_start_i = (int(gl_WorkGroupID.z) * rllm_reduction_chunk_size);
+    const int block_start_i = (int(gl_LocalInvocationID.z) * rllm_reduction_chunk_size);
     const int block_end_i = min((block_start_i + rllm_reduction_chunk_size), wildcard(N));
+    const int rllm_local_reduction_offset = (((int(gl_LocalInvocationID.y) * int(gl_WorkGroupSize.x)) + int(gl_LocalInvocationID.x)) * num_workgroups);
 
     for (int l_idx = block_start_i; l_idx < block_end_i; ++l_idx)
     {
@@ -53,29 +54,29 @@ replace
         sum3 += term3;
     }
 
-    shared float rllm_reduction_resultA[16];
-    shared float rllm_reduction_resultB[16];
-    shared float rllm_reduction_resultC[16];
+    shared float rllm_reduction_resultA[1024];
+    shared float rllm_reduction_resultB[1024];
+    shared float rllm_reduction_resultC[1024];
 
-    rllm_reduction_resultA[gl_WorkGroupID.z] = sum1;
-    rllm_reduction_resultB[gl_WorkGroupID.z] = sum2;
-    rllm_reduction_resultC[gl_WorkGroupID.z] = sum3;
+    rllm_reduction_resultA[(rllm_local_reduction_offset + int(gl_LocalInvocationID.z))] = sum1;
+    rllm_reduction_resultB[(rllm_local_reduction_offset + int(gl_LocalInvocationID.z))] = sum2;
+    rllm_reduction_resultC[(rllm_local_reduction_offset + int(gl_LocalInvocationID.z))] = sum3;
 
     barrier();
 
-    if (gl_WorkGroupID.z == 0)
+    if (gl_LocalInvocationID.z == 0)
     {
         for (int i=1;i<num_workgroups;i++)
         {
-            sum1 += rllm_reduction_resultA[i];
-            sum2 += rllm_reduction_resultB[i];
-            sum3 += rllm_reduction_resultC[i];
+            sum1 += rllm_reduction_resultA[(rllm_local_reduction_offset + i)];
+            sum2 += rllm_reduction_resultB[(rllm_local_reduction_offset + i)];
+            sum3 += rllm_reduction_resultC[(rllm_local_reduction_offset + i)];
         }
     }
 
     barrier();
 
-    if (gl_WorkGroupID.z == 0)
+    if (gl_LocalInvocationID.z == 0)
     {
         C1[i, j] = sum1;
         C2[i, j] = sum2;

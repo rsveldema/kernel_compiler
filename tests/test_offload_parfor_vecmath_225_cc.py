@@ -34,6 +34,10 @@ def test_tree_rewriter_changes_vecmath225_glsl():
     shader = program.accept(VulkanKernelVisitor())
 
     assert "const int rllm_reduction_chunk_size" in shader
+    assert "layout(local_size_x = 8, local_size_y = 8, local_size_z = 16) in;" in shader
     assert "shared float rllm_reduction_resultA" in shader
+    assert "gl_LocalInvocationID.z" in shader
+    assert "gl_WorkGroupID.z" not in shader
+    assert shader.count("barrier();") == 2
     assert "for (int l_idx = block_start_i; l_idx < block_end_i; ++l_idx)" in shader
     assert "for (int l_idx = 0; l_idx < 1024; ++l_idx)" not in shader

@@ -7,6 +7,7 @@
 #include <cstring>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <iterator>
 #include <memory>
@@ -19,6 +20,7 @@
 
 // Shared Vulkan test infrastructure
 #include "vulkan_test_helpers.hpp"
+#include "vecmath.L225.h"
 
 
 // ───────────── Test: multi-arg (3 independent matmuls + accumulate) ──
@@ -177,4 +179,115 @@ TEST_F(VulkanTestBase, host_device_buffer_copy_bandwidth)
               << ", download=" << download_gibs << " GiB/s"
               << ", roundtrip=" << roundtrip_gibs << " GiB/s"
               << " (" << size_bytes << " bytes, best of " << iterations << ")\n";
+}
+
+TEST_F(VulkanTestBase, tree_rewritten_vecmath225_matches_sequential_cpu)
+{
+    namespace kernel = rllm_offload_parfor_vecmath_225;
+
+    constexpr uint32_t rows = 8;
+    constexpr uint32_t cols = 8;
+    constexpr uint32_t k_count = kernel::A_Y;
+
+    ASSERT_STREQ(
+        kernel::OffloadParforVecmath225VecmathKernel::generated_descriptor(),
+        "tile_block_size=1;workgroup_count=1;tree_transformed=yes;");
+
+    VHostBuffer<kernel::RllmBuffer_A> host_a(get_session());
+    VHostBuffer<kernel::RllmBuffer_B1> host_b1(get_session());
+    VHostBuffer<kernel::RllmBuffer_C1> host_c1(get_session());
+    VHostBuffer<kernel::RllmBuffer_B2> host_b2(get_session());
+    VHostBuffer<kernel::RllmBuffer_C2> host_c2(get_session());
+    VHostBuffer<kernel::RllmBuffer_B3> host_b3(get_session());
+    VHostBuffer<kernel::RllmBuffer_C3> host_c3(get_session());
+
+    for (uint32_t idx = 0; idx < kernel::A_X * kernel::A_Y; ++idx) {
+        host_a.get()->data[idx] = 0.0f;
+        host_c1.get()->data[idx] = 0.0f;
+        host_c2.get()->data[idx] = 0.0f;
+        host_c3.get()->data[idx] = 0.0f;
+    }
+    for (uint32_t idx = 0; idx < kernel::B1_X * kernel::B1_Y; ++idx) {
+        host_b1.get()->data[idx] = static_cast<float16_t>(0.0f);
+        host_b2.get()->data[idx] = static_cast<float16_t>(0.0f);
+        host_b3.get()->data[idx] = static_cast<float16_t>(0.0f);
+    }
+
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t k = 0; k < k_count; ++k) {
+            host_a.get()->data[kernel::A_Y * i + k] =
+                0.01f * static_cast<float>(i + 1) + 0.001f * static_cast<float>(static_cast<int>(k % 17) - 8);
+        }
+    }
+    for (uint32_t j = 0; j < cols; ++j) {
+        for (uint32_t k = 0; k < k_count; ++k) {
+            const uint32_t idx = kernel::B1_Y * j + k;
+            host_b1.get()->data[idx] =
+                static_cast<float16_t>(0.02f * static_cast<float>(j + 1) + 0.0005f * static_cast<float>(k % 11));
+            host_b2.get()->data[idx] =
+                static_cast<float16_t>(-0.015f * static_cast<float>(j + 1) + 0.0007f * static_cast<float>(k % 13));
+            host_b3.get()->data[idx] =
+                static_cast<float16_t>(0.01f * static_cast<float>(j + 2) - 0.0003f * static_cast<float>(k % 7));
+        }
+    }
+
+    VDeviceBuffer<kernel::RllmBuffer_A> device_a(host_a);
+    VDeviceBuffer<kernel::RllmBuffer_B1> device_b1(host_b1);
+    VDeviceBuffer<kernel::RllmBuffer_C1> device_c1(host_c1);
+    VDeviceBuffer<kernel::RllmBuffer_B2> device_b2(host_b2);
+    VDeviceBuffer<kernel::RllmBuffer_C2> device_c2(host_c2);
+    VDeviceBuffer<kernel::RllmBuffer_B3> device_b3(host_b3);
+    VDeviceBuffer<kernel::RllmBuffer_C3> device_c3(host_c3);
+
+    VulkanComputeContext context(get_session());
+    device_a.write(context, host_a);
+    device_b1.write(context, host_b1);
+    device_c1.write(context, host_c1);
+    device_b2.write(context, host_b2);
+    device_c2.write(context, host_c2);
+    device_b3.write(context, host_b3);
+    device_c3.write(context, host_c3);
+
+    kernel::OffloadParforVecmath225VecmathKernel vecmath225(
+        get_session(),
+        std::string(TESTDATA_DIR) + "/vecmath.L225.spv");
+    const kernel::offload_parfor_vecmath_225_vecmath_PushConstants push_constants{
+        static_cast<int32_t>(rows),
+        static_cast<int32_t>(cols),
+    };
+    vecmath225.dispatch(
+        context,
+        rows,
+        cols,
+        device_a,
+        device_b1,
+        device_c1,
+        device_b2,
+        device_c2,
+        device_b3,
+        device_c3,
+        push_constants);
+
+    device_c1.read(context, host_c1);
+    device_c2.read(context, host_c2);
+    device_c3.read(context, host_c3);
+
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t j = 0; j < cols; ++j) {
+            float expected1 = 0.0f;
+            float expected2 = 0.0f;
+            float expected3 = 0.0f;
+            for (uint32_t k = 0; k < k_count; ++k) {
+                const float a = host_a.get()->data[kernel::A_Y * i + k];
+                expected1 += a * static_cast<float>(host_b1.get()->data[kernel::B1_Y * j + k]);
+                expected2 += a * static_cast<float>(host_b2.get()->data[kernel::B2_Y * j + k]);
+                expected3 += a * static_cast<float>(host_b3.get()->data[kernel::B3_Y * j + k]);
+            }
+
+            const uint32_t out_idx = kernel::C1_Y * i + j;
+            EXPECT_NEAR(host_c1.get()->data[out_idx], expected1, 1.0e-2f) << "C1[" << i << ", " << j << "]";
+            EXPECT_NEAR(host_c2.get()->data[out_idx], expected2, 1.0e-2f) << "C2[" << i << ", " << j << "]";
+            EXPECT_NEAR(host_c3.get()->data[out_idx], expected3, 1.0e-2f) << "C3[" << i << ", " << j << "]";
+        }
+    }
 }

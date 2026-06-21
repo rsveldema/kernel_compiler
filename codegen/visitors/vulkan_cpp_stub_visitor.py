@@ -447,6 +447,11 @@ class VulkanCppStubVisitor(Visitor):
                     wg_y = y_val
                 if z_val.isdigit():
                     wg_z = z_val
+        if node.reduction_chunks > 1:
+            wg_z = str(node.reduction_chunks)
+            if node.space_dim >= 2:
+                wg_x = "8"
+                wg_y = "8"
         # Validate against Vulkan spec minimum required limits
         try:
             x_int, y_int, z_int = int(wg_x), int(wg_y), int(wg_z)
@@ -613,11 +618,11 @@ class VulkanCppStubVisitor(Visitor):
         elif has_2d:
             x_dim = f"(dispatch_rows + {wg_x} - 1) / {wg_x}"
             y_dim = f"(dispatch_cols + {wg_y} - 1) / {wg_y}"
-            z_dim = str(node.reduction_chunks)
+            z_dim = "1"
         else:
             x_dim = f"(dispatch_rows + {wg_x} - 1) / {wg_x}"
             y_dim = "1"
-            z_dim = str(node.reduction_chunks)
+            z_dim = "1"
         return x_dim, y_dim, z_dim
 
     def _emit_kernel_class(
