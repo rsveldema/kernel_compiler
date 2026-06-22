@@ -55,3 +55,10 @@ def test_tree_rewriter_changes_vecmath296_glsl():
     assert shader.count("barrier();") == 2
     assert "return;" not in shader
     assert "for (int l_idx = 0; l_idx < 1024; ++l_idx)" not in shader
+
+
+def test_vecmath296_num_z_threads_dimension_is_constant_folded():
+    shader = transformed_shader(KERNEL_FILENAME)
+
+    assert "shared float local_sum[8][8][16];" in shader
+    assert "wildcard" not in shader

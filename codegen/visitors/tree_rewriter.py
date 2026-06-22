@@ -386,17 +386,19 @@ class Pattern:
             if node.name in self.wildcard_expression_map:
                 result = copy.deepcopy(self.wildcard_expression_map[node.name])
                 logger.debug("      WildcardExpr '%s' -> %s", node.name, _expr_label(result))
-                return result
+                return self._replace_wildcards(result)
             if node.name in self.meta:
                 result = copy.deepcopy(self.meta[node.name])
                 logger.debug("      Meta '%s' -> %s", node.name, _expr_label(result))
-                return result
+                return self._replace_wildcards(result)
             logger.warning("      UNRESOLVED WildcardExpr '%s'!", node.name)
             return copy.deepcopy(node)
 
         if isinstance(node, list):
             for index, item in enumerate(node):
-                if isinstance(item, WildcardStatement):
+                if isinstance(item, WildcardExpression):
+                    node[index] = self._replace_wildcards(item)
+                elif isinstance(item, WildcardStatement):
                     node[index] = copy.deepcopy(self.wildcard_statement_map[item.name])
                 elif hasattr(item, "__dict__") or isinstance(item, list):
                     node[index] = self._replace_wildcards(item)
@@ -406,9 +408,9 @@ class Pattern:
             for attr, value in node.__dict__.items():
                 if isinstance(value, WildcardExpression):
                     if value.name in self.wildcard_expression_map:
-                        setattr(node, attr, copy.deepcopy(self.wildcard_expression_map[value.name]))
+                        setattr(node, attr, self._replace_wildcards(copy.deepcopy(self.wildcard_expression_map[value.name])))
                     elif value.name in self.meta:
-                        setattr(node, attr, copy.deepcopy(self.meta[value.name]))
+                        setattr(node, attr, self._replace_wildcards(copy.deepcopy(self.meta[value.name])))
                 elif isinstance(value, WildcardStatement):
                     setattr(node, attr, copy.deepcopy(self.wildcard_statement_map[value.name]))
                 elif hasattr(value, "__dict__") or isinstance(value, list):
@@ -514,20 +516,38 @@ class TreeRewriter(visitor.Visitor):
 
     def _constant_fold_meta_value(self, expr: Expression, pattern: Pattern, name: str):
         try:
-            return self._eval_constant_expr(expr)
+            return self._eval_constant_expr(expr, pattern, resolving={name})
         except ValueError as exc:
             raise ValueError(
                 f"{Path(pattern.filename).name}: meta field {name!r} must be a constant expression"
             ) from exc
 
-    def _eval_constant_expr(self, expr: Expression):
+    def _eval_constant_expr(self, expr: Expression, pattern: Pattern | None = None, resolving: set[str] | None = None):
         if isinstance(expr, Number):
             return expr.value
+        if isinstance(expr, WildcardExpression):
+            if pattern is not None and expr.name in pattern.wildcard_expression_map:
+                return self._eval_constant_expr(pattern.wildcard_expression_map[expr.name], pattern, resolving)
+            if pattern is not None and expr.name in pattern.meta:
+                if resolving is not None and expr.name in resolving:
+                    raise ValueError
+                next_resolving = set(resolving or set())
+                next_resolving.add(expr.name)
+                return self._eval_constant_expr(pattern.meta[expr.name], pattern, next_resolving)
+            raise ValueError
+        if isinstance(expr, Identifier):
+            if pattern is not None and expr.name in pattern.meta:
+                if resolving is not None and expr.name in resolving:
+                    raise ValueError
+                next_resolving = set(resolving or set())
+                next_resolving.add(expr.name)
+                return self._eval_constant_expr(pattern.meta[expr.name], pattern, next_resolving)
+            raise ValueError
         if isinstance(expr, UnaryMinusExpr):
-            return -self._eval_constant_expr(expr.operand)
+            return -self._eval_constant_expr(expr.operand, pattern, resolving)
         if isinstance(expr, BinaryExpr):
-            left = self._eval_constant_expr(expr.left)
-            right = self._eval_constant_expr(expr.right)
+            left = self._eval_constant_expr(expr.left, pattern, resolving)
+            right = self._eval_constant_expr(expr.right, pattern, resolving)
             if expr.op == "+":
                 return left + right
             if expr.op == "-":
@@ -535,6 +555,8 @@ class TreeRewriter(visitor.Visitor):
             if expr.op == "*":
                 return left * right
             if expr.op == "/":
+                if isinstance(left, int) and isinstance(right, int) and right != 0 and left % right == 0:
+                    return left // right
                 return left / right
             if expr.op == "%":
                 return left % right

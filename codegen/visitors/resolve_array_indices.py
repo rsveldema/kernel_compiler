@@ -586,6 +586,7 @@ class ResolveArrayIndicesVisitor(Expression):
             tile_size_x=node.tile_size_x,
             tile_size_y=node.tile_size_y,
             tile_chunk_size=node.tile_chunk_size,
+            num_z_threads=node.num_z_threads,
             use_cooperative_matrix2=node.use_cooperative_matrix2,
             cooperative_matrix2_chunk_size=node.cooperative_matrix2_chunk_size,
             _source_filename=node._source_filename,

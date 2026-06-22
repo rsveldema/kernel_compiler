@@ -6,7 +6,7 @@ Tests the AST parser, visitor pattern, and printer against realistic parfor dump
 from unittest_offload_parfor_helper import parse_kernel
 
 from codegen.parser import parse
-from codegen.kast.expression import BinaryExpr, Number
+from codegen.kast.expression import BinaryExpr, Number, WildcardExpression
 from codegen.kast.statement import Declaration, If
 from codegen.visitors.resolve_array_indices import resolve_array_indices
 from codegen.visitors.tree_rewriter import TreeRewriter
@@ -142,6 +142,40 @@ END_PROGRAM
     assert program.reduction_chunks == 16
 
 
+def test_tkernel_meta_constant_folds_wildcard_values():
+    program = parse(
+        """
+PROGRAM("vecmath.cc:296")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<8>(), (dst))
+
+PARAMETERS
+        fixed_size_vector<float, 8>& dst
+
+BEGIN
+        dst[i] = (dst[i] + 1.0f);
+
+END_PROGRAM
+"""
+    )
+    pattern = type(
+        "FakePattern",
+        (),
+        {
+            "filename": "optimize_vecmath296.tkernel",
+            "meta": {
+                "tile_chunk_size": Number(64),
+                "num_z_threads": BinaryExpr(WildcardExpression("N"), "/", WildcardExpression("tile_chunk_size")),
+            },
+            "wildcard_expression_map": {"N": Number(1024)},
+        },
+    )()
+
+    TreeRewriter({})._apply_program_meta(program, pattern)
+
+    assert program.num_z_threads == 16
+
+
 def test_tile_size_xy_meta_sets_generated_workgroup_size():
     program = parse(
         """
@@ -174,6 +208,35 @@ END_PROGRAM
     assert "tile_chunk_size=64;" in stub
     assert "tile_L1_kernel_wg_x = 8;" in dispatch_stub
     assert "tile_L1_kernel_wg_y = 32;" in dispatch_stub
+
+
+def test_num_z_threads_sets_generated_workgroup_z():
+    program = parse(
+        """
+PROGRAM("tile.cc:2")
+
+OFFLOAD_PARFOR_3D_PARAM(i, j, k, limit<64>(), (dst))
+
+PARAMETERS
+        fixed_size_vector<float, 64>& dst
+
+BEGIN
+        dst[i] = 1.0f;
+
+END_PROGRAM
+"""
+    )
+    program.tile_size_x = 8
+    program.tile_size_y = 8
+    program.num_z_threads = 4
+
+    shader = program.accept(VulkanKernelVisitor())
+    stub = program.accept(VulkanCppStubVisitor())
+    dispatch_stub = program.accept(RllmVulkanDispatchStubVisitor("/tile.spv"))
+
+    assert "layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;" in shader
+    assert "(dispatch_levels + 4 - 1) / 4" in stub
+    assert "tile_L2_kernel_wg_z = 4;" in dispatch_stub
 
 
 def test_vulkan_preserves_float16_buffers_and_casts_stores():

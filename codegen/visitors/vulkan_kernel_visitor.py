@@ -824,6 +824,8 @@ class VulkanKernelVisitor(Visitor):
             if node.space_dim >= 2:
                 wg_x = "8"
                 wg_y = "8"
+        if node.num_z_threads > 1:
+            wg_z = str(node.num_z_threads)
         return wg_x, wg_y, wg_z
 
         self._emit("}")
@@ -943,6 +945,8 @@ class VulkanKernelVisitor(Visitor):
             constexpr_map["tile_size_y"] = str(node.tile_size_y)
         if node.tile_chunk_size > 1:
             constexpr_map["tile_chunk_size"] = str(node.tile_chunk_size)
+        if node.num_z_threads > 1:
+            constexpr_map["num_z_threads"] = str(node.num_z_threads)
         
         # Then merge with body-level constexpr defines
         for name, expr in self._constexpr_defines:

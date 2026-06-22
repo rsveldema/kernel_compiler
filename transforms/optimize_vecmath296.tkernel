@@ -20,14 +20,14 @@ replace
     // note: Thread (x,y,z) operates on a whole tile (x,y), the z part is for a partitioning of the nested sum loop
 
     // partitions to inner 'k' loop above:
-    const uint num_partitions = (wildcard(N) / wildcard(tile_chunk_size));
+    const uint num_partitions = wildcard(num_z_threads);
     const uint part_start     = (wildcard(tile_chunk_size) * gl_LocalInvocationID.z);
     const uint part_end       = (part_start + gl_LocalInvocationID.z);
 
     // local copy of the tile for fast access and reuse of memory
     shared float tile_A[wildcard(tile_size_x), wildcard(tile_size_y)];
     shared float tile_B[wildcard(tile_size_x), wildcard(tile_size_y)];
-    shared float local_sum[wildcard(tile_size_x), wildcard(tile_size_y), 1024]; // should be num_partitions
+    shared float local_sum[wildcard(tile_size_x), wildcard(tile_size_y), wildcard(num_z_threads)]; // should be num_partitions
 
     // step 1: load tiles A and B
    
@@ -126,4 +126,5 @@ meta {
     tile_size_x = 8 // will reduce the number of threads / 8
     tile_size_y = 8 // will reduce the number of threads / 8
     tile_chunk_size = 64 // chunk of inner loop to process
+    num_z_threads = min((wildcard(N) / wildcard(tile_chunk_size)), 1024 / (wildcard(tile_size_x) * wildcard(tile_size_y)))
 }

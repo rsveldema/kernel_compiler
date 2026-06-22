@@ -457,6 +457,8 @@ class VulkanCppStubVisitor(Visitor):
             if node.space_dim >= 2:
                 wg_x = "8"
                 wg_y = "8"
+        if node.num_z_threads > 1:
+            wg_z = str(node.num_z_threads)
         # Validate against Vulkan spec minimum required limits
         try:
             x_int, y_int, z_int = int(wg_x), int(wg_y), int(wg_z)

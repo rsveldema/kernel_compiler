@@ -86,6 +86,8 @@ class RllmVulkanDispatchStubVisitor(Visitor):
                     wg_z = z_val
         if not found_explicit and node.space_dim >= 2 and node.tile_size_x > 1 and node.tile_size_y > 1:
             wg_x, wg_y, wg_z = str(node.tile_size_x), str(node.tile_size_y), "1"
+        if node.num_z_threads > 1:
+            wg_z = str(node.num_z_threads)
         return wg_x, wg_y, wg_z
 
     def visit_program(self, node: ast.Program) -> str:
