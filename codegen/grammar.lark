@@ -115,10 +115,11 @@ declaration: "const" type IDENT ("=" expression)? -> const_decl
 
 // Scalar type terminals (used in TYPE_LITERAL)
 INT_T:    "int"
+UINT_T:   "uint"
 SIZE_T_T: "size_t"
 FLOAT_T:  "float"
 FLOAT16_T:"float16"
-TYPE_LITERAL: INT_T | SIZE_T_T | FLOAT_T | FLOAT16_T
+TYPE_LITERAL: INT_T | SIZE_T_T | FLOAT_T | FLOAT16_T | UINT_T
 
 TENSOR_LAYOUT: "tensorLayout"
 type: FSV "<" type "," expression ">" ("&")?

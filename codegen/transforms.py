@@ -746,6 +746,8 @@ def _resolve_nested_type(node):
         val = node.value
         if val in ("int", "size_t"):
             return Int(val)
+        if val in ("int", "size_t", "uint"):
+            return Int(val)
         elif val == "float":
             return Float()
         elif val == "float16":
@@ -758,7 +760,7 @@ def _resolve_nested_type(node):
         if data == "type" and len(node.children) == 1 and _is_token(node.children[0]):
             token = node.children[0]
             val = token.value
-            if val in ("int", "size_t"):
+            if val in ("int", "size_t", "uint"):
                 return Int(val)
             elif val == "float":
                 return Float()

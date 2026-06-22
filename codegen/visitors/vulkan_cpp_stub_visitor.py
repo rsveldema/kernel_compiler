@@ -129,6 +129,8 @@ class VulkanCppStubVisitor(Visitor):
         return self._cpp_type_str(node)
 
     def visit_int(self, node: ast.Int) -> str:
+        if (node.name == "uint"):
+            return "uint32_t";
         return "int32_t"
 
     def visit_float(self, node: ast.Float) -> str:

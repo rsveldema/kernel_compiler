@@ -312,6 +312,8 @@ class VulkanKernelVisitor(Visitor):
         """Map an AST Type node to a GLSL type name."""
         if isinstance(ty, Int):
             # size_t → uint64_t, other integers → int
+            if ty.name == "uint":
+                return "uint"
             return "uint64_t" if ty.name == "size_t" else "int"
         if isinstance(ty, Float):
             return "float"
@@ -424,6 +426,8 @@ class VulkanKernelVisitor(Visitor):
         return self._glsl_elem_type(node)
 
     def visit_int(self, node: Int) -> str:
+        if node.name == "uint":
+            return "uint"
         if node.name == "size_t":
             return "uint64_t"
         return "int"
@@ -540,7 +544,7 @@ class VulkanKernelVisitor(Visitor):
         for idx in node.indices:
             idx_str = self._visit_expr_child(idx) if idx else "?"
             parts.append(idx_str)
-        return f"{base}[{', '.join(parts)}]"
+        return f"{base}[{' ][ '.join(parts)}]"
 
     def visit_field_access(self, node: FieldAccess) -> str:
         base = ""
