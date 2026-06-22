@@ -17,105 +17,63 @@ search
     C[i, j] = (sum);
 
 replace
-    const int i = int(gl_GlobalInvocationID.x);
-    const int j = int(gl_GlobalInvocationID.y);
-    const int rllm_chunk_id = int(gl_GlobalInvocationID.z);
-    if (((rllm_chunk_id * wildcard(tile_chunk_size)) >= wildcard(N))) return;
+    // partitions to inner 'k' loop above:
+    const int num_partitions = wildcard(N) / wildcard(tile_chunk_size);
+    const int part_start     = (wildcard(tile_chunk_size) * gl_LocalInvocationID.z);
+    const int part_end       = (part_start + gl_LocalInvocationID.z);
 
-    const int rllm_chunk_start = (rllm_chunk_id * wildcard(tile_chunk_size));
-    const int rllm_chunk_size = wildcard(tile_chunk_size);
+    // local copy of the tile for fast access and reuse of memory elts
+    shared float tile_A[wildcard(tile_size_x), wildcard(tile_size_y)];
+    shared float tile_B[wildcard(tile_size_x), wildcard(tile_size_y)];
+    shared float local_sum[wildcard(tile_size_x), wildcard(tile_size_y), num_partitions];
 
-    shared float rllm_A_tile[(wildcard(tile_size_x) * wildcard(tile_chunk_size))];
-    shared float rllm_B_tile[(wildcard(tile_size_y) * wildcard(tile_chunk_size))];
+    // step 1: load tiles A and B
+    // TODO
 
-    const int rllm_tile_chunk_size = wildcard(tile_chunk_size);
-    const int rllm_tile_size_x = wildcard(tile_size_x);
-    const int rllm_tile_size_y = wildcard(tile_size_y);
-    const int rllm_tile_local_linear = ((int(gl_LocalInvocationID.y) * rllm_tile_size_x) + int(gl_LocalInvocationID.x));
-    const int rllm_tile_local_count = (rllm_tile_size_x * rllm_tile_size_y);
-    const int rllm_workgroup_base_i = (int(gl_WorkGroupID.x) * rllm_tile_size_x);
-    const int rllm_workgroup_base_j = (int(gl_WorkGroupID.y) * rllm_tile_size_y);
+    barrier();
 
-    const int ax = wildcard(tile_size_x);
-    const int ay = wildcard(tile_size_y);
-    if (ax == ay)
+    // step 2: compute the partial sums in shared memory
+    if (gl_LocalInvocationID.z < num_partitions)
     {
-        for (int rllm_load_slot = rllm_tile_local_linear; rllm_load_slot < (wildcard(tile_size_x) * wildcard(tile_chunk_size)); rllm_load_slot += rllm_tile_local_count)
+        for (int t_i = 0; t_i < wildcard(tile_size_x); t_i++)
         {
-            const int rllm_load_row = (rllm_load_slot / rllm_tile_chunk_size);
-            const int rllm_load_col = (rllm_load_slot % rllm_tile_chunk_size);
-            const int rllm_load_k = (rllm_chunk_start + rllm_load_col);
-            const int rllm_load_i = (rllm_workgroup_base_i + rllm_load_row);
-            const int rllm_load_j = (rllm_workgroup_base_j + rllm_load_row);
-
-            if ((rllm_load_k < wildcard(N)) && (rllm_load_i < rllm_bound_x))
+            for (int t_j = 0; t_i < wildcard(tile_size_y); t_j++)
             {
-                rllm_A_tile[rllm_load_slot] = A[rllm_load_i, rllm_load_k];
-            } else {
-                rllm_A_tile[rllm_load_slot] = 0.f;
-            }
-
-            if ((rllm_load_k < wildcard(N)) && (rllm_load_j < rllm_bound_y))
-            {
-                rllm_B_tile[rllm_load_slot] = float(B[rllm_load_j, rllm_load_k]);
-            } else {
-                rllm_B_tile[rllm_load_slot] = 0.f;
-            }
-        }
-    } else {
-        for (int rllm_load_slot = rllm_tile_local_linear; rllm_load_slot < (wildcard(tile_size_x) * wildcard(tile_chunk_size)); rllm_load_slot += rllm_tile_local_count)
-        {
-            const int rllm_load_row = (rllm_load_slot / rllm_tile_chunk_size);
-            const int rllm_load_col = (rllm_load_slot % rllm_tile_chunk_size);
-            const int rllm_load_k = (rllm_chunk_start + rllm_load_col);
-            const int rllm_load_i = (rllm_workgroup_base_i + rllm_load_row);
-            if ((rllm_load_k < wildcard(N)) && (rllm_load_i < rllm_bound_x))
-            {
-                rllm_A_tile[rllm_load_slot] = A[rllm_load_i, rllm_load_k];
-            } else {
-                rllm_A_tile[rllm_load_slot] = 0.f;
-            }
-        }
-
-        for (int rllm_load_slot = rllm_tile_local_linear; rllm_load_slot < (wildcard(tile_size_y) * wildcard(tile_chunk_size)); rllm_load_slot += rllm_tile_local_count)
-        {
-            const int rllm_load_row = (rllm_load_slot / rllm_tile_chunk_size);
-            const int rllm_load_col = (rllm_load_slot % rllm_tile_chunk_size);
-            const int rllm_load_k = (rllm_chunk_start + rllm_load_col);
-            const int rllm_load_j = (rllm_workgroup_base_j + rllm_load_row);
-            if ((rllm_load_k < wildcard(N)) && (rllm_load_j < rllm_bound_y))
-            {
-                rllm_B_tile[rllm_load_slot] = float(B[rllm_load_j, rllm_load_k]);
-            } else {
-                rllm_B_tile[rllm_load_slot] = 0.f;
-            }
+                float sum = 0.f;
+                for (int k = part_start; k < part_end; ++k)
+                {
+                    sum += (tile_A[t_i, k] * tile_B[t_j, k]);
+                }
+                local_sum[t_i, t_j, gl_LocalInvocationID.z] = sum;
+            }   
         }
     }
 
     barrier();
+    // step 3: at local_sum[i, j, *] we have the partial sums, 
+    //         we need to gather the total sum at local_sum[i, j, 0]
 
-    float sum = 0.f;
-    if ((i < rllm_bound_x) && (j < rllm_bound_y))
+
+    if (gl_LocalInvocationID.z == 0)
     {
-        for (int rllm_inner_k = 0; rllm_inner_k < rllm_chunk_size; ++rllm_inner_k)
+        for (int t_i = 0; t_i < wildcard(tile_size_x); t_i++)
         {
-            const int rllm_A_slot = ((int(gl_LocalInvocationID.x) * rllm_tile_chunk_size) + rllm_inner_k);
-            const int rllm_B_slot = ((int(gl_LocalInvocationID.y) * rllm_tile_chunk_size) + rllm_inner_k);
-            const float term = (rllm_A_tile[rllm_A_slot] * rllm_B_tile[rllm_B_slot]);
-            OVERFLOW_CHECK_ADD(sum, term);
-            sum += term;
+            for (int t_j = 0; t_i < wildcard(tile_size_y); t_j++)
+            {
+                for (int t_k = 1; t_k < num_partitions; t_k++)
+                {
+                    local_sum[t_i, t_j, 0] += local_sum[t_i, t_j, t_k];
+                }
+            }   
         }
     }
 
     barrier();
-
-    if ((i < rllm_bound_x) && (j < rllm_bound_y)) 
-    {
-        C[i, j] = (sum);
-    }
+    // step 3:  local_sum[i, j, 0] now holds the total sum and can be copied back to C[i,j]
+    // TODO
 
 meta {
-    tile_size_x = 16
-    tile_size_y = 16
-    tile_chunk_size = 64
+    tile_size_x = 8 // will reduce the number of threads / 8
+    tile_size_y = 8 // will reduce the number of threads / 8
+    tile_chunk_size = 64 // chunk of inner loop to process
 }

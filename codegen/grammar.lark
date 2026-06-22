@@ -35,7 +35,9 @@ program_properties: workgroup_size
 
 workgroup_size: "workgroup" "{" "x" ":" expression "," "y" ":" expression "," "z" ":" expression "}"
 
+// reserves a shared memory block of the given size.
 shared_decl: SHARED declaration ";"
+
 
 parfor_space: "OFFLOAD_PARFOR_1D_PARAM" "(" IDENT "," expression "," parfor_parameters_list ")" -> parfor_1d_param
 | "OFFLOAD_PARFOR_2D_PARAM" "(" IDENT "," IDENT "," expression ("," expression)? "," parfor_parameters_list ")" -> parfor_2d_param
