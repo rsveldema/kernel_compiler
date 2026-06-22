@@ -416,6 +416,26 @@ class VulkanKernelVisitor(Visitor):
                 if value < 0:
                     return None
                 return (math.sqrt(float(value)), "float")
+            if callee in {"max", "std.max", "std::max"} and len(node.args) == 2:
+                left = self._const_eval_expr(node.args[0])
+                right = self._const_eval_expr(node.args[1])
+                if left is None or right is None:
+                    return None
+                lv, lt = left
+                rv, rt = right
+                value_type = "float" if lt == "float" or rt == "float" else "int"
+                result = max(lv, rv)
+                return (result, value_type)
+            if callee in {"min", "std.min", "std::min"} and len(node.args) == 2:
+                left = self._const_eval_expr(node.args[0])
+                right = self._const_eval_expr(node.args[1])
+                if left is None or right is None:
+                    return None
+                lv, lt = left
+                rv, rt = right
+                value_type = "float" if lt == "float" or rt == "float" else "int"
+                result = min(lv, rv)
+                return (result, value_type)
             return None
 
         return None

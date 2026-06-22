@@ -543,3 +543,109 @@ END_PROGRAM
 
     # Default 1D workgroup size is 16x1x1
     assert "(dispatch_rows + 16 - 1) / 16" in stub
+
+
+def test_vulkan_constant_folds_max():
+    program = parse(
+        """
+PROGRAM("max.cc:1")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<8>(), (dst))
+
+PARAMETERS
+        fixed_size_vector<float, 8>& dst
+
+BEGIN
+        const float threshold = std.max(10.5f, 3.2f);
+        dst[i] = threshold;
+
+END_PROGRAM
+"""
+    )
+    program = resolve_array_indices(program)
+
+    shader = program.accept(VulkanKernelVisitor())
+
+    assert "std.max" not in shader
+    assert "max(" not in shader
+    assert "10.5" in shader
+
+
+def test_vulkan_constant_folds_min():
+    program = parse(
+        """
+PROGRAM("min.cc:1")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<8>(), (dst))
+
+PARAMETERS
+        fixed_size_vector<float, 8>& dst
+
+BEGIN
+        const float threshold = std.min(10.5f, 3.2f);
+        dst[i] = threshold;
+
+END_PROGRAM
+"""
+    )
+    program = resolve_array_indices(program)
+
+    shader = program.accept(VulkanKernelVisitor())
+
+    assert "std.min" not in shader
+    assert "min(" not in shader
+    assert "3.2" in shader
+
+
+def test_vulkan_constant_folds_max_int():
+    program = parse(
+        """
+PROGRAM("max_int.cc:1")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<8>(), (dst))
+
+PARAMETERS
+        fixed_size_vector<int, 8>& dst
+
+BEGIN
+        const int val = std.max(42, 17);
+        dst[i] = val;
+
+END_PROGRAM
+"""
+    )
+    program = resolve_array_indices(program)
+
+    shader = program.accept(VulkanKernelVisitor())
+
+    assert "std.max" not in shader
+    assert "max(" not in shader
+    assert "42" in shader
+
+
+def test_vulkan_constant_folds_max_mixed_types():
+    """max(int, float) should produce a float result."""
+    program = parse(
+        """
+PROGRAM("max_mixed.cc:1")
+
+OFFLOAD_PARFOR_1D_PARAM(i, limit<8>(), (dst))
+
+PARAMETERS
+        fixed_size_vector<float, 8>& dst
+
+BEGIN
+        const float val = std.max(3, 2.5f);
+        dst[i] = val;
+
+END_PROGRAM
+"""
+    )
+    program = resolve_array_indices(program)
+
+    shader = program.accept(VulkanKernelVisitor())
+
+    assert "std.max" not in shader
+    assert "max(" not in shader
+    # Should fold to 3.0 (float)
+    assert "3.0" in shader
