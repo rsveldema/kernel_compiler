@@ -1,0 +1,26 @@
+// identity ("TransformerBlock.cc:175")
+// SiLU activation backward: element-wise d_gate_pre and d_up_pre update.
+
+search
+    const int t = int(gl_GlobalInvocationID.x);
+    if (t >= rllm_bound_x) return;
+    const int f = int(gl_GlobalInvocationID.y);
+    if (f >= rllm_bound_y) return;
+    const float g = gate_pre[t, f];
+    const float sg = (1.0f / (1.0f + exp(-g)));
+    const float silu = (g * sg);
+    const float dsilu_dg = (sg * (1.0f + (g * (1.0f - sg))));
+    d_gate_pre[t, f] = ((d_ffn_act[t, f] * up_pre[t, f]) * dsilu_dg);
+    d_up_pre[t, f] = (d_ffn_act[t, f] * silu);
+
+replace
+    const int t = int(gl_GlobalInvocationID.x);
+    if (t >= rllm_bound_x) return;
+    const int f = int(gl_GlobalInvocationID.y);
+    if (f >= rllm_bound_y) return;
+    const float g = gate_pre[t, f];
+    const float sg = (1.0f / (1.0f + exp(-g)));
+    const float silu = (g * sg);
+    const float dsilu_dg = (sg * (1.0f + (g * (1.0f - sg))));
+    d_gate_pre[t, f] = ((d_ffn_act[t, f] * up_pre[t, f]) * dsilu_dg);
+    d_up_pre[t, f] = (d_ffn_act[t, f] * silu);

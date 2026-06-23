@@ -1,0 +1,74 @@
+// optimizes ("TransformerBlock.cc:207")
+// Attention score: dot = sum_d Q[i,d]*K[j,d], score = dot * scale.
+//
+// Optimization: z-partition the inner d-loop across z-threads.
+//   Phase 1 – each z-thread accumulates partial dot for its d-slice.
+//   Barrier.
+//   Phase 2 – z=0 reduces partial sums, applies scale, stores result.
+//
+// Workgroup for 2D kernels with reduction_chunks=8: local_size = (8, 8, 8).
+
+search
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int j = int(gl_GlobalInvocationID.y);
+    if (j >= rllm_bound_y) return;
+    float dot = 0.f;
+    for (const int d : limit<wildcard(DIM)>())
+    {
+        dot += (Q[i, d] * K[j, d]);
+    }
+    const float score = (dot * wildcard(scale));
+    attn_w_h[i, j] = score;
+
+replace
+    const int i = int(gl_GlobalInvocationID.x);
+    const int j = int(gl_GlobalInvocationID.y);
+
+    if (i >= rllm_bound_x)
+    {
+        barrier();
+        return;
+    }
+    if (j >= rllm_bound_y)
+    {
+        barrier();
+        return;
+    }
+
+    float dot = 0.f;
+
+    shared float rllm_reduction_result[1024];
+
+    const int rllm_reduction_chunk_size = (wildcard(DIM) / wildcard(reduction_chunks));
+    const int rllm_reduction_local_xy = ((int(gl_LocalInvocationID.y) * 8) + int(gl_LocalInvocationID.x));
+    const int rllm_reduction_slot_base = (rllm_reduction_local_xy * wildcard(reduction_chunks));
+
+    const int block_start_d = (int(gl_LocalInvocationID.z) * rllm_reduction_chunk_size);
+    const int block_end_d = min((block_start_d + rllm_reduction_chunk_size), active_seq_len);
+
+    for (int d = block_start_d; d < block_end_d; ++d)
+    {
+        dot += (Q[i, d] * K[j, d]);
+    }
+
+    const int rllm_reduction_slot = (rllm_reduction_slot_base + int(gl_LocalInvocationID.z));
+    rllm_reduction_result[rllm_reduction_slot] = dot;
+
+    barrier();
+
+    if (gl_LocalInvocationID.z == 0)
+    {
+        dot = 0.f;
+
+        for (int wi = 0; wi < wildcard(reduction_chunks); wi++)
+        {
+            const int rllm_reduction_accumulate_slot = (rllm_reduction_slot_base + wi);
+            dot += rllm_reduction_result[rllm_reduction_accumulate_slot];
+        }
+
+        const float score = (dot * wildcard(scale));
+        attn_w_h[i, j] = score;
+    }
+
+meta { reduction_chunks = 8 }

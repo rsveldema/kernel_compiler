@@ -1,0 +1,122 @@
+// optimizes ("TransformerBlock.cc:95")
+// RMS norm backward: two reductions (sq, dot) then element-wise dx update.
+//
+// Two-reduction z-partitioning:
+//   Phase 1 – each z-thread sums sq = sum x[t,i]^2 for its d-slice.
+//   Barrier.
+//   Phase 2 – z=0 reduces sq, computes inv = 1/sqrt(sq/fd + eps).
+//   Barrier.
+//   Phase 3 – each z-thread sums dot = sum dy[t,i]*x[t,i]*inv for its slice.
+//   Barrier.
+//   Phase 4 – z=0 reduces dot, computes dot_scaled = dot/fd.
+//   Barrier.
+//   Phase 5 – each z-thread writes dx[t,i] += inv*(dy[t,i] - x[t,i]*inv*dot_scaled).
+//
+// Workgroup for 1D kernels with reduction_chunks=8: local_size = (16, 1, 8).
+
+search
+    const int t = int(gl_GlobalInvocationID.x);
+    if (t >= rllm_bound_x) return;
+    constexpr float eps = 1e-6f;
+    float sq = 0.f;
+    for (const int i : limit<wildcard(DIM)>())
+    {
+        const float value = x[t, i];
+        sq += (value * value);
+    }
+    constexpr float fd = wildcard(DIM);
+    const float inv = (1.0f / sqrt(((sq / fd) + eps)));
+    float dot = 0.f;
+    for (const int i : limit<wildcard(DIM)>())
+    {
+        dot += ((dy[t, i] * x[t, i]) * inv);
+    }
+    dot /= fd;
+    for (const int i : limit<wildcard(DIM)>())
+        dx[t, i] += (inv * (dy[t, i] - ((x[t, i] * inv) * dot)));
+
+replace
+    const int t = int(gl_GlobalInvocationID.x);
+    const int lx = int(gl_LocalInvocationID.x);
+    const int lz = int(gl_LocalInvocationID.z);
+
+    shared float rllm_sq_reduction[128];
+    shared float rllm_inv_arr[16];
+    shared float rllm_dot_reduction[128];
+    shared float rllm_dot_scaled_arr[16];
+
+    constexpr float eps = 1e-6f;
+    constexpr float fd = wildcard(DIM);
+
+    const int rllm_reduction_chunk_size = (wildcard(DIM) / wildcard(reduction_chunks));
+    const int rllm_chunk_start = (lz * rllm_reduction_chunk_size);
+    const int rllm_chunk_end = (rllm_chunk_start + rllm_reduction_chunk_size);
+    const int rllm_slot = ((lx * wildcard(reduction_chunks)) + lz);
+
+    float sq = 0.f;
+    if (t < rllm_bound_x)
+    {
+        for (int i = rllm_chunk_start; i < rllm_chunk_end; ++i)
+        {
+            const float value = x[t, i];
+            sq += (value * value);
+        }
+    }
+    rllm_sq_reduction[rllm_slot] = sq;
+
+    barrier();
+
+    if (lz == 0)
+    {
+        if (t < rllm_bound_x)
+        {
+            float rllm_total_sq = 0.f;
+            for (int wi = 0; wi < wildcard(reduction_chunks); wi++)
+            {
+                rllm_total_sq += rllm_sq_reduction[((lx * wildcard(reduction_chunks)) + wi)];
+            }
+            rllm_inv_arr[lx] = (1.0f / sqrt(((rllm_total_sq / fd) + eps)));
+        }
+    }
+
+    barrier();
+
+    float dot = 0.f;
+    if (t < rllm_bound_x)
+    {
+        const float inv = rllm_inv_arr[lx];
+        for (int i = rllm_chunk_start; i < rllm_chunk_end; ++i)
+        {
+            dot += ((dy[t, i] * x[t, i]) * inv);
+        }
+    }
+    rllm_dot_reduction[rllm_slot] = dot;
+
+    barrier();
+
+    if (lz == 0)
+    {
+        if (t < rllm_bound_x)
+        {
+            float rllm_total_dot = 0.f;
+            for (int wi = 0; wi < wildcard(reduction_chunks); wi++)
+            {
+                rllm_total_dot += rllm_dot_reduction[((lx * wildcard(reduction_chunks)) + wi)];
+            }
+            rllm_dot_scaled_arr[lx] = (rllm_total_dot / fd);
+        }
+    }
+
+    barrier();
+
+    if (t < rllm_bound_x)
+    {
+        const float inv = rllm_inv_arr[lx];
+        const float dot_scaled = rllm_dot_scaled_arr[lx];
+        for (int i = rllm_chunk_start; i < rllm_chunk_end; ++i)
+        {
+            dx[t, i] += (inv * (dy[t, i] - ((x[t, i] * inv) * dot_scaled)));
+        }
+    }
+
+meta { reduction_chunks = 8 }

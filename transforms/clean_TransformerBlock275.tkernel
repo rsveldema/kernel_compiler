@@ -1,0 +1,24 @@
+// identity ("TransformerBlock.cc:275")
+// Attention output accumulation: attn_concat[i,d] += attn_w[i,j] * V[j,d].
+
+search
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int j = int(gl_GlobalInvocationID.y);
+    if (j >= rllm_bound_y) return;
+    const float w = attn_w_h[i, j];
+    for (const int d : limit<wildcard(DIM)>())
+    {
+        attn_concat[i, d] += (w * V[j, d]);
+    }
+
+replace
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int j = int(gl_GlobalInvocationID.y);
+    if (j >= rllm_bound_y) return;
+    const float w = attn_w_h[i, j];
+    for (const int d : limit<wildcard(DIM)>())
+    {
+        attn_concat[i, d] += (w * V[j, d]);
+    }

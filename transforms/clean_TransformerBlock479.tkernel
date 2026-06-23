@@ -1,0 +1,26 @@
+// identity ("TransformerBlock.cc:479")
+// d_Q computation: sum_j d_raw_h[i,j]*head_scale * K[j,d].
+
+search
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int d_head = int(gl_GlobalInvocationID.y);
+    if (d_head >= rllm_bound_y) return;
+    const int d = (hStart + int(d_head));
+    const float head_scale = wildcard(scale);
+    float sum_q = 0.f;
+    for (const int j : limit<16384>(0, inc(i)))
+        sum_q += ((d_raw_h[i, j] * head_scale) * K[j, d]);
+    d_Q[i, d] = sum_q;
+
+replace
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int d_head = int(gl_GlobalInvocationID.y);
+    if (d_head >= rllm_bound_y) return;
+    const int d = (hStart + int(d_head));
+    const float head_scale = wildcard(scale);
+    float sum_q = 0.f;
+    for (const int j : limit<16384>(0, inc(i)))
+        sum_q += ((d_raw_h[i, j] * head_scale) * K[j, d]);
+    d_Q[i, d] = sum_q;

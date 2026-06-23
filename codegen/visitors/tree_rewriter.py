@@ -18,11 +18,15 @@ from codegen.visitors.pattern_match_visitor import PatternMatchVisitor
 logger = logging.getLogger("tree_rewriter")
 if not logger.handlers:
     logger.setLevel(logging.DEBUG)
+    _fmt = logging.Formatter("%(asctime)s [%(levelname).1s]: %(message)s", datefmt="%H:%M:%S")
     _fh = logging.FileHandler("tree-rewrite.log", mode="w")
     _fh.setLevel(logging.DEBUG)
-    _fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
     _fh.setFormatter(_fmt)
     logger.addHandler(_fh)
+    _ch = logging.StreamHandler()
+    _ch.setLevel(logging.INFO)
+    _ch.setFormatter(_fmt)
+    logger.addHandler(_ch)
 
 
 def _stmt_label(stmt: Statement) -> str:
@@ -371,7 +375,7 @@ class Pattern:
         for i, stmt in enumerate(node.body_stmts):
             logger.info("    [%d] %s", i, _stmt_label(stmt))
 
-        print(f"TREE TRANSFORMED: {node.header}")
+        logger.info(f"TREE TRANSFORMED: {node.header}")
         node.tree_transformed = True
 
     def _clone_statement(self, statement: Statement) -> Statement:

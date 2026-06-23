@@ -1,0 +1,26 @@
+// identity ("TransformerBlock.cc:431")
+// Softmax backward: d_raw_h[i,j] = attn_w[i,j]*(d_scores_h[i,j] - row_dot).
+
+search
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int j = int(gl_GlobalInvocationID.y);
+    if (j >= rllm_bound_y) return;
+    float row_dot = 0.f;
+    for (const int k : limit<16384>(0, inc(i)))
+    {
+        row_dot += (d_scores_h[i, k] * attn_w_h[i, k]);
+    }
+    d_raw_h[i, j] = (attn_w_h[i, j] * (d_scores_h[i, j] - row_dot));
+
+replace
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int j = int(gl_GlobalInvocationID.y);
+    if (j >= rllm_bound_y) return;
+    float row_dot = 0.f;
+    for (const int k : limit<16384>(0, inc(i)))
+    {
+        row_dot += (d_scores_h[i, k] * attn_w_h[i, k]);
+    }
+    d_raw_h[i, j] = (attn_w_h[i, j] * (d_scores_h[i, j] - row_dot));

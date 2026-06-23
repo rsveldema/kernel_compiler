@@ -1,0 +1,38 @@
+// identity ("TransformerBlock.cc:137")
+// Softmax forward (in-place) over triangular attention weights row i.
+
+search
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    float max_val = x[i, 0];
+    for (const int j : limit<16384>(inc(0), inc(i)))
+        max_val = max(max_val, x[i, j]);
+    float sum_exp = 0.f;
+    for (const int j : limit<16384>(0, inc(i)))
+    {
+        x[i, j] = exp((x[i, j] - max_val));
+        sum_exp += x[i, j];
+    }
+    const float inv = (1.0f / sum_exp);
+    for (const int j : limit<16384>(0, inc(i)))
+        x[i, j] *= inv;
+    for (const int j : limit<16384>(inc(i), T))
+        x[i, j] = 0.f;
+
+replace
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    float max_val = x[i, 0];
+    for (const int j : limit<16384>(inc(0), inc(i)))
+        max_val = max(max_val, x[i, j]);
+    float sum_exp = 0.f;
+    for (const int j : limit<16384>(0, inc(i)))
+    {
+        x[i, j] = exp((x[i, j] - max_val));
+        sum_exp += x[i, j];
+    }
+    const float inv = (1.0f / sum_exp);
+    for (const int j : limit<16384>(0, inc(i)))
+        x[i, j] *= inv;
+    for (const int j : limit<16384>(inc(i), T))
+        x[i, j] = 0.f;
