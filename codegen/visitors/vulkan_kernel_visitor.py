@@ -676,14 +676,16 @@ class VulkanKernelVisitor(Visitor):
             )
             upper_bound = rhs
 
-        inc_var = node.increment_var if node.increment_var else node.loop_var_name
-        inc_op = node.increment_op if node.increment_op else "++"
+        inc_str = ""
+        if node.increment_op:
+            inc_var = node.increment_var if node.increment_var else node.loop_var_name
+            inc_str = f"{node.increment_op}{inc_var}"
 
         loop_type = self._glsl_type_name(node.loop_var_type) if node.loop_var_type else "int"
 
         lines.append(
             f"{ind}for ({loop_type} {node.loop_var_name} = {lower_bound}; "
-            f"{node.loop_var_name} < {upper_bound}; {inc_op}{inc_var}) {{"
+            f"{node.loop_var_name} < {upper_bound}; {inc_str}) {{"
         )
 
         for stmt in node.body_stmts:

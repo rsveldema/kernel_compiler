@@ -2,4 +2,4 @@ from unittest_offload_parfor_helper import parse_kernel
 
 
 def test_parse():
-    parse_kernel("offload_parfor_TransformerBlock_286.cc.kernel")
+    parse_kernel("offload_parfor_TransformerBlock_137.kernel")

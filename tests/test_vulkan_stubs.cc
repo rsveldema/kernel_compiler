@@ -476,6 +476,8 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath296_tiled_shared_cache_performance)
     VHostBuffer<kernel::RllmBuffer_A> host_a(get_session());
     VHostBuffer<kernel::RllmBuffer_B> host_b(get_session());
     VHostBuffer<kernel::RllmBuffer_C> host_c(get_session());
+    VHostBuffer<kernel::RllmBuffer_C> host_c_baseline(get_session());
+    VHostBuffer<kernel::RllmBuffer_C> host_c_transformed(get_session());
 
     std::memset(host_a.get(), 0, static_cast<size_t>(host_a.size()));
     std::memset(host_b.get(), 0, static_cast<size_t>(host_b.size()));
@@ -497,6 +499,11 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath296_tiled_shared_cache_performance)
     VDeviceBuffer<kernel::RllmBuffer_A> device_a(host_a);
     VDeviceBuffer<kernel::RllmBuffer_B> device_b(host_b);
     VDeviceBuffer<kernel::RllmBuffer_C> device_c(host_c);
+    VDeviceBuffer<kernel::RllmBuffer_C> device_c_baseline(host_c_baseline);
+    VDeviceBuffer<kernel::RllmBuffer_C> device_c_transformed(host_c_transformed);
+
+    std::memset(host_c_baseline.get(), 0, static_cast<size_t>(host_c_baseline.size()));
+    std::memset(host_c_transformed.get(), 0, static_cast<size_t>(host_c_transformed.size()));
 
     VulkanComputeContext context(get_session());
     device_a.write(context, host_a);
@@ -603,4 +610,22 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath296_tiled_shared_cache_performance)
               << ", baseline_best=" << best_baseline_gflops << " GFLOP/s"
               << ", transformed_best=" << best_transformed_gflops << " GFLOP/s"
               << " (" << measured_iterations << " measured iterations)\n";
+    // Correctness: dispatch both kernels once to separate buffers and compare
+    device_c_baseline.write(context, host_c_baseline);
+    device_c_transformed.write(context, host_c_transformed);
+    baseline_vecmath296.dispatch(context, rows, cols, device_a, device_b, device_c_baseline, baseline_push_constants);
+    vecmath296.dispatch(context, rows, cols, device_a, device_b, device_c_transformed, push_constants);
+    device_c_baseline.read(context, host_c_baseline);
+    device_c_transformed.read(context, host_c_transformed);
+
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t j = 0; j < cols; ++j) {
+            const uint32_t idx = kernel::C_Y * i + j;
+            const float baseline_val = host_c_baseline.get()->data[idx];
+            const float transformed_val = host_c_transformed.get()->data[idx];
+            EXPECT_NEAR(baseline_val, transformed_val, 1.0e-2f)
+                << "Output mismatch at [" << i << ", " << j << "]: baseline=" << baseline_val
+                << ", transformed=" << transformed_val;
+        }
+    }
 }
