@@ -1,0 +1,72 @@
+// optimizes ("vecmath.cc:342")
+// Single sum matmul: C[i,j] = A[i,k] * B[k,j] (B not transposed).
+
+search
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int j = int(gl_GlobalInvocationID.y);
+    if (j >= rllm_bound_y) return;
+
+    float sum = 0.f;
+    for (int l_idx = 0; l_idx < wildcard(N); ++l_idx)
+    {
+        const int k = int(l_idx);
+        const float term = (A[i, k] * B[k, j]);
+        OVERFLOW_CHECK_ADD(sum, term);
+        sum += term;
+    }
+    C[i, j] = sum;
+
+replace
+    const int i = int(gl_GlobalInvocationID.x);
+    const int j = int(gl_GlobalInvocationID.y);
+
+    if (i >= rllm_bound_x)
+    {
+        barrier();
+        return;
+    }
+    if (j >= rllm_bound_y)
+    {
+        barrier();
+        return;
+    }
+
+    float sum = 0.f;
+
+    shared float rllm_reduction_result[1024];
+
+    const int rllm_reduction_chunk_size = (wildcard(N) / wildcard(reduction_chunks));
+    const int rllm_reduction_local_xy = ((int(gl_LocalInvocationID.y) * 8) + int(gl_LocalInvocationID.x));
+    const int rllm_reduction_slot_base = (rllm_reduction_local_xy * wildcard(reduction_chunks));
+
+    const int block_start_i = (int(gl_LocalInvocationID.z) * rllm_reduction_chunk_size);
+    const int block_end_i = min((block_start_i + rllm_reduction_chunk_size), wildcard(N));
+
+    for (int l_idx = block_start_i; l_idx < block_end_i; ++l_idx)
+    {
+        const int k = int(l_idx);
+        const float term = (A[i, k] * B[k, j]);
+        OVERFLOW_CHECK_ADD(sum, term);
+        sum += term;
+    }
+
+    const int rllm_reduction_slot = (rllm_reduction_slot_base + int(gl_LocalInvocationID.z));
+    rllm_reduction_result[rllm_reduction_slot] = sum;
+
+    barrier();
+
+    if (gl_LocalInvocationID.z == 0)
+    {
+        sum = 0.f;
+
+        for (int wi = 0; wi < wildcard(reduction_chunks); wi++)
+        {
+            const int rllm_reduction_accumulate_slot = (rllm_reduction_slot_base + wi);
+            sum += rllm_reduction_result[rllm_reduction_accumulate_slot];
+        }
+
+        C[i, j] = sum;
+    }
+
+meta { reduction_chunks = 8 }

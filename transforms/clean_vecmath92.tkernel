@@ -1,0 +1,12 @@
+// optimizes ("vecmath.cc:92")
+// 1D copy: dst[d] = src[row, d].
+
+search
+    const int d = int(gl_GlobalInvocationID.x);
+    if (d >= rllm_bound_x) return;
+    dst[d] = src[row, d];
+
+replace
+    const int d = int(gl_GlobalInvocationID.x);
+    if (d >= rllm_bound_x) return;
+    dst[d] = src[row, d];

@@ -1,0 +1,12 @@
+// optimizes ("vecmath.cc:40")
+// 1D fill: dst[i] = value.
+
+search
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    dst[i] = value;
+
+replace
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    dst[i] = value;
