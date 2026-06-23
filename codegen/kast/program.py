@@ -28,6 +28,8 @@ class Program(AstNode):
         tile_size_y=1,
         tile_chunk_size=1,
         num_z_threads=1,
+        num_x_threads=1,
+        num_y_threads=1,
         # Set by perform_tiling() for workgroup partitioning
         workgroup_count=1,
         workgroup_size=1,
@@ -43,6 +45,8 @@ class Program(AstNode):
         self.tile_size_y = tile_size_y
         self.tile_chunk_size = tile_chunk_size
         self.num_z_threads = num_z_threads
+        self.num_x_threads = num_x_threads
+        self.num_y_threads = num_y_threads
         self.header = header
         # Loop variables from OFFLOAD_PARFOR_x_PARAM (e.g. ['i'] or ['i', 'j'])
         self.loop_vars = loop_vars or []

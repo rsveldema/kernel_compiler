@@ -839,7 +839,9 @@ class VulkanKernelVisitor(Visitor):
                 wg_x = self._to_str(wg.x_expr) if wg.x_expr else wg_x
                 wg_y = self._to_str(wg.y_expr) if wg.y_expr else wg_y
                 wg_z = self._to_str(wg.z_expr) if wg.z_expr else wg_z
-        if not found_explicit and node.space_dim >= 2 and node.tile_size_x > 1 and node.tile_size_y > 1:
+        if not found_explicit and node.space_dim >= 2 and node.num_x_threads > 1 and node.num_y_threads > 1:
+            wg_x, wg_y, wg_z = str(node.num_x_threads), str(node.num_y_threads), "1"
+        elif not found_explicit and node.space_dim >= 2 and node.tile_size_x > 1 and node.tile_size_y > 1:
             wg_x, wg_y, wg_z = str(node.tile_size_x), str(node.tile_size_y), "1"
         if node.reduction_chunks > 1:
             wg_z = str(node.reduction_chunks)
