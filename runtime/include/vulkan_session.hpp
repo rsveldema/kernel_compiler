@@ -1077,6 +1077,63 @@ public:
         dst.invalidate();
     }
 
+    /** Device-to-device copy: copy all bytes from `src` device buffer into this buffer. */
+    void copy_from(VulkanComputeContext& context, VBaseDeviceBuffer& src, VkDeviceSize count = VK_WHOLE_SIZE)
+    {
+        std::lock_guard<std::recursive_mutex> lock(context.mutex());
+        if (count == VK_WHOLE_SIZE)
+            count = src.size();
+        assert(count <= src.size());
+        assert(count <= size_);
+        copy_buffer(context.command_pool(), src.buf_, buf_, 0, 0, count);
+    }
+
+    /** Fill every byte of the device buffer with zero using vkCmdFillBuffer. */
+    void zero(VulkanComputeContext& context)
+    {
+        std::lock_guard<std::recursive_mutex> lock(context.mutex());
+        assert(size_ % 4 == 0);
+
+        VkCommandBuffer cmd_buf = VK_NULL_HANDLE;
+        VkCommandBufferAllocateInfo cai{};
+        cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cai.commandPool = context.command_pool();
+        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        check_vk(vkAllocateCommandBuffers(m_session.get_device(), &cai, &cmd_buf), "VBaseDeviceBuffer::zero alloc");
+
+        VkCommandBufferBeginInfo bbci{};
+        bbci.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bbci.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        check_vk(vkBeginCommandBuffer(cmd_buf, &bbci), "VBaseDeviceBuffer::zero begin");
+
+        vkCmdFillBuffer(cmd_buf, buf_, 0, VK_WHOLE_SIZE, 0u);
+
+        VkBufferMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.buffer = buf_;
+        barrier.offset = 0;
+        barrier.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cmd_buf,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 0, nullptr, 1, &barrier, 0, nullptr);
+
+        check_vk(vkEndCommandBuffer(cmd_buf), "VBaseDeviceBuffer::zero end");
+
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd_buf;
+        check_vk(vkQueueSubmit(m_session.get_queue(), 1, &si, VK_NULL_HANDLE), "VBaseDeviceBuffer::zero submit");
+        check_vk(vkDeviceWaitIdle(m_session.get_device()), "VBaseDeviceBuffer::zero wait");
+        vkFreeCommandBuffers(m_session.get_device(), context.command_pool(), 1, &cmd_buf);
+    }
+
 private:
     void copy_buffer(
         VkCommandPool cmd_pool,
