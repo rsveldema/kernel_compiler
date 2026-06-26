@@ -364,6 +364,90 @@ inline void ComputeKernelRegistry::logKernelRegistrationLocked(const AbstractKer
 }
 
 
+
+// ───────────── Work Queue support ───
+
+class VulkanQueue
+{
+public:
+    VulkanQueue(VulkanSession &session)
+        : m_session(session)
+    {
+        init_command_pool();
+    }
+
+    ~VulkanQueue()
+    {
+        if (m_cmd_buf != VK_NULL_HANDLE)
+        {
+            vkFreeCommandBuffers(get_device(), m_cmd_pool, 1, &m_cmd_buf);
+            m_cmd_buf = VK_NULL_HANDLE;
+        }
+        if (m_cmd_pool != VK_NULL_HANDLE)
+        {
+            vkDestroyCommandPool(get_device(), m_cmd_pool, nullptr);
+            m_cmd_pool = VK_NULL_HANDLE;
+        }
+    }
+
+    VkCommandPool command_pool() const { return m_cmd_pool; }
+
+    VkQueue get_queue() const { return m_queue; }
+    uint32_t get_queue_family_index() const { return m_queue_fi; }
+
+    /* Begin the command buffer (caller fills it in between begin/end) */
+    VkCommandBuffer begin_command_buffer()
+    {
+        m_mutex.lock();
+        VkCommandBufferBeginInfo bbci{};
+        bbci.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        check_vk(vkBeginCommandBuffer(m_cmd_buf, &bbci), "VkComputeSession cmd buf begin");
+        return m_cmd_buf;
+    }
+
+    /* Submit the command buffer and wait for completion. */
+    void submit_and_wait()
+    {
+        vkEndCommandBuffer(m_cmd_buf);
+
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &m_cmd_buf;
+        check_vk(vkQueueSubmit(get_queue(), 1, &si, VK_NULL_HANDLE), "VkComputeSession submit");
+        check_vk(vkDeviceWaitIdle(get_device()), "VkComputeSession wait idle");
+        check_vk(vkResetCommandPool(get_device(), m_cmd_pool, 0), "VkComputeSession reset cmd pool");
+        m_mutex.unlock();
+    }
+
+    std::recursive_mutex& mutex() { return m_mutex; }
+
+private:
+    VkQueue m_queue = VK_NULL_HANDLE;
+    uint32_t m_queue_fi = 0xFFFFFFFFu;
+    VkCommandPool   m_cmd_pool = VK_NULL_HANDLE;
+    VkCommandBuffer m_cmd_buf  = VK_NULL_HANDLE;
+
+    /* Create command pool and allocate one primary command buffer */
+    void init_command_pool()
+    {
+        VkCommandPoolCreateInfo cpci{};
+        cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        cpci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        cpci.queueFamilyIndex = m_session.get_queue_family_index();
+
+        check_vk(vkCreateCommandPool(get_device(), &cpci, nullptr, &m_cmd_pool), "VkComputeSession cmd pool");
+
+        VkCommandBufferAllocateInfo cai{};
+        cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cai.commandPool = m_cmd_pool;
+        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        check_vk(vkAllocateCommandBuffers(get_device(), &cai, &m_cmd_buf), "VkComputeSession cmd buf alloc");
+    }
+};
+
+
 // ───────────── VulkanTestBase fixture (creates instance + device) ───
 
 class VulkanSession
@@ -373,10 +457,13 @@ public:
         bool enable_cooperative_matrix2 = false,
         const char* preferred_device_name = nullptr);
 
+    VulkanSession(const VulkanSession&) = delete;
+    VulkanSession& operator = (const VulkanSession&) = delete;
+    VulkanSession(VulkanSession&&) = delete;
+    VulkanSession& operator = (VulkanSession&&) = delete;
+
     bool has_device() const { return m_instance != VK_NULL_HANDLE && m_device != VK_NULL_HANDLE; }
     VkDevice get_device() const { return m_device; }
-    VkQueue get_queue() const { return m_queue; }
-    uint32_t get_queue_family_index() const { return m_queue_fi; }
     VkPhysicalDevice get_phys_device() const { return m_phys_dev; }
     VkDeviceSize maxMemoryAllocationSize() const { return m_max_memory_allocation_size; }
     bool shader_buffer_float32_atomic_add_enabled() const { return m_shader_buffer_float32_atomic_add_enabled; }
@@ -397,6 +484,18 @@ public:
         }
     }
 
+    static constexpr size_t MAX_QUEUES = 16;
+
+    VulkanQueue& get_queue(size_t ix)
+    {
+        assert(ix < MAX_QUEUES);
+        while (ix >= m_queues.size())
+        {
+            m_queues.emplace_back(*this);
+        }
+        return m_queues[ix];
+    }
+
 protected:
     static bool device_name_contains(const char* device_name, const char* needle);
     bool has_device_extension(const char* name) const;
@@ -404,12 +503,12 @@ protected:
     VkInstance m_instance = VK_NULL_HANDLE;
     VkPhysicalDevice m_phys_dev = VK_NULL_HANDLE;
     VkDevice m_device = VK_NULL_HANDLE;
-    VkQueue m_queue = VK_NULL_HANDLE;
-    uint32_t m_queue_fi = 0xFFFFFFFFu;
     VkDeviceSize m_max_memory_allocation_size = 0;
     bool m_shader_buffer_float32_atomic_add_enabled = false;
     bool m_coopmat2_enabled = false;
     std::string m_coopmat2_unavailable_reason;
+
+    std::vector<VulkanQueue> m_queues;
 };
 
 // ───────────── VulkanComputeContext: bundles device ptr for RAII ────
@@ -469,7 +568,7 @@ private:
             plci.setLayoutCount = 1;
             plci.pSetLayouts = &m_dsl;
         }
-        
+
         if (push_size_bytes > 0)
         {
             VkPushConstantRange pcr{};
@@ -580,7 +679,6 @@ public:
     VulkanComputeContext(VulkanSession &session)
         : m_session(session)
     {
-        init_command_pool();
         allocate_descriptor_set(32);  /* default: up to 32 SSBOs */
     }
 
@@ -596,72 +694,13 @@ public:
             vkDestroyDescriptorPool(get_device(), m_desc_pool, nullptr);
             m_desc_pool = VK_NULL_HANDLE;
         }
-        if (m_cmd_buf != VK_NULL_HANDLE)
-        {
-            vkFreeCommandBuffers(get_device(), m_cmd_pool, 1, &m_cmd_buf);
-            m_cmd_buf = VK_NULL_HANDLE;
-        }
-        if (m_cmd_pool != VK_NULL_HANDLE)
-        {
-            vkDestroyCommandPool(get_device(), m_cmd_pool, nullptr);
-            m_cmd_pool = VK_NULL_HANDLE;
-        }
     }
 
     /* Return the allocated descriptor set for descriptor writes. */
     VkDescriptorSet desc_set() const { return m_desc_set; }
 
-public:
     VkDevice get_device() const { return m_session.get_device(); }
-    VkQueue get_queue() const { return m_session.get_queue(); }
-    VkCommandPool command_pool() const { return m_cmd_pool; }
 
-private:
-    /* Create command pool and allocate one primary command buffer */
-    void init_command_pool()
-    {
-        VkCommandPoolCreateInfo cpci{};
-        cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        cpci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-        cpci.queueFamilyIndex = m_session.get_queue_family_index();
-
-        check_vk(vkCreateCommandPool(get_device(), &cpci, nullptr, &m_cmd_pool), "VkComputeSession cmd pool");
-
-        VkCommandBufferAllocateInfo cai{};
-        cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        cai.commandPool = m_cmd_pool;
-        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        cai.commandBufferCount = 1;
-        check_vk(vkAllocateCommandBuffers(get_device(), &cai, &m_cmd_buf), "VkComputeSession cmd buf alloc");
-    }
-
-public:
-    /* Begin the command buffer (caller fills it in between begin/end) */
-    VkCommandBuffer begin_command_buffer()
-    {
-        m_mutex.lock();
-        VkCommandBufferBeginInfo bbci{};
-        bbci.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        check_vk(vkBeginCommandBuffer(m_cmd_buf, &bbci), "VkComputeSession cmd buf begin");
-        return m_cmd_buf;
-    }
-
-    /* Submit the command buffer and wait for completion. */
-    void submit_and_wait()
-    {
-        vkEndCommandBuffer(m_cmd_buf);
-
-        VkSubmitInfo si{};
-        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers = &m_cmd_buf;
-        check_vk(vkQueueSubmit(get_queue(), 1, &si, VK_NULL_HANDLE), "VkComputeSession submit");
-        check_vk(vkDeviceWaitIdle(get_device()), "VkComputeSession wait idle");
-        check_vk(vkResetCommandPool(get_device(), m_cmd_pool, 0), "VkComputeSession reset cmd pool");
-        m_mutex.unlock();
-    }
-
-    std::recursive_mutex& mutex() { return m_mutex; }
 
 private:
     /* Allocate a descriptor set from a per-context pool. */
@@ -704,8 +743,6 @@ private:
     }
 
     VulkanSession &m_session;
-    VkCommandPool   m_cmd_pool = VK_NULL_HANDLE;
-    VkCommandBuffer m_cmd_buf  = VK_NULL_HANDLE;
     VkDescriptorPool m_desc_pool = VK_NULL_HANDLE;
     VkDescriptorSet  m_desc_set  = VK_NULL_HANDLE;
     std::recursive_mutex m_mutex;
