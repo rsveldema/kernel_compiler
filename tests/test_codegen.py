@@ -370,6 +370,15 @@ END_PROGRAM
     assert "out[i] = scores[(((i * (i + 1)) / 2) + j)];" in shader
 
 
+def test_vulkan_lower_triangular_parfor_guards_upper_triangle():
+    program = parse_kernel("offload_parfor_TransformerBlock_440.kernel")
+    program = resolve_array_indices(program)
+
+    shader = program.accept(VulkanKernelVisitor())
+
+    assert "if (j > i) return;" in shader
+
+
 def test_vulkan_preserves_if_comparison_operator():
     program = parse(
         """

@@ -150,6 +150,7 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
         {
             found = true;
             m_queue_fi = i;
+            m_queue_count = std::min<size_t>(MAX_QUEUES, std::max<uint32_t>(1, qfps[i].queueCount));
             break;
         }
     }
@@ -160,12 +161,12 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
         std::abort();
     }
 
-    float prio = 1.0f;
+    std::vector<float> prios(m_queue_count, 1.0f);
     VkDeviceQueueCreateInfo dqi{};
     dqi.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
     dqi.queueFamilyIndex = m_queue_fi;
-    dqi.queueCount = 1;
-    dqi.pQueuePriorities = &prio;
+    dqi.queueCount = static_cast<uint32_t>(m_queue_count);
+    dqi.pQueuePriorities = prios.data();
 
     std::vector<const char*> device_extensions;
     void* device_pnext = nullptr;
@@ -291,6 +292,9 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
         return;
     }
 
+    m_queues.reserve(m_queue_count);
+    for (size_t i = 0; i < m_queue_count; ++i)
+        m_queues.emplace_back(*this, i);
 }
 
 

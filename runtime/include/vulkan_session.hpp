@@ -518,9 +518,11 @@ public:
     bool cooperative_matrix2_enabled() const { return m_coopmat2_enabled; }
     const std::string& cooperative_matrix2_unavailable_reason() const { return m_coopmat2_unavailable_reason; }
     uint32_t get_queue_family_index() const { return m_queue_fi; }
+    size_t queue_count() const { return m_queue_count; }
 
     ~VulkanSession()
     {
+        m_queues.clear();
         if (m_device)
         {
             vkDestroyDevice(m_device, nullptr);
@@ -538,10 +540,8 @@ public:
     VulkanQueue& get_queue(size_t ix)
     {
         assert(ix < MAX_QUEUES);
-        while (ix >= m_queues.size())
-        {
-            m_queues.emplace_back(*this, m_queues.size());
-        }
+        assert(!m_queues.empty());
+        ix %= m_queues.size();
         return m_queues[ix];
     }
 
@@ -557,6 +557,7 @@ protected:
     bool m_shader_buffer_float32_atomic_add_enabled = false;
     bool m_coopmat2_enabled = false;
     std::string m_coopmat2_unavailable_reason;
+    size_t m_queue_count = 1;
 
     std::vector<VulkanQueue> m_queues;
 };
