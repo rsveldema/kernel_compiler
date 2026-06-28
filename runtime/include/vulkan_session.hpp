@@ -379,13 +379,12 @@ public:
     VkDevice get_device() const;
     VkQueue get_queue() const { return m_queue; }
 
-    /* Begin the command buffer (caller fills it in between begin/end) */
-    VkCommandBuffer begin_command_buffer()
+    void wait(const char* label = "VkComputeSession queue wait idle")
     {
-        VkCommandBufferBeginInfo bbci{};
-        bbci.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        check_vk(vkBeginCommandBuffer(m_cmd_buf, &bbci), "VkComputeSession cmd buf begin");
-        return m_cmd_buf;
+        check_vk(vkQueueWaitIdle(get_queue()), label);
+        release_pending_resources();
+        if (m_cmd_pool != VK_NULL_HANDLE)
+            check_vk(vkResetCommandPool(get_device(), m_cmd_pool, 0), "VkComputeSession reset cmd pool");
     }
 
     VkCommandBuffer get_cmd_buffer() const {
@@ -393,19 +392,28 @@ public:
         return m_cmd_buf;
     }
 
-
-    /* Submit the command buffer and wait for completion. */
-    void submit_and_wait()
+    VkCommandBuffer allocate_command_buffer()
     {
-        vkEndCommandBuffer(m_cmd_buf);
+        VkCommandBuffer cmd_buf = VK_NULL_HANDLE;
+        VkCommandBufferAllocateInfo cai{};
+        cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cai.commandPool = m_cmd_pool;
+        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        check_vk(vkAllocateCommandBuffers(get_device(), &cai, &cmd_buf), "VkComputeSession cmd buf alloc");
+        return cmd_buf;
+    }
 
-        VkSubmitInfo si{};
-        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers = &m_cmd_buf;
-        check_vk(vkQueueSubmit(get_queue(), 1, &si, VK_NULL_HANDLE), "VkComputeSession submit");
-        check_vk(vkDeviceWaitIdle(get_device()), "VkComputeSession wait idle");
-        check_vk(vkResetCommandPool(get_device(), m_cmd_pool, 0), "VkComputeSession reset cmd pool");
+    void defer_command_buffer(VkCommandBuffer cmd_buf)
+    {
+        if (cmd_buf != VK_NULL_HANDLE)
+            m_pending_cmd_bufs.push_back(cmd_buf);
+    }
+
+    void defer_descriptor_pool(VkDescriptorPool desc_pool)
+    {
+        if (desc_pool != VK_NULL_HANDLE)
+            m_pending_desc_pools.push_back(desc_pool);
     }
 
 private:
@@ -414,9 +422,27 @@ private:
     VkQueue m_queue = VK_NULL_HANDLE;
     VkCommandPool   m_cmd_pool = VK_NULL_HANDLE;
     VkCommandBuffer m_cmd_buf  = VK_NULL_HANDLE;
+    std::vector<VkCommandBuffer> m_pending_cmd_bufs;
+    std::vector<VkDescriptorPool> m_pending_desc_pools;
 
     /* Create command pool and allocate one primary command buffer */
     void init_command_pool();
+
+    void release_pending_resources()
+    {
+        if (!m_pending_cmd_bufs.empty())
+        {
+            vkFreeCommandBuffers(
+                get_device(),
+                m_cmd_pool,
+                static_cast<uint32_t>(m_pending_cmd_bufs.size()),
+                m_pending_cmd_bufs.data());
+            m_pending_cmd_bufs.clear();
+        }
+        for (VkDescriptorPool desc_pool : m_pending_desc_pools)
+            vkDestroyDescriptorPool(get_device(), desc_pool, nullptr);
+        m_pending_desc_pools.clear();
+    }
 };
 
 
@@ -1085,6 +1111,7 @@ public:
         else
             assert(count <= size_ - src_offset);
         assert(count <= dst.size() - dst_offset);
+        queue.wait("VBaseDeviceBuffer::read pre-copy queue wait idle");
         copy_buffer(queue, queue.command_pool(), buf_, dst.vk_buffer(), src_offset, dst_offset, count);
         dst.invalidate();
     }
@@ -1103,8 +1130,59 @@ public:
     void zero(VulkanQueue& queue)
     {
         assert(size_ % 4 == 0);
-        auto cmd_buf = queue.get_cmd_buffer();
+        auto cmd_buf = queue.allocate_command_buffer();
+
+        VkCommandBufferBeginInfo bbci{};
+        bbci.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bbci.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        check_vk(vkBeginCommandBuffer(cmd_buf, &bbci), "VBaseDeviceBuffer::zero cmd buf begin");
+
+        VkBufferMemoryBarrier before_fill{};
+        before_fill.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        before_fill.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        before_fill.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        before_fill.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        before_fill.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        before_fill.buffer = buf_;
+        before_fill.offset = 0;
+        before_fill.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(
+            cmd_buf,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            0, nullptr,
+            1, &before_fill,
+            0, nullptr);
+
         vkCmdFillBuffer(cmd_buf, buf_, 0, VK_WHOLE_SIZE, 0u);
+
+        VkBufferMemoryBarrier after_fill{};
+        after_fill.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        after_fill.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        after_fill.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        after_fill.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        after_fill.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        after_fill.buffer = buf_;
+        after_fill.offset = 0;
+        after_fill.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(
+            cmd_buf,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            0, nullptr,
+            1, &after_fill,
+            0, nullptr);
+
+        check_vk(vkEndCommandBuffer(cmd_buf), "VBaseDeviceBuffer::zero cmd buf end");
+
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd_buf;
+        check_vk(vkQueueSubmit(queue.get_queue(), 1, &si, VK_NULL_HANDLE), "VBaseDeviceBuffer::zero submit");
+        queue.defer_command_buffer(cmd_buf);
     }
 
 private:
@@ -1229,7 +1307,7 @@ private:
         si.commandBufferCount = 1;
         si.pCommandBuffers = &cmd_buf;
         check_vk(vkQueueSubmit(queue.get_queue(), 1, &si, VK_NULL_HANDLE), "VBaseDeviceBuffer::copy submit");
-        check_vk(vkDeviceWaitIdle(m_session.get_device()), "VBaseDeviceBuffer::copy wait idle");
+        queue.wait("VBaseDeviceBuffer::copy queue wait idle");
 
         vkFreeCommandBuffers(m_session.get_device(), cmd_pool, 1, &cmd_buf);
     }

@@ -53,47 +53,6 @@ static void write_multi_arg_descriptors(
 }
 #endif
 
-#if 0
-static double dispatch_multi_arg_once(
-    VulkanComputeKernel& kernel,
-    VulkanSession& session,
-    VBaseDeviceBuffer& c_buf,
-    VBaseHostBuffer& zero_c,
-    const VulkanDimension& dims)
-{
-    VulkanComputeContext ctx(session);
-    c_buf.write(ctx, zero_c);
-
-    auto cb = ctx.begin_command_buffer();
-    const auto start = std::chrono::steady_clock::now();
-    kernel.dispatch(cb, nullptr, 0, dims);
-    ctx.submit_and_wait();
-    const auto end = std::chrono::steady_clock::now();
-    return std::chrono::duration<double, std::milli>(end - start).count();
-}
-#endif
-
-#if 0
-static double dispatch_raw_kernel_once(
-    VulkanComputeKernel& kernel,
-    VulkanSession& session,
-    VBaseDeviceBuffer& c_buf,
-    VBaseHostBuffer& initial_c,
-    const VulkanDimension& dims,
-    void* push_constants,
-    size_t push_constants_size)
-{
-    VulkanComputeContext ctx(session);
-    c_buf.write(ctx, initial_c);
-
-    auto cb = ctx.begin_command_buffer();
-    const auto start = std::chrono::steady_clock::now();
-    kernel.dispatch(cb, push_constants, push_constants_size, dims);
-    ctx.submit_and_wait();
-    const auto end = std::chrono::steady_clock::now();
-    return std::chrono::duration<double, std::milli>(end - start).count();
-}
-#endif
 
 template <typename T>
 static std::vector<float> read_float_buffer(VulkanComputeContext& context, VDeviceBuffer<T>& buf, VHostBuffer<T>& host)

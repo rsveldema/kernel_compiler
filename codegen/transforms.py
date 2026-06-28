@@ -157,6 +157,10 @@ def _extract_grid_name_from_expr(expr_tree):
     for child in expr_tree.children:
         if isinstance(child, Tree) and child.data == "base_expr":
             for sub in child.children:
+                if isinstance(sub, Tree) and sub.data == "field_access":
+                    for field_child in sub.children:
+                        if _is_token(field_child) and field_child.type == "IDENT":
+                            return field_child.value
                 if isinstance(sub, Tree) and sub.data == "lhs":
                     lhs_children = sub.children
                     if lhs_children:
@@ -182,6 +186,19 @@ def _find_expression_tree(space_tree):
     """Find the first expression child in a parfor_space tree (works for 1D)."""
     trees = _find_expression_trees(space_tree)
     return trees[0] if trees else None
+
+
+def _find_dispatch_expression_tree(space_tree):
+    """Find the expression that describes the dispatch extent.
+
+    Queue-aware parfor macros parse the queue argument as an expression, so the
+    dispatch extent is the last expression before the parameter list for normal
+    parfor spaces.
+    """
+    trees = _find_expression_trees(space_tree)
+    if not trees:
+        return None
+    return trees[-1]
 
 
 def _extract_expression_name(expr_tree):
@@ -238,19 +255,23 @@ def extract_limit_expr(space_tree):
         return None
 
     if space_tree.data in {"parfor_2d_triangular_param", "parfor_2d_upper_triangular_param"}:
-        upper = transform_expression(expr_trees[0])
-        raw_name = _extract_expression_name(expr_trees[0])
+        upper_tree = expr_trees[-1]
+        upper = transform_expression(upper_tree)
+        raw_name = _extract_expression_name(upper_tree)
         kind = "upper" if space_tree.data == "parfor_2d_upper_triangular_param" else "lower"
         return (Number(0), upper, ["0", raw_name], kind)
 
-    if len(expr_trees) == 2:
-        # Triangular case: two bounds (lower and upper)
-        lower = transform_expression(expr_trees[0])
-        upper = transform_expression(expr_trees[1])
-        raw_names = [_extract_expression_name(et) for et in expr_trees]
+    if space_tree.data == "parfor_3d_triangular_param" and len(expr_trees) >= 3:
+        lower_tree = expr_trees[-2]
+        upper_tree = expr_trees[-1]
+        lower = transform_expression(lower_tree)
+        upper = transform_expression(upper_tree)
+        raw_names = [_extract_expression_name(lower_tree), _extract_expression_name(upper_tree)]
         return (lower, upper, raw_names, "lower")
 
-    expr_tree = expr_trees[0]
+    expr_tree = _find_dispatch_expression_tree(space_tree)
+    if expr_tree is None:
+        return None
 
     for child in expr_tree.children:
         if isinstance(child, Tree) and child.data == "limit_expr":
@@ -1734,13 +1755,12 @@ def transform(t: Tree) -> Program:
 
     if p.lower_bound_expr is None:
         if p.space_dim >= 2:
-            for c in t.children[1].children:
-                if isinstance(c, Tree) and c.data == "expression":
-                    p.grid_name = _extract_grid_name_from_expr(c)
-                    break
+            expr_tree = _find_dispatch_expression_tree(t.children[1])
+            if expr_tree is not None:
+                p.grid_name = _extract_grid_name_from_expr(expr_tree)
 
     if p.lower_bound_expr is None:
-        expr_tree = _find_expression_tree(t.children[1])
+        expr_tree = _find_dispatch_expression_tree(t.children[1])
         if expr_tree is not None:
             p.dispatch_size_expr = transform_expression(expr_tree)
 

@@ -2,6 +2,7 @@ from pathlib import Path
 import ast as py_ast
 import copy
 import operator
+import os
 import re
 
 from lark import Tree
@@ -17,16 +18,20 @@ from codegen.visitors.pattern_match_visitor import PatternMatchVisitor
 
 logger = logging.getLogger("tree_rewriter")
 if not logger.handlers:
-    logger.setLevel(logging.DEBUG)
+    _level_name = os.environ.get("RLLM_TREE_REWRITER_LOG_LEVEL", "WARNING").upper()
+    _level = getattr(logging, _level_name, logging.WARNING)
+    logger.setLevel(_level)
     _fmt = logging.Formatter("%(asctime)s [%(levelname).1s]: %(message)s", datefmt="%H:%M:%S")
-    _fh = logging.FileHandler("tree-rewrite.log", mode="w")
-    _fh.setLevel(logging.DEBUG)
-    _fh.setFormatter(_fmt)
-    logger.addHandler(_fh)
+    if _level <= logging.DEBUG:
+        _fh = logging.FileHandler("tree-rewrite.log", mode="w")
+        _fh.setLevel(logging.DEBUG)
+        _fh.setFormatter(_fmt)
+        logger.addHandler(_fh)
     _ch = logging.StreamHandler()
-    _ch.setLevel(logging.INFO)
+    _ch.setLevel(_level)
     _ch.setFormatter(_fmt)
     logger.addHandler(_ch)
+
 
 
 def _stmt_label(stmt: Statement) -> str:
@@ -140,10 +145,6 @@ class Pattern:
                          pattern_name, _expr_label(self.constraints))
 
     def _load_meta_from_text(self, text: str) -> None:
-        match = re.search(r'\boptimizes\s*\(\s*"([^"]+)"\s*\)', text)
-        if match:
-            self.target_header = match.group(1)
-
         meta_text = self._extract_meta_block(text)
         if meta_text is None:
             logger.debug("  No meta block found in text")
@@ -423,11 +424,17 @@ class Pattern:
 
 
 class PatternStore:
+    _shared_patterns: dict[str, Pattern] | None = None
+
     def __init__(self):
-        self.patterns = {}
+        self.patterns: dict[str, Pattern] = {}
         self.init()
 
     def init(self):
+        if PatternStore._shared_patterns is not None:
+            self.patterns = PatternStore._shared_patterns
+            return
+
         transforms_dir = Path(__file__).resolve().parents[2] / "transforms"
         self.patterns.clear()
 
@@ -452,6 +459,7 @@ class PatternStore:
 
         logger.info("=== Loaded %d pattern(s) into store: %s ===",
                      len(self.patterns), list(self.patterns.keys()))
+        PatternStore._shared_patterns = self.patterns
 
 
 class TreeRewriter(visitor.Visitor):
@@ -473,10 +481,11 @@ class TreeRewriter(visitor.Visitor):
         logger.info("=== TreeRewriter.visit_program: %s (%d body statements) ===",
                      node.header, len(node.body_stmts))
         logger.info("  Body statement types: %s", [_stmt_label(s) for s in node.body_stmts])
-        logger.info("  Available patterns: %s", list(self.pattern_store.patterns.keys()))
+        patterns = self.pattern_store.patterns
+        logger.info("  Available patterns: %s", list(patterns.keys()))
 
         applied_any = False
-        for pname, pattern in self.pattern_store.patterns.items():
+        for pname, pattern in patterns.items():
             logger.info("--- Trying pattern '%s' ---", pname)
             logger.info("  Pattern: search=%d, replace=%d", len(pattern.search), len(pattern.replace))
             if pattern.constraints:
