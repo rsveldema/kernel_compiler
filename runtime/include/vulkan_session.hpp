@@ -1164,7 +1164,6 @@ public:
         else
             assert(count <= size_ - src_offset);
         assert(count <= dst.size() - dst_offset);
-        queue.wait("VBaseDeviceBuffer::read pre-copy queue wait idle");
         copy_buffer(queue, queue.command_pool(), buf_, dst.vk_buffer(), src_offset, dst_offset, count);
         dst.invalidate();
     }

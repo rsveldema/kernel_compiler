@@ -1073,25 +1073,6 @@ class VulkanKernelVisitor(Visitor):
         old_indent = self._indent_level
         self._indent_level += 1
 
-        declared_loop_vars = set()
-        triangular_guard_emitted = False
-
-        def maybe_emit_triangular_guard_after(stmt) -> None:
-            nonlocal triangular_guard_emitted
-            if triangular_guard_emitted or not is_triangular or len(node.loop_vars) < 2:
-                return
-            if not isinstance(stmt, Declaration):
-                return
-            if not all(var in declared_loop_vars for var in node.loop_vars[-2:]):
-                return
-            row_var = node.loop_vars[-2]
-            col_var = node.loop_vars[-1]
-            if triangular_kind == "upper":
-                self._emit(f"if ({row_var} > {col_var}) return;")
-            else:
-                self._emit(f"if ({col_var} > {row_var}) return;")
-            triangular_guard_emitted = True
-
         for stmt in node.body_stmts:
             if isinstance(stmt, SharedDecl):
                 continue
@@ -1099,9 +1080,6 @@ class VulkanKernelVisitor(Visitor):
                 result = stmt.accept(self)
                 if isinstance(result, str):
                     self._emit(result.rstrip())
-            if isinstance(stmt, Declaration) and stmt.name in node.loop_vars:
-                declared_loop_vars.add(stmt.name)
-                maybe_emit_triangular_guard_after(stmt)
 
         self._indent_level = old_indent
         self._pop()
