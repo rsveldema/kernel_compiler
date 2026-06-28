@@ -17,7 +17,6 @@
 #include <cstring>
 #include <fstream>
 #include <string>
-#include <mutex>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -72,7 +71,6 @@ public:
 
     void registerKernel(AbstractKernel& kernel)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
         if (std::find(m_kernels.begin(), m_kernels.end(), &kernel) == m_kernels.end())
         {
             m_kernels.push_back(&kernel);
@@ -91,7 +89,6 @@ public:
     std::vector<VStatistics> getStatistics(int top_users)
     {
         std::vector<VStatistics> result;
-        std::lock_guard<std::mutex> lock(m_mutex);
         result.reserve(m_kernels.size());
         for (const auto* kernel : m_kernels)
             result.push_back(statisticsFor(*kernel));
@@ -133,7 +130,6 @@ private:
     void logKernelRegistrationLocked(const AbstractKernel& kernel);
     bool registrationWasLoggedLocked(const AbstractKernel& kernel) const;
 
-    std::mutex m_mutex;
     std::vector<AbstractKernel*> m_kernels;
     std::vector<std::string> m_logged_kernel_names;
     std::string m_registration_log_filename;
@@ -222,27 +218,23 @@ public:
 
     void recordHostToDevice(size_t bytes)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
         ++m_statistics.host_to_device;
         m_statistics.host_to_device_bytes += bytes;
     }
 
     void recordDeviceToHost(size_t bytes)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
         ++m_statistics.device_to_host;
         m_statistics.device_to_host_bytes += bytes;
     }
 
     void resetStatistics()
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
         m_statistics = {};
     }
 
     VStatistics statistics() const
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
         VStatistics stats = m_statistics;
         stats.kernel_name = m_kernel_name;
         return stats;
@@ -253,7 +245,6 @@ private:
     KernelDimension m_dimension;
     KernelType m_type;
     std::string m_generated_descriptor;
-    mutable std::mutex m_mutex;
     VStatistics m_statistics;
 };
 
@@ -287,7 +278,6 @@ inline void ComputeKernelRegistry::recordHostToDevice(std::string_view kernel_na
     if (kernel_name.empty())
         return;
 
-    std::lock_guard<std::mutex> lock(m_mutex);
     for (auto* kernel : m_kernels)
     {
         if (kernel->kernelName() == kernel_name)
@@ -303,7 +293,6 @@ inline void ComputeKernelRegistry::recordDeviceToHost(std::string_view kernel_na
     if (kernel_name.empty())
         return;
 
-    std::lock_guard<std::mutex> lock(m_mutex);
     for (auto* kernel : m_kernels)
     {
         if (kernel->kernelName() == kernel_name)
@@ -316,14 +305,12 @@ inline void ComputeKernelRegistry::recordDeviceToHost(std::string_view kernel_na
 
 inline void ComputeKernelRegistry::resetStatistics()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
     for (auto* kernel : m_kernels)
         kernel->resetStatistics();
 }
 
 inline void ComputeKernelRegistry::enableRegistrationLog(const std::string& filename)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
     m_registration_log_filename = filename;
     m_logged_kernel_names.clear();
 
@@ -367,14 +354,12 @@ inline void ComputeKernelRegistry::logKernelRegistrationLocked(const AbstractKer
 
 // ───────────── Work Queue support ───
 
+class VulkanSession;
+
 class VulkanQueue
 {
 public:
-    VulkanQueue(VulkanSession &session)
-        : m_session(session)
-    {
-        init_command_pool();
-    }
+    VulkanQueue(VulkanSession &session, size_t index);
 
     ~VulkanQueue()
     {
@@ -391,19 +376,23 @@ public:
     }
 
     VkCommandPool command_pool() const { return m_cmd_pool; }
-
+    VkDevice get_device() const;
     VkQueue get_queue() const { return m_queue; }
-    uint32_t get_queue_family_index() const { return m_queue_fi; }
 
     /* Begin the command buffer (caller fills it in between begin/end) */
     VkCommandBuffer begin_command_buffer()
     {
-        m_mutex.lock();
         VkCommandBufferBeginInfo bbci{};
         bbci.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         check_vk(vkBeginCommandBuffer(m_cmd_buf, &bbci), "VkComputeSession cmd buf begin");
         return m_cmd_buf;
     }
+
+    VkCommandBuffer get_cmd_buffer() const {
+        assert(m_cmd_buf != VK_NULL_HANDLE);
+        return m_cmd_buf;
+    }
+
 
     /* Submit the command buffer and wait for completion. */
     void submit_and_wait()
@@ -417,34 +406,17 @@ public:
         check_vk(vkQueueSubmit(get_queue(), 1, &si, VK_NULL_HANDLE), "VkComputeSession submit");
         check_vk(vkDeviceWaitIdle(get_device()), "VkComputeSession wait idle");
         check_vk(vkResetCommandPool(get_device(), m_cmd_pool, 0), "VkComputeSession reset cmd pool");
-        m_mutex.unlock();
     }
 
-    std::recursive_mutex& mutex() { return m_mutex; }
-
 private:
+    VulkanSession &m_session;
+
     VkQueue m_queue = VK_NULL_HANDLE;
-    uint32_t m_queue_fi = 0xFFFFFFFFu;
     VkCommandPool   m_cmd_pool = VK_NULL_HANDLE;
     VkCommandBuffer m_cmd_buf  = VK_NULL_HANDLE;
 
     /* Create command pool and allocate one primary command buffer */
-    void init_command_pool()
-    {
-        VkCommandPoolCreateInfo cpci{};
-        cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        cpci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-        cpci.queueFamilyIndex = m_session.get_queue_family_index();
-
-        check_vk(vkCreateCommandPool(get_device(), &cpci, nullptr, &m_cmd_pool), "VkComputeSession cmd pool");
-
-        VkCommandBufferAllocateInfo cai{};
-        cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        cai.commandPool = m_cmd_pool;
-        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        cai.commandBufferCount = 1;
-        check_vk(vkAllocateCommandBuffers(get_device(), &cai, &m_cmd_buf), "VkComputeSession cmd buf alloc");
-    }
+    void init_command_pool();
 };
 
 
@@ -469,6 +441,7 @@ public:
     bool shader_buffer_float32_atomic_add_enabled() const { return m_shader_buffer_float32_atomic_add_enabled; }
     bool cooperative_matrix2_enabled() const { return m_coopmat2_enabled; }
     const std::string& cooperative_matrix2_unavailable_reason() const { return m_coopmat2_unavailable_reason; }
+    uint32_t get_queue_family_index() const { return m_queue_fi; }
 
     ~VulkanSession()
     {
@@ -491,7 +464,7 @@ public:
         assert(ix < MAX_QUEUES);
         while (ix >= m_queues.size())
         {
-            m_queues.emplace_back(*this);
+            m_queues.emplace_back(*this, m_queues.size());
         }
         return m_queues[ix];
     }
@@ -501,6 +474,7 @@ protected:
     bool has_device_extension(const char* name) const;
 
     VkInstance m_instance = VK_NULL_HANDLE;
+    uint32_t m_queue_fi = 0xFFFFFFFFu;
     VkPhysicalDevice m_phys_dev = VK_NULL_HANDLE;
     VkDevice m_device = VK_NULL_HANDLE;
     VkDeviceSize m_max_memory_allocation_size = 0;
@@ -510,6 +484,10 @@ protected:
 
     std::vector<VulkanQueue> m_queues;
 };
+
+
+inline VkDevice VulkanQueue::get_device() const { return m_session.get_device(); }
+
 
 // ───────────── VulkanComputeContext: bundles device ptr for RAII ────
 
@@ -745,7 +723,6 @@ private:
     VulkanSession &m_session;
     VkDescriptorPool m_desc_pool = VK_NULL_HANDLE;
     VkDescriptorSet  m_desc_set  = VK_NULL_HANDLE;
-    std::recursive_mutex m_mutex;
 };
 
 static inline uint32_t find_mem_type(VkPhysicalDevice pdev, uint32_t type_filter, VkMemoryPropertyFlags props)
@@ -1086,9 +1063,8 @@ public:
     VkDeviceSize size() const { return size_; }
     uint32_t mem_type_idx() const { return mem_type_idx_; }
 
-    void write(VulkanComputeContext& context, VBaseHostBuffer& src, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
+    void write(VulkanQueue& queue, VBaseHostBuffer& src, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
     {
-        std::lock_guard<std::recursive_mutex> lock(context.mutex());
         assert(src_offset <= src.size());
         assert(dst_offset <= size_);
         if (count == VK_WHOLE_SIZE)
@@ -1097,12 +1073,11 @@ public:
             assert(count <= src.size() - src_offset);
         assert(count <= size_ - dst_offset);
         src.flush();
-        copy_buffer(context.command_pool(), src.vk_buffer(), buf_, src_offset, dst_offset, count);
+        copy_buffer(queue, queue.command_pool(), src.vk_buffer(), buf_, src_offset, dst_offset, count);
     }
 
-    void read(VulkanComputeContext& context, VBaseHostBuffer& dst, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
+    void read(VulkanQueue& queue, VBaseHostBuffer& dst, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
     {
-        std::lock_guard<std::recursive_mutex> lock(context.mutex());
         assert(src_offset <= size_);
         assert(dst_offset <= dst.size());
         if (count == VK_WHOLE_SIZE)
@@ -1110,69 +1085,30 @@ public:
         else
             assert(count <= size_ - src_offset);
         assert(count <= dst.size() - dst_offset);
-        copy_buffer(context.command_pool(), buf_, dst.vk_buffer(), src_offset, dst_offset, count);
+        copy_buffer(queue, queue.command_pool(), buf_, dst.vk_buffer(), src_offset, dst_offset, count);
         dst.invalidate();
     }
 
     /** Device-to-device copy: copy all bytes from `src` device buffer into this buffer. */
-    void copy_from(VulkanComputeContext& context, VBaseDeviceBuffer& src, VkDeviceSize count = VK_WHOLE_SIZE)
+    void copy_from(VulkanQueue& queue, VBaseDeviceBuffer& src, VkDeviceSize count = VK_WHOLE_SIZE)
     {
-        std::lock_guard<std::recursive_mutex> lock(context.mutex());
         if (count == VK_WHOLE_SIZE)
             count = src.size();
         assert(count <= src.size());
         assert(count <= size_);
-        copy_buffer(context.command_pool(), src.buf_, buf_, 0, 0, count);
+        copy_buffer(queue, queue.command_pool(), src.buf_, buf_, 0, 0, count);
     }
 
     /** Fill every byte of the device buffer with zero using vkCmdFillBuffer. */
-    void zero(VulkanComputeContext& context)
+    void zero(VulkanQueue& queue)
     {
-        std::lock_guard<std::recursive_mutex> lock(context.mutex());
         assert(size_ % 4 == 0);
-
-        VkCommandBuffer cmd_buf = VK_NULL_HANDLE;
-        VkCommandBufferAllocateInfo cai{};
-        cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        cai.commandPool = context.command_pool();
-        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        cai.commandBufferCount = 1;
-        check_vk(vkAllocateCommandBuffers(m_session.get_device(), &cai, &cmd_buf), "VBaseDeviceBuffer::zero alloc");
-
-        VkCommandBufferBeginInfo bbci{};
-        bbci.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        bbci.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        check_vk(vkBeginCommandBuffer(cmd_buf, &bbci), "VBaseDeviceBuffer::zero begin");
-
+        auto cmd_buf = queue.get_cmd_buffer();
         vkCmdFillBuffer(cmd_buf, buf_, 0, VK_WHOLE_SIZE, 0u);
-
-        VkBufferMemoryBarrier barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.buffer = buf_;
-        barrier.offset = 0;
-        barrier.size = VK_WHOLE_SIZE;
-        vkCmdPipelineBarrier(cmd_buf,
-            VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            0, 0, nullptr, 1, &barrier, 0, nullptr);
-
-        check_vk(vkEndCommandBuffer(cmd_buf), "VBaseDeviceBuffer::zero end");
-
-        VkSubmitInfo si{};
-        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers = &cmd_buf;
-        check_vk(vkQueueSubmit(m_session.get_queue(), 1, &si, VK_NULL_HANDLE), "VBaseDeviceBuffer::zero submit");
-        check_vk(vkDeviceWaitIdle(m_session.get_device()), "VBaseDeviceBuffer::zero wait");
-        vkFreeCommandBuffers(m_session.get_device(), context.command_pool(), 1, &cmd_buf);
     }
 
 private:
-    void copy_buffer(
+    void copy_buffer(VulkanQueue& queue,
         VkCommandPool cmd_pool,
         VkBuffer src,
         VkBuffer dst,
@@ -1185,7 +1121,7 @@ private:
         while (copied < count)
         {
             const VkDeviceSize chunk = std::min(max_copy_bytes, count - copied);
-            copy_buffer_chunk(
+            copy_buffer_chunk(queue,
                 cmd_pool,
                 src,
                 dst,
@@ -1211,6 +1147,7 @@ private:
     }
 
     void copy_buffer_chunk(
+        VulkanQueue& queue,
         VkCommandPool cmd_pool,
         VkBuffer src,
         VkBuffer dst,
@@ -1291,7 +1228,7 @@ private:
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.commandBufferCount = 1;
         si.pCommandBuffers = &cmd_buf;
-        check_vk(vkQueueSubmit(m_session.get_queue(), 1, &si, VK_NULL_HANDLE), "VBaseDeviceBuffer::copy submit");
+        check_vk(vkQueueSubmit(queue.get_queue(), 1, &si, VK_NULL_HANDLE), "VBaseDeviceBuffer::copy submit");
         check_vk(vkDeviceWaitIdle(m_session.get_device()), "VBaseDeviceBuffer::copy wait idle");
 
         vkFreeCommandBuffers(m_session.get_device(), cmd_pool, 1, &cmd_buf);
@@ -1326,14 +1263,14 @@ public:
 
     const char* typed_buffer_name() const override { return "VDeviceBuffer"; }
 
-    void write(VulkanComputeContext& context, VHostBuffer<T>& src, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
+    void write(VulkanQueue& queue, VHostBuffer<T>& src, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
     {
-        VBaseDeviceBuffer::write(context, src, count, src_offset, dst_offset);
+        VBaseDeviceBuffer::write(queue, src, count, src_offset, dst_offset);
     }
 
-    void read(VulkanComputeContext& context, VHostBuffer<T>& dst, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
+    void read(VulkanQueue& queue, VHostBuffer<T>& dst, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
     {
-        VBaseDeviceBuffer::read(context, dst, count, src_offset, dst_offset);
+        VBaseDeviceBuffer::read(queue, dst, count, src_offset, dst_offset);
     }
 };
 

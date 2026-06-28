@@ -94,7 +94,7 @@ class VulkanCppStubVisitor(Visitor):
 
     def result(self) -> str:
         return "\n".join(self._lines) + "\n"
-    
+
     def _generate_type_aliases_header(self) -> tuple[str, str]:
         """Generate the kfloat type aliases header filename and content."""
         kfloat_type = "bfloat_t" if self._use_bfloat16 else "float"
@@ -278,7 +278,7 @@ class VulkanCppStubVisitor(Visitor):
 
     def _compute_matrix_size(self, ty) -> str:
         """Compute compile-time array size for a matrix/vector type.
-        
+
         Uses unsigned 64-bit literals when the total would overflow signed 32-bit int.
         """
         if isinstance(
@@ -532,7 +532,7 @@ class VulkanCppStubVisitor(Visitor):
         buffer_params: List[Tuple[ast.Declaration, str, str]],
         all_pc_fields: List[Any],
     ) -> List[str]:
-        method_params: List[str] = ["        VulkanComputeContext& context"]
+        method_params: List[str] = ["        VulkanQueue& queue"]
 
         if has_3d:
             method_params.append("        uint32_t dispatch_rows")
@@ -687,7 +687,7 @@ class VulkanCppStubVisitor(Visitor):
         x_dim, y_dim, z_dim = self._compute_dispatch_dims(node, has_2d, has_3d, wg_x, wg_y, wg_z)
 
         self._emit("ComputeKernelRegistry::ScopedActiveKernel active_kernel(*this);")
-        self._emit("VkCommandBuffer command_buffer = context.begin_command_buffer();")
+        self._emit("VkCommandBuffer command_buffer = queue.begin_command_buffer();")
 
         if buffer_params:
             self._emit("VkDescriptorSet desc_set = kernel_.desc_set();")
@@ -703,7 +703,7 @@ class VulkanCppStubVisitor(Visitor):
                 self._emit(f"writes[{i}].descriptorCount = 1;")
                 self._emit(f"writes[{i}].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;")
                 self._emit(f"writes[{i}].pBufferInfo = &buffer_infos[{i}];")
-            self._emit(f"vkUpdateDescriptorSets(context.get_device(), {len(buffer_params)}, writes, 0, nullptr);")
+            self._emit(f"vkUpdateDescriptorSets(queue.get_device(), {len(buffer_params)}, writes, 0, nullptr);")
         if all_pc_fields:
             self._emit(
                 f"vkCmdPushConstants(command_buffer, kernel_.pipeline_layout(), "
@@ -717,7 +717,7 @@ class VulkanCppStubVisitor(Visitor):
         self._emit("vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, kernel_.pipeline());")
 
         self._emit(f"vkCmdDispatch(command_buffer, {x_dim}, {y_dim}, {z_dim});")
-        self._emit("context.submit_and_wait();")
+        self._emit("queue.submit_and_wait();")
 
         self._emit("}")
         self._pop()

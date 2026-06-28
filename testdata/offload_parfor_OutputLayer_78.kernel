@@ -1,0 +1,23 @@
+PROGRAM("OutputLayer.cc:78")
+
+OFFLOAD_PARFOR_2D_PARAM(queue, v, d, grid, (delta, h_last, W, V, learning_rate))
+
+PARAMETERS
+        const fixed_size_vector<float, 620>& delta,
+        const fixed_size_vector<float, 1024>& h_last,
+        fixed_size_matrix<float16, 620, 1024>& W,
+        fixed_size_matrix<float, 620, 1024>& V,
+        float learning_rate
+
+BEGIN
+const int v = int(gl_GlobalInvocationID.x);
+if (v >= rllm_bound_x) return;
+const int d = int(gl_GlobalInvocationID.y);
+if (d >= rllm_bound_y) return;
+        const float g =  clamp ((delta[v] * h_last[d]), -1.000000, 1.000000);
+        V[v, d] =  clamp (
+            ((0.900000 * V[v, d]) + (learning_rate * g)), -0.100000, 0.100000
+        );
+        W[v, d] =  clamp ((W[v, d] + V[v, d]), -2.000000, 2.000000);
+
+END_PROGRAM

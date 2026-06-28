@@ -35,51 +35,51 @@ set(GENERATED_KERNEL_SRCS)
 set(GENERATED_DIR ${CMAKE_BINARY_DIR}/generated/vulkanized/kernel_compiler_tests)
 file(MAKE_DIRECTORY ${GENERATED_DIR})
 
-set(VECMATH225_KERNEL "${KERNEL_COMPILER_SOURCE_DIR}/testdata/offload_parfor_vecmath_225.kernel")
-set(VECMATH225_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_225.kernel")
-set(VECMATH225_GLSL "${GENERATED_DIR}/vecmath.L225.glsl")
-set(VECMATH225_HEADER "${GENERATED_DIR}/vecmath.L225.h")
-set(VECMATH225_SPV "${GENERATED_DIR}/vecmath.L225.spv")
-set(VECMATH225_NOOPT_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_225_noopt.kernel")
-set(VECMATH225_NOOPT_GLSL "${GENERATED_DIR}/vecmath.L225.noopt.glsl")
-set(VECMATH225_NOOPT_HEADER "${GENERATED_DIR}/vecmath.L225.noopt.h")
-set(VECMATH225_NOOPT_SPV "${GENERATED_DIR}/vecmath.L225.noopt.spv")
-set(VECMATH225_TYPE_ALIASES "${GENERATED_DIR}/_type_aliases.hpp")
-set(VECMATH296_KERNEL "${KERNEL_COMPILER_SOURCE_DIR}/testdata/offload_parfor_vecmath_296.kernel")
-set(VECMATH296_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_296.kernel")
-set(VECMATH296_GLSL "${GENERATED_DIR}/vecmath.L296.glsl")
-set(VECMATH296_HEADER "${GENERATED_DIR}/vecmath.L296.h")
-set(VECMATH296_SPV "${GENERATED_DIR}/vecmath.L296.spv")
-set(VECMATH296_NOOPT_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_296_noopt.kernel")
-set(VECMATH296_NOOPT_GLSL "${GENERATED_DIR}/vecmath.L296.noopt.glsl")
-set(VECMATH296_NOOPT_HEADER "${GENERATED_DIR}/vecmath.L296.noopt.h")
-set(VECMATH296_NOOPT_SPV "${GENERATED_DIR}/vecmath.L296.noopt.spv")
+set(VECMATH231_KERNEL "${KERNEL_COMPILER_SOURCE_DIR}/testdata/offload_parfor_vecmath_231.kernel")
+set(VECMATH231_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_231.kernel")
+set(VECMATH231_GLSL "${GENERATED_DIR}/vecmath.L231.glsl")
+set(VECMATH231_HEADER "${GENERATED_DIR}/vecmath.L231.h")
+set(VECMATH231_SPV "${GENERATED_DIR}/vecmath.L231.spv")
+set(VECMATH231_NOOPT_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_231_noopt.kernel")
+set(VECMATH231_NOOPT_GLSL "${GENERATED_DIR}/vecmath.L231.noopt.glsl")
+set(VECMATH231_NOOPT_HEADER "${GENERATED_DIR}/vecmath.L231.noopt.h")
+set(VECMATH231_NOOPT_SPV "${GENERATED_DIR}/vecmath.L231.noopt.spv")
+set(VECMATH231_TYPE_ALIASES "${GENERATED_DIR}/_type_aliases.hpp")
+set(VECMATH304_KERNEL "${KERNEL_COMPILER_SOURCE_DIR}/testdata/offload_parfor_vecmath_304.kernel")
+set(VECMATH304_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_304.kernel")
+set(VECMATH304_GLSL "${GENERATED_DIR}/vecmath.L304.glsl")
+set(VECMATH304_HEADER "${GENERATED_DIR}/vecmath.L304.h")
+set(VECMATH304_SPV "${GENERATED_DIR}/vecmath.L304.spv")
+set(VECMATH304_NOOPT_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_304_noopt.kernel")
+set(VECMATH304_NOOPT_GLSL "${GENERATED_DIR}/vecmath.L304.noopt.glsl")
+set(VECMATH304_NOOPT_HEADER "${GENERATED_DIR}/vecmath.L304.noopt.h")
+set(VECMATH304_NOOPT_SPV "${GENERATED_DIR}/vecmath.L304.noopt.spv")
 
 add_custom_command(
-    OUTPUT "${VECMATH225_DUMP}"
+    OUTPUT "${VECMATH231_DUMP}"
     COMMAND "${Python3_EXECUTABLE}" -c
-        "import sys; sys.path.insert(0, '${KERNEL_COMPILER_SOURCE_DIR}/..'); from pathlib import Path; from offloadize_common import write_parfor_dump_from_kernel; write_parfor_dump_from_kernel(Path('${VECMATH225_KERNEL}'), Path('${GENERATED_DIR}'))"
-    DEPENDS "${VECMATH225_KERNEL}" "${CMAKE_SOURCE_DIR}/offloadize_common.py"
+        "import sys; sys.path.insert(0, '${KERNEL_COMPILER_SOURCE_DIR}/..'); from pathlib import Path; from offloadize_common import write_parfor_dump_from_kernel; write_parfor_dump_from_kernel(Path('${VECMATH231_KERNEL}'), Path('${GENERATED_DIR}'))"
+    DEPENDS "${VECMATH231_KERNEL}" "${CMAKE_SOURCE_DIR}/offloadize_common.py"
     WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
-    COMMENT "Generating parfor dump for vecmath:225"
+    COMMENT "Generating parfor dump for vecmath:231"
     VERBATIM
 )
 
 add_custom_command(
     OUTPUT
-        "${VECMATH225_HEADER}"
-        "${VECMATH225_SPV}"
-        "${VECMATH225_TYPE_ALIASES}"
+        "${VECMATH231_HEADER}"
+        "${VECMATH231_SPV}"
+        "${VECMATH231_TYPE_ALIASES}"
     BYPRODUCTS
-        "${VECMATH225_GLSL}"
+        "${VECMATH231_GLSL}"
     COMMAND "${Python3_EXECUTABLE}" "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
-            "${VECMATH225_DUMP}"
-            --vulkan "${VECMATH225_GLSL}"
+            "${VECMATH231_DUMP}"
+            --vulkan "${VECMATH231_GLSL}"
     COMMAND Vulkan::glslc -fshader-stage=compute --target-env=vulkan1.1
-            "${VECMATH225_GLSL}" -o "${VECMATH225_SPV}"
+            "${VECMATH231_GLSL}" -o "${VECMATH231_SPV}"
     DEPENDS
-        "${VECMATH225_DUMP}"
-        "${VECMATH225_KERNEL}"
+        "${VECMATH231_DUMP}"
+        "${VECMATH231_KERNEL}"
         "${KERNEL_COMPILER_SOURCE_DIR}/transforms/optimize_vecmath225.tkernel"
         "${CMAKE_SOURCE_DIR}/offloadize_common.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
@@ -89,38 +89,38 @@ add_custom_command(
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_cpp_stub_visitor.py"
     WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
-    COMMENT "Generating vecmath:225 Vulkan test stub"
+    COMMENT "Generating vecmath:231 Vulkan test stub"
     VERBATIM
 )
 list(APPEND GENERATED_KERNEL_SRCS
-    "${VECMATH225_HEADER}"
-    "${VECMATH225_SPV}"
-    "${VECMATH225_TYPE_ALIASES}"
+    "${VECMATH231_HEADER}"
+    "${VECMATH231_SPV}"
+    "${VECMATH231_TYPE_ALIASES}"
 )
 
 add_custom_command(
-    OUTPUT "${VECMATH225_NOOPT_DUMP}"
-    COMMAND "${CMAKE_COMMAND}" -E copy "${VECMATH225_DUMP}" "${VECMATH225_NOOPT_DUMP}"
-    DEPENDS "${VECMATH225_DUMP}"
-    COMMENT "Copying vecmath:225 parfor dump for no-optimization baseline"
+    OUTPUT "${VECMATH231_NOOPT_DUMP}"
+    COMMAND "${CMAKE_COMMAND}" -E copy "${VECMATH231_DUMP}" "${VECMATH231_NOOPT_DUMP}"
+    DEPENDS "${VECMATH231_DUMP}"
+    COMMENT "Copying vecmath:231 parfor dump for no-optimization baseline"
     VERBATIM
 )
 
 add_custom_command(
     OUTPUT
-        "${VECMATH225_NOOPT_HEADER}"
-        "${VECMATH225_NOOPT_SPV}"
+        "${VECMATH231_NOOPT_HEADER}"
+        "${VECMATH231_NOOPT_SPV}"
     BYPRODUCTS
-        "${VECMATH225_NOOPT_GLSL}"
+        "${VECMATH231_NOOPT_GLSL}"
     COMMAND "${Python3_EXECUTABLE}" "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
-            "${VECMATH225_NOOPT_DUMP}"
-            --vulkan "${VECMATH225_NOOPT_GLSL}"
+            "${VECMATH231_NOOPT_DUMP}"
+            --vulkan "${VECMATH231_NOOPT_GLSL}"
             --no-optimizations
     COMMAND Vulkan::glslc -fshader-stage=compute --target-env=vulkan1.1
-            "${VECMATH225_NOOPT_GLSL}" -o "${VECMATH225_NOOPT_SPV}"
+            "${VECMATH231_NOOPT_GLSL}" -o "${VECMATH231_NOOPT_SPV}"
     DEPENDS
-        "${VECMATH225_NOOPT_DUMP}"
-        "${VECMATH225_KERNEL}"
+        "${VECMATH231_NOOPT_DUMP}"
+        "${VECMATH231_KERNEL}"
         "${CMAKE_SOURCE_DIR}/offloadize_common.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/parser.py"
@@ -128,38 +128,38 @@ add_custom_command(
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_cpp_stub_visitor.py"
     WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
-    COMMENT "Generating vecmath:225 no-optimization Vulkan test stub"
+    COMMENT "Generating vecmath:231 no-optimization Vulkan test stub"
     VERBATIM
 )
 list(APPEND GENERATED_KERNEL_SRCS
-    "${VECMATH225_NOOPT_HEADER}"
-    "${VECMATH225_NOOPT_SPV}"
+    "${VECMATH231_NOOPT_HEADER}"
+    "${VECMATH231_NOOPT_SPV}"
 )
 
 add_custom_command(
-    OUTPUT "${VECMATH296_DUMP}"
+    OUTPUT "${VECMATH304_DUMP}"
     COMMAND "${Python3_EXECUTABLE}" -c
-        "import sys; sys.path.insert(0, '${KERNEL_COMPILER_SOURCE_DIR}/..'); from pathlib import Path; from offloadize_common import write_parfor_dump_from_kernel; write_parfor_dump_from_kernel(Path('${VECMATH296_KERNEL}'), Path('${GENERATED_DIR}'))"
-    DEPENDS "${VECMATH296_KERNEL}" "${CMAKE_SOURCE_DIR}/offloadize_common.py"
+        "import sys; sys.path.insert(0, '${KERNEL_COMPILER_SOURCE_DIR}/..'); from pathlib import Path; from offloadize_common import write_parfor_dump_from_kernel; write_parfor_dump_from_kernel(Path('${VECMATH304_KERNEL}'), Path('${GENERATED_DIR}'))"
+    DEPENDS "${VECMATH304_KERNEL}" "${CMAKE_SOURCE_DIR}/offloadize_common.py"
     WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
-    COMMENT "Generating parfor dump for vecmath:296"
+    COMMENT "Generating parfor dump for vecmath:304"
     VERBATIM
 )
 
 add_custom_command(
     OUTPUT
-        "${VECMATH296_HEADER}"
-        "${VECMATH296_SPV}"
+        "${VECMATH304_HEADER}"
+        "${VECMATH304_SPV}"
     BYPRODUCTS
-        "${VECMATH296_GLSL}"
+        "${VECMATH304_GLSL}"
     COMMAND "${Python3_EXECUTABLE}" "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
-            "${VECMATH296_DUMP}"
-            --vulkan "${VECMATH296_GLSL}"
+            "${VECMATH304_DUMP}"
+            --vulkan "${VECMATH304_GLSL}"
     COMMAND Vulkan::glslc -fshader-stage=compute --target-env=vulkan1.1
-            "${VECMATH296_GLSL}" -o "${VECMATH296_SPV}"
+            "${VECMATH304_GLSL}" -o "${VECMATH304_SPV}"
     DEPENDS
-        "${VECMATH296_DUMP}"
-        "${VECMATH296_KERNEL}"
+        "${VECMATH304_DUMP}"
+        "${VECMATH304_KERNEL}"
         "${KERNEL_COMPILER_SOURCE_DIR}/transforms/optimize_vecmath296.tkernel"
         "${CMAKE_SOURCE_DIR}/offloadize_common.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
@@ -169,37 +169,37 @@ add_custom_command(
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_cpp_stub_visitor.py"
     WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
-    COMMENT "Generating vecmath:296 Vulkan test stub"
+    COMMENT "Generating vecmath:304 Vulkan test stub"
     VERBATIM
 )
 list(APPEND GENERATED_KERNEL_SRCS
-    "${VECMATH296_HEADER}"
-    "${VECMATH296_SPV}"
+    "${VECMATH304_HEADER}"
+    "${VECMATH304_SPV}"
 )
 
 add_custom_command(
-    OUTPUT "${VECMATH296_NOOPT_DUMP}"
-    COMMAND "${CMAKE_COMMAND}" -E copy "${VECMATH296_DUMP}" "${VECMATH296_NOOPT_DUMP}"
-    DEPENDS "${VECMATH296_DUMP}"
-    COMMENT "Copying vecmath:296 parfor dump for no-optimization baseline"
+    OUTPUT "${VECMATH304_NOOPT_DUMP}"
+    COMMAND "${CMAKE_COMMAND}" -E copy "${VECMATH304_DUMP}" "${VECMATH304_NOOPT_DUMP}"
+    DEPENDS "${VECMATH304_DUMP}"
+    COMMENT "Copying vecmath:304 parfor dump for no-optimization baseline"
     VERBATIM
 )
 
 add_custom_command(
     OUTPUT
-        "${VECMATH296_NOOPT_HEADER}"
-        "${VECMATH296_NOOPT_SPV}"
+        "${VECMATH304_NOOPT_HEADER}"
+        "${VECMATH304_NOOPT_SPV}"
     BYPRODUCTS
-        "${VECMATH296_NOOPT_GLSL}"
+        "${VECMATH304_NOOPT_GLSL}"
     COMMAND "${Python3_EXECUTABLE}" "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
-            "${VECMATH296_NOOPT_DUMP}"
-            --vulkan "${VECMATH296_NOOPT_GLSL}"
+            "${VECMATH304_NOOPT_DUMP}"
+            --vulkan "${VECMATH304_NOOPT_GLSL}"
             --no-optimizations
     COMMAND Vulkan::glslc -fshader-stage=compute --target-env=vulkan1.1
-            "${VECMATH296_NOOPT_GLSL}" -o "${VECMATH296_NOOPT_SPV}"
+            "${VECMATH304_NOOPT_GLSL}" -o "${VECMATH304_NOOPT_SPV}"
     DEPENDS
-        "${VECMATH296_NOOPT_DUMP}"
-        "${VECMATH296_KERNEL}"
+        "${VECMATH304_NOOPT_DUMP}"
+        "${VECMATH304_KERNEL}"
         "${CMAKE_SOURCE_DIR}/offloadize_common.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/parser.py"
@@ -207,12 +207,12 @@ add_custom_command(
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_cpp_stub_visitor.py"
     WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
-    COMMENT "Generating vecmath:296 no-optimization Vulkan test stub"
+    COMMENT "Generating vecmath:304 no-optimization Vulkan test stub"
     VERBATIM
 )
 list(APPEND GENERATED_KERNEL_SRCS
-    "${VECMATH296_NOOPT_HEADER}"
-    "${VECMATH296_NOOPT_SPV}"
+    "${VECMATH304_NOOPT_HEADER}"
+    "${VECMATH304_NOOPT_SPV}"
 )
 
 add_custom_target(all_generated_stubs ALL DEPENDS ${GENERATED_KERNEL_SRCS})

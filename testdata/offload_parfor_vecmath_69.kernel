@@ -1,0 +1,16 @@
+PROGRAM("vecmath.cc:69")
+
+OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (dst, value))
+
+PARAMETERS
+        flexible_rows_matrix<float, 16384, 1024>& dst,
+        float value
+
+BEGIN
+const int r = int(gl_GlobalInvocationID.x);
+if (r >= rllm_bound_x) return;
+const int c = int(gl_GlobalInvocationID.y);
+if (c >= rllm_bound_y) return;
+        dst[r, c] = value;
+
+END_PROGRAM

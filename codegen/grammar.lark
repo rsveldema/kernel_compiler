@@ -38,13 +38,14 @@ workgroup_size: "workgroup" "{" "x" ":" expression "," "y" ":" expression "," "z
 // reserves a shared memory block of the given size.
 shared_decl: SHARED declaration ";"
 
+# the 1st expression argument is the cmd-queue to use
+parfor_space: "OFFLOAD_PARFOR_1D_PARAM" "(" expression "," IDENT "," expression "," parfor_parameters_list ")" -> parfor_1d_param
+| "OFFLOAD_PARFOR_2D_PARAM" "("  expression ","  IDENT "," IDENT "," expression ("," expression)? "," parfor_parameters_list ")" -> parfor_2d_param
+| "OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM" "("  expression ","  IDENT "," IDENT "," expression "," parfor_parameters_list ")" -> parfor_2d_triangular_param
+| "OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM" "(" expression ","  IDENT "," IDENT "," expression "," parfor_parameters_list ")" -> parfor_2d_upper_triangular_param
+| "OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM" "("  expression "," IDENT "," IDENT "," IDENT "," expression "," expression "," parfor_parameters_list ")" -> parfor_3d_triangular_param
+| "OFFLOAD_PARFOR_3D_PARAM" "("  expression "," IDENT "," IDENT "," IDENT "," expression "," parfor_parameters_list ")" -> parfor_3d_param
 
-parfor_space: "OFFLOAD_PARFOR_1D_PARAM" "(" IDENT "," expression "," parfor_parameters_list ")" -> parfor_1d_param
-| "OFFLOAD_PARFOR_2D_PARAM" "(" IDENT "," IDENT "," expression ("," expression)? "," parfor_parameters_list ")" -> parfor_2d_param
-| "OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM"       "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" -> parfor_2d_triangular_param
-| "OFFLOAD_PARFOR_2D_UPPER_TRIANGULAR_PARAM" "(" IDENT "," IDENT "," expression "," parfor_parameters_list ")" -> parfor_2d_upper_triangular_param
-| "OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM" "(" IDENT "," IDENT "," IDENT "," expression "," expression "," parfor_parameters_list ")" -> parfor_3d_triangular_param
-| "OFFLOAD_PARFOR_3D_PARAM" "(" IDENT "," IDENT "," IDENT "," expression "," parfor_parameters_list ")" -> parfor_3d_param
 
 parfor_parameters_list: "(" parameter ("," parameter)* ")"
 parameter: IDENT
@@ -85,7 +86,7 @@ if_statement: "if" "(" (condition | expression) ")" statement else_statement?
 else_statement: "else" statement
 
 
-for_loop_var:  ("const")? type IDENT "=" expression 
+for_loop_var:  ("const")? type IDENT "=" expression
 
 // in the AST becomes <expr> <op> <expr>
 condition: condition_part
@@ -145,7 +146,7 @@ ASSIGN_OP: "=" | "+=" | "-=" | "*=" | "/="
 assign_operator: ASSIGN_OP
 
 DOT: "."
-field_access: IDENT ( DOT IDENT)? ( array_index | call_args )* 
+field_access: IDENT ( DOT IDENT)? ( array_index | call_args )*
 
 array_index:  "[" expression ("," expression)* "]"
 
@@ -169,7 +170,7 @@ ternary_trailer: "?" expression ":" expression
 binary_operator: arith_operator | compare_operator
 logical_operator: LOGICAL_AND | LOGICAL_OR
 
-ARITH_OP: "*" | "/" | "+" | "&" | "%" 
+ARITH_OP: "*" | "/" | "+" | "&" | "%"
 arith_operator: ARITH_OP | NEG
 
 NEG: "-"
@@ -206,10 +207,10 @@ FSTM: "fixed_size_triangular_matrix"
 FSOV: "fixed_size_obj_vector"
 COOPMAT: "coopmat"
 
- 
+
 
 // Define the Comment Terminals
-COMMENT: "//" /[^\n]/* | "/*" /.*?/ "*/"  
+COMMENT: "//" /[^\n]/* | "/*" /.*?/ "*/"
 
 // Instruct the lexer to skip them
 %ignore COMMENT

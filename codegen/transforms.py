@@ -136,9 +136,9 @@ def extract_header(header_tree):
 def extract_loop_vars_and_dim(space_tree):
     """Extract all loop variable names and dimensionality from a parfor_space tree.
 
-    For 1D (OFFLOAD_PARFOR_1D_PARAM(i, ...)): loop_vars=[i], dim=1
-    For 2D (OFFLOAD_PARFOR_2D_PARAM(i, j, ...)): loop_vars=[i, j], dim=2
-    For 3D triangular (OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(hi, i, j, ...)):
+    For 1D (OFFLOAD_PARFOR_1D_PARAM(queue, i, ...)): loop_vars=[i], dim=1
+    For 2D (OFFLOAD_PARFOR_2D_PARAM(queue, i, j, ...)): loop_vars=[i, j], dim=2
+    For 3D triangular (OFFLOAD_PARFOR_3D_TRIANGULAR_PARAM(queue, hi, i, j, ...)):
         loop_vars=[hi, i, j], dim=3
     """
     ids = []
@@ -1771,7 +1771,7 @@ def transform(t: Tree) -> Program:
         decl_trees = decls_node.children
     else:
         decl_trees = [decls_node]
-    
+
     for decl_tree in decl_trees:
         var_name = ""
         if isinstance(decl_tree, Tree):

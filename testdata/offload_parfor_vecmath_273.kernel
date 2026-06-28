@@ -1,0 +1,34 @@
+PROGRAM("vecmath.cc:273")
+
+OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A, B1, C1, B2, C2))
+
+PARAMETERS
+        const flexible_rows_matrix<float, 16384, 1024>& A,
+        const fixed_size_matrix<float16, 4096, 1024>& B1,
+        flexible_rows_matrix<float, 16384, 4096>& C1,
+        const fixed_size_matrix<float16, 4096, 1024>& B2,
+        flexible_rows_matrix<float, 16384, 4096>& C2
+
+BEGIN
+const int i = int(gl_GlobalInvocationID.x);
+if (i >= rllm_bound_x) return;
+const int j = int(gl_GlobalInvocationID.y);
+if (j >= rllm_bound_y) return;
+            float sum1 = 0.f;
+            float sum2 = 0.f;
+            for (int l_idx = 0; l_idx < 1024; ++l_idx)
+            {
+                const int k = int(l_idx);
+                const float a = A[i, k];
+                const float term1 = (a * B1[j, k]);
+                OVERFLOW_CHECK_ADD(sum1, term1);
+                sum1 += term1;
+
+                const float term2 = (a * B2[j, k]);
+                OVERFLOW_CHECK_ADD(sum2, term2);
+                sum2 += term2;
+            }
+            C1[i, j] = sum1;
+            C2[i, j] = sum2;
+
+END_PROGRAM

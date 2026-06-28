@@ -1,0 +1,14 @@
+PROGRAM("OutputLayer.cc:108")
+
+OFFLOAD_PARFOR_1D_PARAM(queue, i, limit<620>(), (inputs, temp_values))
+
+PARAMETERS
+        const fixed_size_vector<float, 620>& inputs,
+        fixed_size_vector<float, 2>& temp_values
+
+BEGIN
+const int i = int(gl_GlobalInvocationID.x);
+if (i >= rllm_bound_x) return;
+            atomicMax(temp_values[0], inputs[i]);
+
+END_PROGRAM

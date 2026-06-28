@@ -12,6 +12,9 @@
 #include <vulkan/vulkan_core.h>
 #include <unistd.h>
 
+#include <logging.hpp>
+
+
 #if defined(VK_NV_COOPERATIVE_MATRIX_2_EXTENSION_NAME) && \
     defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_2_FEATURES_NV)
 #define RLLM_HAS_VK_COOPMAT2 1
@@ -24,6 +27,33 @@
 // Forward declarations from test_vulkan_helpers.h
 std::string vk_result_str(VkResult rc);
 void        check_vk(VkResult rc, const char* label);
+
+
+VulkanQueue::VulkanQueue(VulkanSession &session, size_t index)
+    : m_session(session)
+{
+    vkGetDeviceQueue(get_device(), session.get_queue_family_index(), index, &m_queue);
+    init_command_pool();
+}
+
+
+void VulkanQueue::init_command_pool()
+{
+    VkCommandPoolCreateInfo cpci{};
+    cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    cpci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    cpci.queueFamilyIndex = m_session.get_queue_family_index();
+
+    check_vk(vkCreateCommandPool(get_device(), &cpci, nullptr, &m_cmd_pool), "VkComputeSession cmd pool");
+
+    VkCommandBufferAllocateInfo cai{};
+    cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cai.commandPool = m_cmd_pool;
+    cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cai.commandBufferCount = 1;
+    check_vk(vkAllocateCommandBuffers(get_device(), &cai, &m_cmd_buf), "VkComputeSession cmd buf alloc");
+}
+
 
 VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* preferred_device_name)
 {
@@ -113,13 +143,21 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
     std::vector<VkQueueFamilyProperties> qfps(qfc > 0 ? qfc : 1);
     if (qfc > 0)
         vkGetPhysicalDeviceQueueFamilyProperties(m_phys_dev, &qfc, qfps.data());
+    bool found = false;
     for (uint32_t i = 0; i < qfc; ++i)
     {
         if (qfps[i].queueFlags & VK_QUEUE_COMPUTE_BIT)
         {
+            found = true;
             m_queue_fi = i;
             break;
         }
+    }
+
+    if (! found)
+    {
+        LOG_ERROR("failed to find a queue family for compute!");
+        std::abort();
     }
 
     float prio = 1.0f;
@@ -253,8 +291,8 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
         return;
     }
 
-    vkGetDeviceQueue(m_device, m_queue_fi, 0, &m_queue);
 }
+
 
 bool VulkanSession::device_name_contains(const char* device_name, const char* needle)
 {

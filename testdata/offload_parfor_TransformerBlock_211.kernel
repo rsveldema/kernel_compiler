@@ -1,0 +1,26 @@
+PROGRAM("TransformerBlock.cc:211")
+
+OFFLOAD_PARFOR_2D_TRIANGULAR_PARAM(queue, i, j, active_seq_len, (attn_w_h, Q, K, active_seq_len))
+
+PARAMETERS
+        fixed_size_triangular_matrix<float, 16384, 16384>& attn_w_h = ws.attn_w[hi];
+        const flexible_rows_matrix<float, 16384, 1024>& Q = ws.Q;
+        const flexible_rows_matrix<float, 16384, 1024>& K = ws.K;
+        const int active_seq_len = seq_len;
+
+BEGIN
+const int i = int(gl_GlobalInvocationID.x);
+if (i >= rllm_bound_x) return;
+const int j = int(gl_GlobalInvocationID.y);
+if (j >= rllm_bound_y) return;
+        {
+            float dot = 0.f;
+            for (const int d : limit<1024>())
+            {
+                dot += (Q[i, d] * K[j, d]);
+            }
+            const float score = (dot * (1.0f / sqrt(float(128))));
+            attn_w_h[i, j] = score;
+        }
+
+END_PROGRAM

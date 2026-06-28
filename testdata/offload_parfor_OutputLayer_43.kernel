@@ -1,0 +1,18 @@
+PROGRAM("OutputLayer.cc:43")
+
+OFFLOAD_PARFOR_1D_PARAM(queue, v, limit<620>(), (h_last, W, inputs))
+
+PARAMETERS
+        const fixed_size_vector<float, 1024>& h_last,
+        const fixed_size_matrix<float16, 620, 1024>& W,
+        fixed_size_vector<float, 620>& inputs
+
+BEGIN
+const int v = int(gl_GlobalInvocationID.x);
+if (v >= rllm_bound_x) return;
+        float sum = 0.f;
+        for (const int d : limit<1024>())
+            sum += (h_last[d] * W[v, d]);
+        inputs[v] = sum;
+
+END_PROGRAM

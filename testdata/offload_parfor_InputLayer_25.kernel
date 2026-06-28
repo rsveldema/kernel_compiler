@@ -1,0 +1,24 @@
+PROGRAM("InputLayer.cc:25")
+
+OFFLOAD_PARFOR_2D_PARAM(queue, pos, di, grid, (tokens, embeddings, h, model_dim))
+
+PARAMETERS
+        const fixed_size_vector<int, 16384>& tokens,
+        const fixed_size_matrix<float16, 620, 1024>& embeddings,
+        flexible_rows_matrix<float, 16384, 1024>& h,
+        float model_dim
+
+BEGIN
+const int pos = int(gl_GlobalInvocationID.x);
+if (pos >= rllm_bound_x) return;
+const int di = int(gl_GlobalInvocationID.y);
+if (di >= rllm_bound_y) return;
+        const int tok = tokens[pos];
+        const int di_int = di;
+        const float emb_val = embeddings[tok, di];
+        const float freq = (1.0f /  pow (10000.0f, (((di_int - (di_int % 2))) / model_dim)));
+        const float pos_f = pos;
+        const float pe = ((di_int % 2) == 0) ?  sin ((pos_f * freq)) :  cos ((pos_f * freq));
+        h[pos, di] = (emb_val + pe);
+
+END_PROGRAM

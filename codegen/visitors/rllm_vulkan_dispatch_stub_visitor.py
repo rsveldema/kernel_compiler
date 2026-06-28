@@ -114,7 +114,7 @@ class RllmVulkanDispatchStubVisitor(Visitor):
             p for p in node.params
             if isinstance(p, ast.Declaration) and p.name
         ]
-        template_params = ["typename Range"] + [f"typename P{i}" for i, _ in enumerate(params)]
+        template_params = ["typename Range", "typename Queue"] + [f"typename P{i}" for i, _ in enumerate(params)]
         function_params = [f"P{i}&& {p.name}" for i, p in enumerate(params)]
 
         if node.space_dim >= 3:
@@ -148,7 +148,7 @@ class RllmVulkanDispatchStubVisitor(Visitor):
                 seen.add(tb)
                 push_fields.append((tb, "int32_t", tb))
 
-        dispatch_args = ["rllm::vulkan_runtime::context()", *dim_values]
+        dispatch_args = ["queue", *dim_values]
         mutable_buffers = []
         for param in params:
             if not self._is_buffer_type(param.var_type):
@@ -172,9 +172,9 @@ class RllmVulkanDispatchStubVisitor(Visitor):
         if template_params:
             template_prefix = "template <" + ", ".join(template_params) + ", typename... Ignored>" + chr(10)
         else:
-            template_prefix = "template <typename Range, typename... Ignored>" + chr(10)
+            template_prefix = "template <typename Range, typename Queue, typename... Ignored>" + chr(10)
 
-        joined_function_params = ", ".join(["Range&& range", *function_params, "Ignored&&... ignored_args"])
+        joined_function_params = ", ".join(["Range&& range", "Queue&& queue", *function_params, "Ignored&&... ignored_args"])
         joined_dispatch_args = ", ".join(dispatch_args)
 
         mark_lines = []

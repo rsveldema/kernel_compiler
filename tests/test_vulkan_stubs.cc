@@ -20,10 +20,10 @@
 
 // Shared Vulkan test infrastructure
 #include "vulkan_test_helpers.hpp"
-#include "vecmath.L225.h"
-#include "vecmath.L225.noopt.h"
-#include "vecmath.L296.h"
-#include "vecmath.L296.noopt.h"
+#include "vecmath.L231.h"
+#include "vecmath.L231.noopt.h"
+#include "vecmath.L304.h"
+#include "vecmath.L304.noopt.h"
 
 
 // ───────────── Test: multi-arg (3 independent matmuls + accumulate) ──
@@ -140,14 +140,15 @@ TEST_F(VulkanTestBase, host_device_buffer_copy_bandwidth)
     VHostBuffer<uint8_t[size_bytes]> download(get_session());
     VDeviceBuffer<uint8_t[size_bytes]> device(upload);
     VulkanComputeContext copy_context(get_session());
+    VulkanQueue& queue = get_session().get_queue(0);
 
     for (VkDeviceSize i = 0; i < size_bytes; ++i) {
         upload.get()[i] = static_cast<uint8_t>((i * 131u + 17u) & 0xffu);
     }
     std::memset(download.get(), 0, static_cast<size_t>(size_bytes));
 
-    device.write(copy_context, upload);
-    device.read(copy_context, download);
+    device.write(queue, upload);
+    device.read(queue, download);
     ASSERT_EQ(std::memcmp(upload.get(), download.get(), static_cast<size_t>(size_bytes)), 0);
 
     double upload_ms = 1.0e30;
@@ -156,9 +157,9 @@ TEST_F(VulkanTestBase, host_device_buffer_copy_bandwidth)
 
     for (int i = 0; i < iterations; ++i) {
         auto start = std::chrono::steady_clock::now();
-        device.write(copy_context, upload);
+        device.write(queue, upload);
         auto mid = std::chrono::steady_clock::now();
-        device.read(copy_context, download);
+        device.read(queue, download);
         auto end = std::chrono::steady_clock::now();
 
         upload_ms = std::min(upload_ms, std::chrono::duration<double, std::milli>(mid - start).count());
@@ -184,16 +185,16 @@ TEST_F(VulkanTestBase, host_device_buffer_copy_bandwidth)
               << " (" << size_bytes << " bytes, best of " << iterations << ")\n";
 }
 
-TEST_F(VulkanTestBase, tree_rewritten_vecmath225_matches_sequential_cpu)
+TEST_F(VulkanTestBase, tree_rewritten_vecmath231_matches_sequential_cpu)
 {
-    namespace kernel = rllm_offload_parfor_vecmath_225;
+    namespace kernel = rllm_offload_parfor_vecmath_231;
 
     constexpr uint32_t rows = 8;
     constexpr uint32_t cols = 8;
     constexpr uint32_t k_count = kernel::A_Y;
 
     ASSERT_STREQ(
-        kernel::OffloadParforVecmath225VecmathKernel::generated_descriptor(),
+        kernel::OffloadParforVecmath231VecmathKernel::generated_descriptor(),
         "tile_block_size=1;tile_size_x=1;tile_size_y=1;tile_chunk_size=1;workgroup_count=1;tree_transformed=yes;");
 
     VHostBuffer<kernel::RllmBuffer_A> host_a(get_session());
@@ -243,23 +244,25 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath225_matches_sequential_cpu)
     VDeviceBuffer<kernel::RllmBuffer_C3> device_c3(host_c3);
 
     VulkanComputeContext context(get_session());
-    device_a.write(context, host_a);
-    device_b1.write(context, host_b1);
-    device_c1.write(context, host_c1);
-    device_b2.write(context, host_b2);
-    device_c2.write(context, host_c2);
-    device_b3.write(context, host_b3);
-    device_c3.write(context, host_c3);
+    auto& queue = get_session().get_queue(0);
+    device_a.write(queue, host_a);
+    device_b1.write(queue, host_b1);
+    device_c1.write(queue, host_c1);
+    device_b2.write(queue, host_b2);
+    device_c2.write(queue, host_c2);
+    device_b3.write(queue, host_b3);
+    device_c3.write(queue, host_c3);
 
-    kernel::OffloadParforVecmath225VecmathKernel vecmath225(
+    kernel::OffloadParforVecmath231VecmathKernel vecmath231(
         get_session(),
-        std::string(TESTDATA_DIR) + "/vecmath.L225.spv");
-    const kernel::offload_parfor_vecmath_225_vecmath_PushConstants push_constants{
+        std::string(TESTDATA_DIR) + "/vecmath.L231.spv");
+    const kernel::offload_parfor_vecmath_231_vecmath_PushConstants push_constants{
         static_cast<int32_t>(rows),
         static_cast<int32_t>(cols),
     };
-    vecmath225.dispatch(
-        context,
+
+    vecmath231.dispatch(
+        queue,
         rows,
         cols,
         device_a,
@@ -271,9 +274,9 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath225_matches_sequential_cpu)
         device_c3,
         push_constants);
 
-    device_c1.read(context, host_c1);
-    device_c2.read(context, host_c2);
-    device_c3.read(context, host_c3);
+    device_c1.read(queue, host_c1);
+    device_c2.read(queue, host_c2);
+    device_c3.read(queue, host_c3);
 
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
@@ -295,10 +298,10 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath225_matches_sequential_cpu)
     }
 }
 
-TEST_F(VulkanTestBase, tree_rewritten_vecmath225_dispatch_performance)
+TEST_F(VulkanTestBase, tree_rewritten_vecmath231_dispatch_performance)
 {
-    namespace kernel = rllm_offload_parfor_vecmath_225;
-    namespace baseline_kernel = rllm_offload_parfor_vecmath_225_noopt;
+    namespace kernel = rllm_offload_parfor_vecmath_231;
+    namespace baseline_kernel = rllm_offload_parfor_vecmath_231_noopt;
 
     constexpr uint32_t rows = 64;
     constexpr uint32_t cols = 64;
@@ -346,30 +349,32 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath225_dispatch_performance)
     VDeviceBuffer<kernel::RllmBuffer_C3> device_c3(host_c3);
 
     VulkanComputeContext context(get_session());
-    device_a.write(context, host_a);
-    device_b1.write(context, host_b1);
-    device_b2.write(context, host_b2);
-    device_b3.write(context, host_b3);
+    VulkanQueue& queue = get_session().get_queue(0);
 
-    kernel::OffloadParforVecmath225VecmathKernel vecmath225(
+    device_a.write(queue, host_a);
+    device_b1.write(queue, host_b1);
+    device_b2.write(queue, host_b2);
+    device_b3.write(queue, host_b3);
+
+    kernel::OffloadParforVecmath231VecmathKernel vecmath231(
         get_session(),
-        std::string(TESTDATA_DIR) + "/vecmath.L225.spv");
-    const kernel::offload_parfor_vecmath_225_vecmath_PushConstants push_constants{
+        std::string(TESTDATA_DIR) + "/vecmath.L231.spv");
+    const kernel::offload_parfor_vecmath_231_vecmath_PushConstants push_constants{
         static_cast<int32_t>(rows),
         static_cast<int32_t>(cols),
     };
-    baseline_kernel::OffloadParforVecmath225NooptVecmathKernel baseline_vecmath225(
+    baseline_kernel::OffloadParforVecmath231NooptVecmathKernel baseline_vecmath231(
         get_session(),
-        std::string(TESTDATA_DIR) + "/vecmath.L225.noopt.spv");
-    const baseline_kernel::offload_parfor_vecmath_225_noopt_vecmath_PushConstants baseline_push_constants{
+        std::string(TESTDATA_DIR) + "/vecmath.L231.noopt.spv");
+    const baseline_kernel::offload_parfor_vecmath_231_noopt_vecmath_PushConstants baseline_push_constants{
         static_cast<int32_t>(rows),
         static_cast<int32_t>(cols),
     };
 
     auto dispatch_transformed_once = [&]() {
         const auto start = std::chrono::steady_clock::now();
-        vecmath225.dispatch(
-            context,
+        vecmath231.dispatch(
+            queue,
             rows,
             cols,
             device_a,
@@ -385,8 +390,8 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath225_dispatch_performance)
     };
     auto dispatch_baseline_once = [&]() {
         const auto start = std::chrono::steady_clock::now();
-        baseline_vecmath225.dispatch(
-            context,
+        baseline_vecmath231.dispatch(
+            queue,
             rows,
             cols,
             device_a,
@@ -447,7 +452,7 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath225_dispatch_performance)
     RecordProperty("transformed_average_gflops", average_transformed_gflops);
     RecordProperty("best_speedup", best_speedup);
     RecordProperty("average_speedup", average_speedup);
-    std::cerr << "vecmath:225 dispatch performance: "
+    std::cerr << "vecmath:231 dispatch performance: "
               << "rows=" << rows
               << ", cols=" << cols
               << ", k=" << k_count
@@ -462,10 +467,10 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath225_dispatch_performance)
               << " (" << measured_iterations << " measured iterations)\n";
 }
 
-TEST_F(VulkanTestBase, tree_rewritten_vecmath296_tiled_shared_cache_performance)
+TEST_F(VulkanTestBase, tree_rewritten_vecmath304_tiled_shared_cache_performance)
 {
-    namespace kernel = rllm_offload_parfor_vecmath_296;
-    namespace baseline_kernel = rllm_offload_parfor_vecmath_296_noopt;
+    namespace kernel = rllm_offload_parfor_vecmath_304;
+    namespace baseline_kernel = rllm_offload_parfor_vecmath_304_noopt;
 
     constexpr uint32_t rows = 64;
     constexpr uint32_t cols = 64;
@@ -506,28 +511,29 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath296_tiled_shared_cache_performance)
     std::memset(host_c_transformed.get(), 0, static_cast<size_t>(host_c_transformed.size()));
 
     VulkanComputeContext context(get_session());
-    device_a.write(context, host_a);
-    device_b.write(context, host_b);
+    auto& queue = get_session().get_queue(0);
+    device_a.write(queue, host_a);
+    device_b.write(queue, host_b);
 
-    kernel::OffloadParforVecmath296VecmathKernel vecmath296(
+    kernel::OffloadParforVecmath304VecmathKernel vecmath304(
         get_session(),
-        std::string(TESTDATA_DIR) + "/vecmath.L296.spv");
-    const kernel::offload_parfor_vecmath_296_vecmath_PushConstants push_constants{
+        std::string(TESTDATA_DIR) + "/vecmath.L304.spv");
+    const kernel::offload_parfor_vecmath_304_vecmath_PushConstants push_constants{
         static_cast<int32_t>(rows),
         static_cast<int32_t>(cols),
     };
-    baseline_kernel::OffloadParforVecmath296NooptVecmathKernel baseline_vecmath296(
+    baseline_kernel::OffloadParforVecmath304NooptVecmathKernel baseline_vecmath304(
         get_session(),
-        std::string(TESTDATA_DIR) + "/vecmath.L296.noopt.spv");
-    const baseline_kernel::offload_parfor_vecmath_296_noopt_vecmath_PushConstants baseline_push_constants{
+        std::string(TESTDATA_DIR) + "/vecmath.L304.noopt.spv");
+    const baseline_kernel::offload_parfor_vecmath_304_noopt_vecmath_PushConstants baseline_push_constants{
         static_cast<int32_t>(rows),
         static_cast<int32_t>(cols),
     };
 
     auto dispatch_transformed_once = [&]() {
         const auto start = std::chrono::steady_clock::now();
-        vecmath296.dispatch(
-            context,
+        vecmath304.dispatch(
+            queue,
             rows,
             cols,
             device_a,
@@ -539,8 +545,8 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath296_tiled_shared_cache_performance)
     };
     auto dispatch_baseline_once = [&]() {
         const auto start = std::chrono::steady_clock::now();
-        baseline_vecmath296.dispatch(
-            context,
+        baseline_vecmath304.dispatch(
+            queue,
             rows,
             cols,
             device_a,
@@ -597,7 +603,7 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath296_tiled_shared_cache_performance)
     RecordProperty("transformed_average_gflops", average_transformed_gflops);
     RecordProperty("best_speedup", best_speedup);
     RecordProperty("average_speedup", average_speedup);
-    std::cerr << "vecmath:296 tiled shared-cache performance: "
+    std::cerr << "vecmath:304 tiled shared-cache performance: "
               << "rows=" << rows
               << ", cols=" << cols
               << ", k=" << k_count
@@ -611,12 +617,12 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath296_tiled_shared_cache_performance)
               << ", transformed_best=" << best_transformed_gflops << " GFLOP/s"
               << " (" << measured_iterations << " measured iterations)\n";
     // Correctness: dispatch both kernels once to separate buffers and compare
-    device_c_baseline.write(context, host_c_baseline);
-    device_c_transformed.write(context, host_c_transformed);
-    baseline_vecmath296.dispatch(context, rows, cols, device_a, device_b, device_c_baseline, baseline_push_constants);
-    vecmath296.dispatch(context, rows, cols, device_a, device_b, device_c_transformed, push_constants);
-    device_c_baseline.read(context, host_c_baseline);
-    device_c_transformed.read(context, host_c_transformed);
+    device_c_baseline.write(queue, host_c_baseline);
+    device_c_transformed.write(queue, host_c_transformed);
+    baseline_vecmath304.dispatch(queue, rows, cols, device_a, device_b, device_c_baseline, baseline_push_constants);
+    vecmath304.dispatch(queue, rows, cols, device_a, device_b, device_c_transformed, push_constants);
+    device_c_baseline.read(queue, host_c_baseline);
+    device_c_transformed.read(queue, host_c_transformed);
 
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {

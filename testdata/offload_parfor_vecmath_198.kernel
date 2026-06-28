@@ -1,0 +1,28 @@
+PROGRAM("vecmath.cc:198")
+
+OFFLOAD_PARFOR_2D_PARAM(queue, r, c, grid, (W, vel, grad, lr))
+
+PARAMETERS
+        fixed_size_matrix<float16, 1024, 4096>& W,
+        fixed_size_matrix<float, 1024, 4096>& vel,
+        const fixed_size_matrix<float, 1024, 4096>& grad,
+        float lr
+
+BEGIN
+const int r = int(gl_GlobalInvocationID.x);
+if (r >= rllm_bound_x) return;
+const int c = int(gl_GlobalInvocationID.y);
+if (c >= rllm_bound_y) return;
+        const float g =  clamp (grad[r, c], -1.000000, 1.000000);
+        vel[r, c] =  clamp (
+            ((0.900000 * vel[r, c]) + (lr * g)),
+            -0.100000,
+            0.100000
+        );
+        W[r, c] =  clamp (
+            (W[r, c] + vel[r, c]),
+            -2.000000,
+            2.000000
+        );
+
+END_PROGRAM
