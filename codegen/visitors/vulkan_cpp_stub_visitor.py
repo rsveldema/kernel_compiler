@@ -686,6 +686,7 @@ class VulkanCppStubVisitor(Visitor):
 
         x_dim, y_dim, z_dim = self._compute_dispatch_dims(node, has_2d, has_3d, wg_x, wg_y, wg_z)
 
+        self._emit("std::lock_guard<std::recursive_mutex> queue_lock(queue.mutex());")
         self._emit("ComputeKernelRegistry::ScopedActiveKernel active_kernel(*this);")
         self._emit("VkCommandBuffer command_buffer = queue.allocate_command_buffer();")
         self._emit("VkCommandBufferBeginInfo begin_info{};")

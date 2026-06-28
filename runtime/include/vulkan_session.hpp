@@ -16,6 +16,8 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -361,8 +363,50 @@ class VulkanQueue
 public:
     VulkanQueue(VulkanSession &session, size_t index);
 
+    VulkanQueue(const VulkanQueue&) = delete;
+    VulkanQueue& operator=(const VulkanQueue&) = delete;
+
+    VulkanQueue(VulkanQueue&& other) noexcept
+        : m_session(other.m_session)
+        , m_queue(other.m_queue)
+        , m_cmd_pool(other.m_cmd_pool)
+        , m_cmd_buf(other.m_cmd_buf)
+        , m_pending_cmd_bufs(std::move(other.m_pending_cmd_bufs))
+        , m_pending_desc_pools(std::move(other.m_pending_desc_pools))
+        , m_mutex(std::make_unique<std::recursive_mutex>())
+    {
+        other.m_queue = VK_NULL_HANDLE;
+        other.m_cmd_pool = VK_NULL_HANDLE;
+        other.m_cmd_buf = VK_NULL_HANDLE;
+    }
+
+    VulkanQueue& operator=(VulkanQueue&& other) noexcept
+    {
+        if (this != &other)
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex());
+            release_pending_resources();
+            if (m_cmd_buf != VK_NULL_HANDLE)
+                vkFreeCommandBuffers(get_device(), m_cmd_pool, 1, &m_cmd_buf);
+            if (m_cmd_pool != VK_NULL_HANDLE)
+                vkDestroyCommandPool(get_device(), m_cmd_pool, nullptr);
+
+            m_queue = other.m_queue;
+            m_cmd_pool = other.m_cmd_pool;
+            m_cmd_buf = other.m_cmd_buf;
+            m_pending_cmd_bufs = std::move(other.m_pending_cmd_bufs);
+            m_pending_desc_pools = std::move(other.m_pending_desc_pools);
+
+            other.m_queue = VK_NULL_HANDLE;
+            other.m_cmd_pool = VK_NULL_HANDLE;
+            other.m_cmd_buf = VK_NULL_HANDLE;
+        }
+        return *this;
+    }
+
     ~VulkanQueue()
     {
+        std::lock_guard<std::recursive_mutex> lock(mutex());
         if (m_cmd_buf != VK_NULL_HANDLE)
         {
             vkFreeCommandBuffers(get_device(), m_cmd_pool, 1, &m_cmd_buf);
@@ -378,9 +422,11 @@ public:
     VkCommandPool command_pool() const { return m_cmd_pool; }
     VkDevice get_device() const;
     VkQueue get_queue() const { return m_queue; }
+    std::recursive_mutex& mutex() const { return *m_mutex; }
 
     void wait(const char* label = "VkComputeSession queue wait idle")
     {
+        std::lock_guard<std::recursive_mutex> lock(mutex());
         check_vk(vkQueueWaitIdle(get_queue()), label);
         release_pending_resources();
         if (m_cmd_pool != VK_NULL_HANDLE)
@@ -394,6 +440,7 @@ public:
 
     VkCommandBuffer allocate_command_buffer()
     {
+        std::lock_guard<std::recursive_mutex> lock(mutex());
         VkCommandBuffer cmd_buf = VK_NULL_HANDLE;
         VkCommandBufferAllocateInfo cai{};
         cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -406,12 +453,14 @@ public:
 
     void defer_command_buffer(VkCommandBuffer cmd_buf)
     {
+        std::lock_guard<std::recursive_mutex> lock(mutex());
         if (cmd_buf != VK_NULL_HANDLE)
             m_pending_cmd_bufs.push_back(cmd_buf);
     }
 
     void defer_descriptor_pool(VkDescriptorPool desc_pool)
     {
+        std::lock_guard<std::recursive_mutex> lock(mutex());
         if (desc_pool != VK_NULL_HANDLE)
             m_pending_desc_pools.push_back(desc_pool);
     }
@@ -424,6 +473,7 @@ private:
     VkCommandBuffer m_cmd_buf  = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> m_pending_cmd_bufs;
     std::vector<VkDescriptorPool> m_pending_desc_pools;
+    std::unique_ptr<std::recursive_mutex> m_mutex = std::make_unique<std::recursive_mutex>();
 
     /* Create command pool and allocate one primary command buffer */
     void init_command_pool();
@@ -1091,6 +1141,7 @@ public:
 
     void write(VulkanQueue& queue, VBaseHostBuffer& src, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
     {
+        std::lock_guard<std::recursive_mutex> queue_lock(queue.mutex());
         assert(src_offset <= src.size());
         assert(dst_offset <= size_);
         if (count == VK_WHOLE_SIZE)
@@ -1104,6 +1155,7 @@ public:
 
     void read(VulkanQueue& queue, VBaseHostBuffer& dst, VkDeviceSize count = VK_WHOLE_SIZE, VkDeviceSize src_offset = 0, VkDeviceSize dst_offset = 0)
     {
+        std::lock_guard<std::recursive_mutex> queue_lock(queue.mutex());
         assert(src_offset <= size_);
         assert(dst_offset <= dst.size());
         if (count == VK_WHOLE_SIZE)
@@ -1119,6 +1171,7 @@ public:
     /** Device-to-device copy: copy all bytes from `src` device buffer into this buffer. */
     void copy_from(VulkanQueue& queue, VBaseDeviceBuffer& src, VkDeviceSize count = VK_WHOLE_SIZE)
     {
+        std::lock_guard<std::recursive_mutex> queue_lock(queue.mutex());
         if (count == VK_WHOLE_SIZE)
             count = src.size();
         assert(count <= src.size());
@@ -1129,6 +1182,7 @@ public:
     /** Fill every byte of the device buffer with zero using vkCmdFillBuffer. */
     void zero(VulkanQueue& queue)
     {
+        std::lock_guard<std::recursive_mutex> queue_lock(queue.mutex());
         assert(size_ % 4 == 0);
         auto cmd_buf = queue.allocate_command_buffer();
 
