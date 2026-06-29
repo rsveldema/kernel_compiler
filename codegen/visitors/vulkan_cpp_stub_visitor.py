@@ -549,7 +549,7 @@ class VulkanCppStubVisitor(Visitor):
             method_params.append(f"        {const_prefix}VBaseDeviceBuffer& {arg_name}")
 
         if all_pc_fields:
-            method_params.append(f"        const {self._kernel_name}_PushConstants& push_constants")
+            method_params.append(f"        {self._kernel_name}_PushConstants push_constants")
 
         return method_params
 
@@ -726,9 +726,20 @@ class VulkanCppStubVisitor(Visitor):
                 self._emit(f"writes[{i}].pBufferInfo = &buffer_infos[{i}];")
             self._emit(f"vkUpdateDescriptorSets(queue.get_device(), {len(buffer_params)}, writes, 0, nullptr);")
         if all_pc_fields:
+            self._emit(f"{self._kernel_name}_PushConstants push_constants_value{{}};")
+            for field in all_pc_fields:
+                if field.name == "rllm_bound_x":
+                    self._emit("push_constants_value.rllm_bound_x = static_cast<int32_t>(dispatch_rows);")
+                elif field.name == "rllm_bound_y":
+                    self._emit("push_constants_value.rllm_bound_y = static_cast<int32_t>(dispatch_cols);")
+                elif field.name == "rllm_bound_z":
+                    self._emit("push_constants_value.rllm_bound_z = static_cast<int32_t>(dispatch_levels);")
+                else:
+                    self._emit(f"push_constants_value.{field.name} = push_constants.{field.name};")
+        if all_pc_fields:
             self._emit(
-                f"vkCmdPushConstants(command_buffer, kernel_.pipeline_layout(), "
-                f"VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants), &push_constants);"
+                "vkCmdPushConstants(command_buffer, kernel_.pipeline_layout(), "
+                "VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants_value), &push_constants_value);"
             )
         if buffer_params:
             self._emit(
@@ -736,8 +747,17 @@ class VulkanCppStubVisitor(Visitor):
                 "kernel_.pipeline_layout(), 0, 1, &desc_set, 0, nullptr);"
             )
         self._emit("vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, kernel_.pipeline());")
-
         self._emit(f"vkCmdDispatch(command_buffer, {x_dim}, {y_dim}, {z_dim});")
+        self._emit("VkMemoryBarrier dispatch_barrier{};")
+        self._emit("dispatch_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;")
+        self._emit("dispatch_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;")
+        self._emit("dispatch_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;")
+        self._emit(
+            "vkCmdPipelineBarrier(command_buffer, "
+            "VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, "
+            "VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, "
+            "0, 1, &dispatch_barrier, 0, nullptr, 0, nullptr);"
+        )
         self._emit('check_vk(vkEndCommandBuffer(command_buffer), "VkComputeSession cmd buf end");')
         self._emit("VkSubmitInfo submit_info{};")
         self._emit("submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;")
@@ -747,6 +767,7 @@ class VulkanCppStubVisitor(Visitor):
         self._emit("queue.defer_command_buffer(command_buffer);")
         if buffer_params:
             self._emit("queue.defer_descriptor_pool(desc_pool);")
+        self._emit("queue.wait(\"VkComputeSession generated dispatch wait idle\");")
 
         self._emit("}")
         self._pop()

@@ -7,10 +7,12 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cctype>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <vulkan/vulkan_core.h>
 #include <unistd.h>
+
 
 #include <logging.hpp>
 
@@ -27,6 +29,15 @@
 // Forward declarations from test_vulkan_helpers.h
 std::string vk_result_str(VkResult rc);
 void        check_vk(VkResult rc, const char* label);
+
+std::ofstream s_nn_log;
+
+void set_nn_log_file(const std::string& filename)
+{
+    if (s_nn_log.is_open())
+        s_nn_log.close();
+    s_nn_log.open(filename);
+}
 
 
 VulkanQueue::VulkanQueue(VulkanSession &session, size_t index)
@@ -110,7 +121,7 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
             if (strstr(props.deviceName, chosen))
             {
                 m_phys_dev = dev;
-                fprintf(stderr, "init_vulkan_instance: selecting device \"%s\"\n", props.deviceName);
+                LOG_INFO("init_vulkan_instance: selecting device \"%s\"\n", props.deviceName);
                 break;
             }
         }
@@ -123,6 +134,7 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
             vkGetPhysicalDeviceProperties(dev, &props);
             if (!device_name_contains(props.deviceName, "llvmpipe"))
             {
+                LOG_INFO("USING DEV: {}", props.deviceName);
                 m_phys_dev = dev;
                 break;
             }
@@ -160,6 +172,8 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
         LOG_ERROR("failed to find a queue family for compute!");
         std::abort();
     }
+
+    LOG_INFO("NUM queues supported = {}", m_queue_count);
 
     std::vector<float> prios(m_queue_count, 1.0f);
     VkDeviceQueueCreateInfo dqi{};
@@ -340,7 +354,7 @@ bool VulkanSession::has_device_extension(const char* name) const
 
 void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
 {
-    std::vector<uint8_t> spirv;
+    std::vector<uint32_t> spirv;
     if (glsl_file.size() >= 4 && glsl_file.ends_with(".spv"))
     {
         std::ifstream ifs_spv(glsl_file, std::ios::binary);
@@ -349,9 +363,16 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
                 std::fprintf(stderr, "Cannot open SPIR-V file: %s\n", glsl_file.c_str());
                 std::abort();
             }
-        spirv.assign(
+        std::vector<char> bytes{
             std::istreambuf_iterator<char>(ifs_spv),
-            std::istreambuf_iterator<char>());
+            std::istreambuf_iterator<char>()};
+        if (bytes.size() % sizeof(uint32_t) != 0)
+        {
+            std::fprintf(stderr, "Invalid SPIR-V byte size for: %s\n", glsl_file.c_str());
+            std::abort();
+        }
+        spirv.resize(bytes.size() / sizeof(uint32_t));
+        std::memcpy(spirv.data(), bytes.data(), bytes.size());
     }
     else
     {
@@ -403,9 +424,17 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
                 std::fprintf(stderr, "Cannot read generated SPIR-V\n");
                 std::abort();
             }
-        spirv.assign(
+        std::vector<char> bytes{
             std::istreambuf_iterator<char>(ifs_spv),
-            std::istreambuf_iterator<char>());
+            std::istreambuf_iterator<char>()};
+        if (bytes.size() % sizeof(uint32_t) != 0)
+        {
+            close(fd);
+            std::fprintf(stderr, "Invalid generated SPIR-V byte size\n");
+            std::abort();
+        }
+        spirv.resize(bytes.size() / sizeof(uint32_t));
+        std::memcpy(spirv.data(), bytes.data(), bytes.size());
 
         remove(tmp_spv);
     }
@@ -418,8 +447,8 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
 
     VkShaderModuleCreateInfo smci{};
     smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    smci.codeSize = spirv.size();
-    smci.pCode = reinterpret_cast<const uint32_t*>(spirv.data());
+    smci.codeSize = spirv.size() * sizeof(uint32_t);
+    smci.pCode = spirv.data();
 
     check_vk(vkCreateShaderModule(get_device(), &smci, nullptr, &m_shader_module), "VkComputeSession shader module");
 

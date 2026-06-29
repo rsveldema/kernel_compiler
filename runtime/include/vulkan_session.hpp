@@ -518,7 +518,9 @@ public:
     bool cooperative_matrix2_enabled() const { return m_coopmat2_enabled; }
     const std::string& cooperative_matrix2_unavailable_reason() const { return m_coopmat2_unavailable_reason; }
     uint32_t get_queue_family_index() const { return m_queue_fi; }
+
     size_t queue_count() const { return m_queue_count; }
+    size_t num_queues() const { return queue_count(); }
 
     ~VulkanSession()
     {
@@ -611,7 +613,7 @@ public:
 
 private:
     /* Create pipeline layout (push constants) */
-    void init_pipeline_layout(uint32_t push_size_bytes)
+    __attribute__((noinline,optimize("O0"))) void init_pipeline_layout(uint32_t push_size_bytes)
     {
         m_push_const_offset = 0;
 
@@ -696,7 +698,7 @@ public:
     VkPipeline pipeline() const { return m_pipeline; }
 
     /* Dispatch the compute kernel. Bind a descriptor set if provided; otherwise push-constants only. */
-    void dispatch(VkCommandBuffer cb, void* constants, size_t num_bytes, const VulkanDimension& dims, VkDescriptorSet desc_set = VK_NULL_HANDLE)
+    void dispatch(VkCommandBuffer cb, const void* constants, size_t num_bytes, const VulkanDimension& dims, VkDescriptorSet desc_set = VK_NULL_HANDLE)
     {
         if (num_bytes > 0 && constants)
         {
@@ -1248,6 +1250,7 @@ private:
         VkDeviceSize dst_offset,
         VkDeviceSize count)
     {
+        queue.wait("VBaseDeviceBuffer::copy wait for pending queue work");
         const VkDeviceSize max_copy_bytes = copy_chunk_size_bytes();
         VkDeviceSize copied = 0;
         while (copied < count)
