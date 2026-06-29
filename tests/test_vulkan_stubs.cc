@@ -154,7 +154,9 @@ TEST_F(VulkanTestBase, tree_rewritten_vecmath231_matches_sequential_cpu)
 
     ASSERT_STREQ(
         kernel::OffloadParforVecmath231VecmathKernel::generated_descriptor(),
-        "tile_block_size=1;tile_size_x=1;tile_size_y=1;tile_chunk_size=1;workgroup_count=1;tree_transformed=yes;");
+        "tile_block_size=512;tile_size_x=8;tile_size_y=8;tile_chunk_size=8;workgroup_count=1;"
+        "workgroup_size_x=8;workgroup_size_y=8;workgroup_size_z=8;reduction_chunks=8;num_z_threads=1;"
+        "tree_transformed=yes;");
 
     VHostBuffer<kernel::RllmBuffer_A> host_a(get_session());
     VHostBuffer<kernel::RllmBuffer_B1> host_b1(get_session());

@@ -20,6 +20,14 @@ _CPP_RESERVED = {"None", "static_cast"}
 def _is_push_identifier(value: str | None) -> bool:
     return bool(value and _IDENT_RE.match(value) and value not in _CPP_RESERVED)
 
+def _product_if_ints(*values: str) -> str:
+    product = 1
+    for value in values:
+        if not value.isdigit():
+            return "1"
+        product *= int(value)
+    return str(product)
+
 def type_to_cpp_string(ty, use_bfloat16: bool = False) -> str:
     """Convert a Type AST node to its C++ string representation."""
     if ty is None:
@@ -646,18 +654,27 @@ class VulkanCppStubVisitor(Visitor):
         wg_z: str,
     ) -> None:
         push_size = f"sizeof({self._kernel_name}_PushConstants)" if all_pc_fields else "0"
-        tile_bs = node.tile_block_size
-        if tile_bs is None:
-            tile_bs = 1
+        derived_tile_block_size = _product_if_ints(wg_x, wg_y, wg_z)
+        tile_bs = node.tile_block_size if node.tile_block_size not in (None, 1) else derived_tile_block_size
         wg_count = node.workgroup_count
         if wg_count is None:
             wg_count = 1
+        descriptor_tile_size_x = node.tile_size_x if node.tile_size_x > 1 else wg_x
+        descriptor_tile_size_y = node.tile_size_y if node.tile_size_y > 1 else wg_y
+        descriptor_tile_chunk_size = node.tile_chunk_size
+        if descriptor_tile_chunk_size <= 1:
+            descriptor_tile_chunk_size = max(node.reduction_chunks, node.num_z_threads, 1)
         descriptor = (
             f"tile_block_size={tile_bs};"
-            f"tile_size_x={node.tile_size_x};"
-            f"tile_size_y={node.tile_size_y};"
-            f"tile_chunk_size={node.tile_chunk_size};"
+            f"tile_size_x={descriptor_tile_size_x};"
+            f"tile_size_y={descriptor_tile_size_y};"
+            f"tile_chunk_size={descriptor_tile_chunk_size};"
             f"workgroup_count={wg_count};"
+            f"workgroup_size_x={wg_x};"
+            f"workgroup_size_y={wg_y};"
+            f"workgroup_size_z={wg_z};"
+            f"reduction_chunks={node.reduction_chunks};"
+            f"num_z_threads={node.num_z_threads};"
             f"tree_transformed={'yes' if node.tree_transformed else 'no'};"
         )
 
