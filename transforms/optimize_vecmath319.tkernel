@@ -1,4 +1,4 @@
-// optimizes ("vecmath.cc:319")
+// optimizes ("vecmath.cc:317")
 // Same pattern as vecmath:296 (B transposed, single sum) but with k=4096.
 // The optimize_vecmath296 tkernel already matches this via wildcard(N),
 // but this file makes the intent explicit.
@@ -17,7 +17,7 @@ search
         OVERFLOW_CHECK_ADD(sum, term);
         sum += term;
     }
-    C[i, j] = sum;
+    C[i, j] = clamp(sum, -10000.0f, 10000.0f);
 
 replace
     const int i = int(gl_GlobalInvocationID.x);
@@ -68,7 +68,7 @@ replace
             sum += rllm_reduction_result[rllm_reduction_accumulate_slot];
         }
 
-        C[i, j] = sum;
+        C[i, j] = clamp(sum, -10000.0f, 10000.0f);
     }
 
 meta { reduction_chunks = 8 }

@@ -156,14 +156,24 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
     if (qfc > 0)
         vkGetPhysicalDeviceQueueFamilyProperties(m_phys_dev, &qfc, qfps.data());
     bool found = false;
+    uint32_t best_queue_count = 0;
     for (uint32_t i = 0; i < qfc; ++i)
     {
+        LOG_INFO(
+            "Vulkan queue family {}: flags=0x{:x}, queueCount={}",
+            i,
+            static_cast<uint32_t>(qfps[i].queueFlags),
+            qfps[i].queueCount
+        );
         if (qfps[i].queueFlags & VK_QUEUE_COMPUTE_BIT)
         {
             found = true;
-            m_queue_fi = i;
-            m_queue_count = std::min<size_t>(MAX_QUEUES, std::max<uint32_t>(1, qfps[i].queueCount));
-            break;
+            if (qfps[i].queueCount > best_queue_count)
+            {
+                best_queue_count = qfps[i].queueCount;
+                m_queue_fi = i;
+                m_queue_count = std::min<size_t>(MAX_QUEUES, std::max<uint32_t>(1, qfps[i].queueCount));
+            }
         }
     }
 
@@ -173,7 +183,7 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
         std::abort();
     }
 
-    LOG_INFO("NUM queues supported = {}", m_queue_count);
+    LOG_INFO("Using Vulkan queue family {} with {} queue(s)", m_queue_fi, m_queue_count);
 
     std::vector<float> prios(m_queue_count, 1.0f);
     VkDeviceQueueCreateInfo dqi{};

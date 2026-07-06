@@ -1,4 +1,4 @@
-// optimizes ("vecmath.cc:415")
+// optimizes ("vecmath.cc:418")
 // Triple sum matmul accumulate: C[i,j] += A1*B1 + A2*B2 + A3*B3 (B not transposed).
 // Each z-thread computes a partial total (sum1+sum2+sum3); z=0 reduces across z-threads.
 
@@ -27,7 +27,8 @@ search
         OVERFLOW_CHECK_ADD(sum3, term3);
         sum3 += term3;
     }
-    C[i, j] += (sum1 + (sum2 + sum3));
+    const float raw = (C[i, j] + (sum1 + (sum2 + sum3)));
+    C[i, j] = clamp(raw, -10000.0f, 10000.0f);
 
 replace
     const int i = int(gl_GlobalInvocationID.x);
@@ -89,7 +90,8 @@ replace
             rllm_total += rllm_reduction_result[rllm_reduction_accumulate_slot];
         }
 
-        C[i, j] += rllm_total;
+        const float raw = (C[i, j] + rllm_total);
+        C[i, j] = clamp(raw, -10000.0f, 10000.0f);
     }
 
 meta { reduction_chunks = 8 }
