@@ -784,7 +784,6 @@ class VulkanCppStubVisitor(Visitor):
         self._emit("queue.defer_command_buffer(command_buffer);")
         if buffer_params:
             self._emit("queue.defer_descriptor_pool(desc_pool);")
-        self._emit("queue.wait(\"VkComputeSession generated dispatch wait idle\");")
 
         self._emit("}")
         self._pop()
