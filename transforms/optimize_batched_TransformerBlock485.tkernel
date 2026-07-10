@@ -1,0 +1,86 @@
+// optimizes ("TransformerBlock.cc:485")
+// Clamped RMSNorm backward: parallelize both embedding reductions over z.
+
+search
+    const int t = int(gl_GlobalInvocationID.x);
+    if (t >= rllm_bound_x) return;
+    constexpr float eps = 1e-6f;
+    float sq = 0.f;
+    for (const int i : limit<wildcard(DIM)>())
+    {
+        const float value = x[t, i];
+        sq += (value * value);
+    }
+    constexpr float fd = wildcard(DIM);
+    const float inv = (1.0f / sqrt(((sq / fd) + eps)));
+    float dot = 0.f;
+    for (const int i : limit<wildcard(DIM)>())
+    {
+        dot += ((dy[t, i] * x[t, i]) * inv);
+    }
+    dot /= fd;
+    for (const int i : limit<wildcard(DIM)>())
+    {
+        const float raw = (dx[t, i] + (inv * (dy[t, i] - ((x[t, i] * inv) * dot))));
+        dx[t, i] = clamp(raw, wildcard(LOW), wildcard(HIGH));
+    }
+
+replace
+    const int t = int(gl_GlobalInvocationID.x);
+    const int lx = int(gl_LocalInvocationID.x);
+    const int lz = int(gl_LocalInvocationID.z);
+    const int rllm_chunk_size = (wildcard(DIM) / wildcard(reduction_chunks));
+    const int rllm_begin = (lz * rllm_chunk_size);
+    const int rllm_end = (rllm_begin + rllm_chunk_size);
+    const int rllm_slot = ((lx * wildcard(reduction_chunks)) + lz);
+    shared float rllm_sq[128];
+    shared float rllm_inv[16];
+    shared float rllm_dot[128];
+    shared float rllm_scaled_dot[16];
+    constexpr float eps = 1e-6f;
+    constexpr float fd = wildcard(DIM);
+    float sq = 0.f;
+    if (t < rllm_bound_x)
+    {
+        for (int i = rllm_begin; i < rllm_end; ++i)
+            sq += (x[t, i] * x[t, i]);
+    }
+    rllm_sq[rllm_slot] = sq;
+    barrier();
+    if ((t < rllm_bound_x) && (lz == 0))
+    {
+        sq = 0.f;
+        for (int z = 0; z < wildcard(reduction_chunks); ++z)
+            sq += rllm_sq[((lx * wildcard(reduction_chunks)) + z)];
+        rllm_inv[lx] = (1.0f / sqrt(((sq / fd) + eps)));
+    }
+    barrier();
+    float dot = 0.f;
+    if (t < rllm_bound_x)
+    {
+        const float inv = rllm_inv[lx];
+        for (int i = rllm_begin; i < rllm_end; ++i)
+            dot += ((dy[t, i] * x[t, i]) * inv);
+    }
+    rllm_dot[rllm_slot] = dot;
+    barrier();
+    if ((t < rllm_bound_x) && (lz == 0))
+    {
+        dot = 0.f;
+        for (int z = 0; z < wildcard(reduction_chunks); ++z)
+            dot += rllm_dot[((lx * wildcard(reduction_chunks)) + z)];
+        rllm_scaled_dot[lx] = (dot / fd);
+    }
+    barrier();
+    if (t < rllm_bound_x)
+    {
+        const float inv = rllm_inv[lx];
+        dot = rllm_scaled_dot[lx];
+        for (int i = rllm_begin; i < rllm_end; ++i)
+        {
+            const float raw = (dx[t, i] + (inv * (dy[t, i] - ((x[t, i] * inv) * dot))));
+            dx[t, i] = clamp(raw, wildcard(LOW), wildcard(HIGH));
+        }
+    }
+
+meta { reduction_chunks = 8 }

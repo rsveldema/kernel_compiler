@@ -1,0 +1,40 @@
+// optimizes ("OutputLayer.cc:260")
+// Vocabulary projection: split the embedding dot product across z threads.
+
+search
+    const int v = int(gl_GlobalInvocationID.x);
+    if (v >= rllm_bound_x) return;
+    float sum = 0.f;
+    for (const int d : limit<wildcard(DIM)>())
+    {
+        const float term = (h_last[d] * W[v, d]);
+        sum += term;
+    }
+    inputs[v] = clamp(sum, wildcard(LOW), wildcard(HIGH));
+
+replace
+    const int v = int(gl_GlobalInvocationID.x);
+    const int lx = int(gl_LocalInvocationID.x);
+    const int lz = int(gl_LocalInvocationID.z);
+    const int rllm_chunk_size = (wildcard(DIM) / wildcard(reduction_chunks));
+    const int rllm_begin = (lz * rllm_chunk_size);
+    const int rllm_end = (rllm_begin + rllm_chunk_size);
+    const int rllm_slot = ((lx * wildcard(reduction_chunks)) + lz);
+    shared float rllm_sum[128];
+    float sum = 0.f;
+    if (v < rllm_bound_x)
+    {
+        for (int d = rllm_begin; d < rllm_end; ++d)
+            sum += (h_last[d] * W[v, d]);
+    }
+    rllm_sum[rllm_slot] = sum;
+    barrier();
+    if ((v < rllm_bound_x) && (lz == 0))
+    {
+        sum = 0.f;
+        for (int z = 0; z < wildcard(reduction_chunks); ++z)
+            sum += rllm_sum[((lx * wildcard(reduction_chunks)) + z)];
+        inputs[v] = clamp(sum, wildcard(LOW), wildcard(HIGH));
+    }
+
+meta { reduction_chunks = 8 }

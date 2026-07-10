@@ -1,0 +1,49 @@
+// optimizes ("TransformerBlock.cc:802")
+// Batched attention backward score: split the per-head dot across z threads.
+
+search
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int j = int(gl_GlobalInvocationID.y);
+    if (j >= rllm_bound_y) return;
+    if (j > i) return;
+    float dot = 0.f;
+    for (const int d_head : limit<wildcard(HEAD_DIM)>())
+    {
+        const int d = (hStart + int(d_head));
+        dot += (d_attn_concat[i, d] * V[j, d]);
+    }
+    d_scores_h[i, j] = clamp(dot, wildcard(LOW), wildcard(HIGH));
+
+replace
+    const int i = int(gl_GlobalInvocationID.x);
+    const int j = int(gl_GlobalInvocationID.y);
+    const int rllm_in_bounds = int(((i < rllm_bound_x) && (j < rllm_bound_y) && (j <= i)));
+    const int rllm_lx = int(gl_LocalInvocationID.x);
+    const int rllm_ly = int(gl_LocalInvocationID.y);
+    const int rllm_lz = int(gl_LocalInvocationID.z);
+    const int rllm_slot_base = (((rllm_ly * 8) + rllm_lx) * wildcard(reduction_chunks));
+    const int rllm_chunk_size = (wildcard(HEAD_DIM) / wildcard(reduction_chunks));
+    const int rllm_begin = (rllm_lz * rllm_chunk_size);
+    const int rllm_end = (rllm_begin + rllm_chunk_size);
+    shared float rllm_reduction_result[512];
+    float dot = 0.f;
+    if (rllm_in_bounds != 0)
+    {
+        for (int d_head = rllm_begin; d_head < rllm_end; ++d_head)
+        {
+            const int d = (hStart + d_head);
+            dot += (d_attn_concat[i, d] * V[j, d]);
+        }
+    }
+    rllm_reduction_result[(rllm_slot_base + rllm_lz)] = dot;
+    barrier();
+    if ((rllm_in_bounds != 0) && (rllm_lz == 0))
+    {
+        dot = 0.f;
+        for (int z = 0; z < wildcard(reduction_chunks); ++z)
+            dot += rllm_reduction_result[(rllm_slot_base + z)];
+        d_scores_h[i, j] = clamp(dot, wildcard(LOW), wildcard(HIGH));
+    }
+
+meta { reduction_chunks = 8 }
