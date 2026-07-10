@@ -371,6 +371,7 @@ public:
         , m_queue(other.m_queue)
         , m_cmd_pool(other.m_cmd_pool)
         , m_cmd_buf(other.m_cmd_buf)
+        , m_pending_zero_fills(std::move(other.m_pending_zero_fills))
         , m_pending_cmd_bufs(std::move(other.m_pending_cmd_bufs))
         , m_pending_desc_pools(std::move(other.m_pending_desc_pools))
         , m_mutex(std::make_unique<std::recursive_mutex>())
@@ -378,6 +379,7 @@ public:
         other.m_queue = VK_NULL_HANDLE;
         other.m_cmd_pool = VK_NULL_HANDLE;
         other.m_cmd_buf = VK_NULL_HANDLE;
+        other.m_pending_zero_fills.clear();
     }
 
     VulkanQueue& operator=(VulkanQueue&& other) noexcept
@@ -385,6 +387,9 @@ public:
         if (this != &other)
         {
             std::lock_guard<std::recursive_mutex> lock(mutex());
+            flush_pending_zero_fills("VkComputeSession flush zero fills before queue move assignment");
+            if (m_queue != VK_NULL_HANDLE)
+                check_vk(vkQueueWaitIdle(get_queue()), "VkComputeSession queue move assignment wait idle");
             release_pending_resources();
             if (m_cmd_buf != VK_NULL_HANDLE)
                 vkFreeCommandBuffers(get_device(), m_cmd_pool, 1, &m_cmd_buf);
@@ -394,12 +399,14 @@ public:
             m_queue = other.m_queue;
             m_cmd_pool = other.m_cmd_pool;
             m_cmd_buf = other.m_cmd_buf;
+            m_pending_zero_fills = std::move(other.m_pending_zero_fills);
             m_pending_cmd_bufs = std::move(other.m_pending_cmd_bufs);
             m_pending_desc_pools = std::move(other.m_pending_desc_pools);
 
             other.m_queue = VK_NULL_HANDLE;
             other.m_cmd_pool = VK_NULL_HANDLE;
             other.m_cmd_buf = VK_NULL_HANDLE;
+            other.m_pending_zero_fills.clear();
         }
         return *this;
     }
@@ -407,6 +414,11 @@ public:
     ~VulkanQueue()
     {
         std::lock_guard<std::recursive_mutex> lock(mutex());
+        if (!m_pending_zero_fills.empty())
+            flush_pending_zero_fills("VkComputeSession flush zero fills before queue destruction");
+        if (m_queue != VK_NULL_HANDLE)
+            check_vk(vkQueueWaitIdle(get_queue()), "VkComputeSession queue destruction wait idle");
+        release_pending_resources();
         if (m_cmd_buf != VK_NULL_HANDLE)
         {
             vkFreeCommandBuffers(get_device(), m_cmd_pool, 1, &m_cmd_buf);
@@ -427,6 +439,7 @@ public:
     void wait(const char* label = "VkComputeSession queue wait idle")
     {
         std::lock_guard<std::recursive_mutex> lock(mutex());
+        flush_pending_zero_fills("VkComputeSession flush zero fills before queue wait");
         check_vk(vkQueueWaitIdle(get_queue()), label);
         release_pending_resources();
         if (m_cmd_pool != VK_NULL_HANDLE)
@@ -441,6 +454,7 @@ public:
     VkCommandBuffer allocate_command_buffer()
     {
         std::lock_guard<std::recursive_mutex> lock(mutex());
+        flush_pending_zero_fills("VkComputeSession flush zero fills before command buffer alloc");
         VkCommandBuffer cmd_buf = VK_NULL_HANDLE;
         VkCommandBufferAllocateInfo cai{};
         cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -449,6 +463,61 @@ public:
         cai.commandBufferCount = 1;
         check_vk(vkAllocateCommandBuffers(get_device(), &cai, &cmd_buf), "VkComputeSession cmd buf alloc");
         return cmd_buf;
+    }
+
+    void enqueue_zero_fill(VkBuffer buffer, VkDeviceSize size)
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex());
+        assert(buffer != VK_NULL_HANDLE);
+        assert(size % 4 == 0);
+
+        m_pending_zero_fills.push_back({buffer, size});
+        if (m_pending_zero_fills.size() >= MAX_ZERO_FILLS_PER_SUBMIT)
+            flush_pending_zero_fills("VkComputeSession flush full zero fill batch");
+    }
+
+    void flush_pending_zero_fills(const char* label = "VkComputeSession flush zero fills")
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex());
+        if (m_pending_zero_fills.empty())
+            return;
+
+        VkCommandBuffer cmd_buf = VK_NULL_HANDLE;
+        VkCommandBufferAllocateInfo cai{};
+        cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cai.commandPool = m_cmd_pool;
+        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        check_vk(vkAllocateCommandBuffers(get_device(), &cai, &cmd_buf), "VkComputeSession zero fill cmd buf alloc");
+
+        VkCommandBufferBeginInfo bbci{};
+        bbci.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bbci.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        check_vk(vkBeginCommandBuffer(cmd_buf, &bbci), "VkComputeSession zero fill cmd buf begin");
+
+        for (const PendingZeroFill& fill : m_pending_zero_fills)
+            record_zero_fill(cmd_buf, fill.buffer, fill.size);
+
+        check_vk(vkEndCommandBuffer(cmd_buf), "VkComputeSession zero fill cmd buf end");
+
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd_buf;
+        check_vk(vkQueueSubmit(get_queue(), 1, &si, VK_NULL_HANDLE), label);
+        defer_command_buffer(cmd_buf);
+        m_pending_zero_fills.clear();
+    }
+
+    bool has_pending_zero_fill_for(VkBuffer buffer) const
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex());
+        return std::find_if(
+            m_pending_zero_fills.begin(),
+            m_pending_zero_fills.end(),
+            [buffer](const PendingZeroFill& fill) {
+                return fill.buffer == buffer;
+            }) != m_pending_zero_fills.end();
     }
 
     void defer_command_buffer(VkCommandBuffer cmd_buf)
@@ -471,12 +540,61 @@ private:
     VkQueue m_queue = VK_NULL_HANDLE;
     VkCommandPool   m_cmd_pool = VK_NULL_HANDLE;
     VkCommandBuffer m_cmd_buf  = VK_NULL_HANDLE;
+    struct PendingZeroFill
+    {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceSize size = 0;
+    };
+    std::vector<PendingZeroFill> m_pending_zero_fills;
     std::vector<VkCommandBuffer> m_pending_cmd_bufs;
     std::vector<VkDescriptorPool> m_pending_desc_pools;
     std::unique_ptr<std::recursive_mutex> m_mutex = std::make_unique<std::recursive_mutex>();
 
     /* Create command pool and allocate one primary command buffer */
     void init_command_pool();
+
+    static constexpr size_t MAX_ZERO_FILLS_PER_SUBMIT = 64;
+
+    static void record_zero_fill(VkCommandBuffer cmd_buf, VkBuffer buffer, VkDeviceSize size)
+    {
+        VkBufferMemoryBarrier before_fill{};
+        before_fill.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        before_fill.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        before_fill.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        before_fill.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        before_fill.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        before_fill.buffer = buffer;
+        before_fill.offset = 0;
+        before_fill.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(
+            cmd_buf,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            0, nullptr,
+            1, &before_fill,
+            0, nullptr);
+
+        vkCmdFillBuffer(cmd_buf, buffer, 0, size, 0u);
+
+        VkBufferMemoryBarrier after_fill{};
+        after_fill.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        after_fill.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        after_fill.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        after_fill.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        after_fill.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        after_fill.buffer = buffer;
+        after_fill.offset = 0;
+        after_fill.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(
+            cmd_buf,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            0, nullptr,
+            1, &after_fill,
+            0, nullptr);
+    }
 
     void release_pending_resources()
     {
@@ -545,6 +663,16 @@ public:
         assert(!m_queues.empty());
         ix %= m_queues.size();
         return m_queues[ix];
+    }
+
+    void wait_for_pending_zero_fills(VkBuffer buffer)
+    {
+        assert(!m_queues.empty());
+        for (auto& queue : m_queues)
+        {
+            if (queue.has_pending_zero_fill_for(buffer))
+                queue.wait("VkComputeSession wait for pending zero fill before buffer destruction");
+        }
     }
 
 protected:
@@ -1186,59 +1314,7 @@ public:
     {
         std::lock_guard<std::recursive_mutex> queue_lock(queue.mutex());
         assert(size_ % 4 == 0);
-        auto cmd_buf = queue.allocate_command_buffer();
-
-        VkCommandBufferBeginInfo bbci{};
-        bbci.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        bbci.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        check_vk(vkBeginCommandBuffer(cmd_buf, &bbci), "VBaseDeviceBuffer::zero cmd buf begin");
-
-        VkBufferMemoryBarrier before_fill{};
-        before_fill.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        before_fill.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        before_fill.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        before_fill.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        before_fill.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        before_fill.buffer = buf_;
-        before_fill.offset = 0;
-        before_fill.size = VK_WHOLE_SIZE;
-        vkCmdPipelineBarrier(
-            cmd_buf,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT,
-            0,
-            0, nullptr,
-            1, &before_fill,
-            0, nullptr);
-
-        vkCmdFillBuffer(cmd_buf, buf_, 0, VK_WHOLE_SIZE, 0u);
-
-        VkBufferMemoryBarrier after_fill{};
-        after_fill.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        after_fill.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        after_fill.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
-        after_fill.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        after_fill.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        after_fill.buffer = buf_;
-        after_fill.offset = 0;
-        after_fill.size = VK_WHOLE_SIZE;
-        vkCmdPipelineBarrier(
-            cmd_buf,
-            VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-            0,
-            0, nullptr,
-            1, &after_fill,
-            0, nullptr);
-
-        check_vk(vkEndCommandBuffer(cmd_buf), "VBaseDeviceBuffer::zero cmd buf end");
-
-        VkSubmitInfo si{};
-        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers = &cmd_buf;
-        check_vk(vkQueueSubmit(queue.get_queue(), 1, &si, VK_NULL_HANDLE), "VBaseDeviceBuffer::zero submit");
-        queue.defer_command_buffer(cmd_buf);
+        queue.enqueue_zero_fill(buf_, size_);
     }
 
 private:
@@ -1371,6 +1447,8 @@ private:
 
     void destroy_resources()
     {
+        if (buf_ != VK_NULL_HANDLE)
+            m_session.wait_for_pending_zero_fills(buf_);
         if (buf_ != VK_NULL_HANDLE)
             vkDestroyBuffer(m_session.get_device(), buf_, nullptr);
         if (mem_ != VK_NULL_HANDLE)

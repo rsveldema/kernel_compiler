@@ -114,16 +114,26 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
     const char *chosen = preferred_device_name ? preferred_device_name : getenv("VULKAN_DEVICE");
     if (chosen)
     {
+        bool matched = false;
         for (auto &dev : devs)
         {
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(dev, &props);
-            if (strstr(props.deviceName, chosen))
+            if (device_name_contains(props.deviceName, chosen))
             {
                 m_phys_dev = dev;
+                matched = true;
                 LOG_INFO("init_vulkan_instance: selecting device \"%s\"\n", props.deviceName);
                 break;
             }
+        }
+        if (!matched)
+        {
+            fprintf(stderr, "init_vulkan_instance: no Vulkan device matches \"%s\"\n", chosen);
+            vkDestroyInstance(m_instance, nullptr);
+            m_instance = VK_NULL_HANDLE;
+            m_phys_dev = VK_NULL_HANDLE;
+            return;
         }
     }
     else
