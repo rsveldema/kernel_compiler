@@ -1,0 +1,52 @@
+// optimizes ("TransformerBlock.cc:720")
+// Packed attention score with an isolated batch mask and fixed head reduction.
+
+search
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int j = int(gl_GlobalInvocationID.y);
+    if (j >= rllm_bound_y) return;
+    if (j > i) return;
+    float dot = 0.f;
+    if (row_batch[i] == row_batch[j])
+    {
+        for (const int d_head : limit<wildcard(HEAD_DIM)>())
+        {
+            const int d = (hStart + int(d_head));
+            dot += (Q[i, d] * K[j, d]);
+        }
+    }
+    attn_w_h[i, j] = (dot * wildcard(scale));
+
+replace
+    const int i = int(gl_GlobalInvocationID.x);
+    const int j = int(gl_GlobalInvocationID.y);
+    const int lx = int(gl_LocalInvocationID.x);
+    const int ly = int(gl_LocalInvocationID.y);
+    const int lz = int(gl_LocalInvocationID.z);
+    const int valid = int(((i < rllm_bound_x) && (j < rllm_bound_y) && (j <= i) && (row_batch[i] == row_batch[j])));
+    const int slot_base = (((ly * 8) + lx) * wildcard(reduction_chunks));
+    const int chunk = (wildcard(HEAD_DIM) / wildcard(reduction_chunks));
+    const int begin = (lz * chunk);
+    const int end = (begin + chunk);
+    shared float partial[512];
+    float dot = 0.f;
+    if (valid != 0)
+    {
+        for (int d_head = begin; d_head < end; ++d_head)
+        {
+            const int d = (hStart + d_head);
+            dot += (Q[i, d] * K[j, d]);
+        }
+    }
+    partial[(slot_base + lz)] = dot;
+    barrier();
+    if ((valid != 0) && (lz == 0))
+    {
+        dot = 0.f;
+        for (int z = 0; z < wildcard(reduction_chunks); ++z)
+            dot += partial[(slot_base + z)];
+        attn_w_h[i, j] = (dot * wildcard(scale));
+    }
+
+meta { reduction_chunks = 8 }
