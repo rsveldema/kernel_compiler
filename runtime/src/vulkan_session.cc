@@ -90,7 +90,7 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
     VkResult rc = vkCreateInstance(&ici, nullptr, &m_instance);
     if (rc != VK_SUCCESS)
     {
-        fprintf(stderr, "init_vulkan_instance: vkCreateInstance failed: %s\n", vk_result_str(rc).c_str());
+        LOG_ERROR("init_vulkan_instance: vkCreateInstance failed: {}", vk_result_str(rc));
         m_instance = VK_NULL_HANDLE;
         return;
     }
@@ -103,7 +103,7 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
         vkEnumeratePhysicalDevices(m_instance, &count, devs.data());
     if (count == 0)
     {
-        fprintf(stderr, "init_vulkan_instance: no Vulkan physical devices found\n");
+        LOG_ERROR("init_vulkan_instance: no Vulkan physical devices found");
         m_instance = VK_NULL_HANDLE;
         return;
     }
@@ -123,13 +123,13 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
             {
                 m_phys_dev = dev;
                 matched = true;
-                LOG_INFO("init_vulkan_instance: selecting device \"%s\"\n", props.deviceName);
+                LOG_INFO("init_vulkan_instance: selecting device {}", props.deviceName);
                 break;
             }
         }
         if (!matched)
         {
-            fprintf(stderr, "init_vulkan_instance: no Vulkan device matches \"%s\"\n", chosen);
+            LOG_ERROR("init_vulkan_instance: no Vulkan device matches \"{}\"", chosen);
             vkDestroyInstance(m_instance, nullptr);
             m_instance = VK_NULL_HANDLE;
             m_phys_dev = VK_NULL_HANDLE;
@@ -320,7 +320,7 @@ VulkanSession::VulkanSession(bool enable_cooperative_matrix2, const char* prefer
     rc = vkCreateDevice(m_phys_dev, &dci, nullptr, &m_device);
     if (rc != VK_SUCCESS)
     {
-        fprintf(stderr, "init_vulkan_instance: vkCreateDevice failed: %s\n", vk_result_str(rc).c_str());
+        LOG_ERROR("init_vulkan_instance: vkCreateDevice failed: {}", vk_result_str(rc).c_str());
         m_instance = static_cast<VkInstance>(VK_NULL_HANDLE);
         m_device = static_cast<VkDevice>(VK_NULL_HANDLE);
         return;
@@ -380,7 +380,7 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
         std::ifstream ifs_spv(glsl_file, std::ios::binary);
         if (!ifs_spv.is_open())
             {
-                std::fprintf(stderr, "Cannot open SPIR-V file: %s\n", glsl_file.c_str());
+                LOG_ERROR("Cannot open SPIR-V file: {}", glsl_file.c_str());
                 std::abort();
             }
         std::vector<char> bytes{
@@ -388,7 +388,7 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
             std::istreambuf_iterator<char>()};
         if (bytes.size() % sizeof(uint32_t) != 0)
         {
-            std::fprintf(stderr, "Invalid SPIR-V byte size for: %s\n", glsl_file.c_str());
+            LOG_ERROR("Invalid SPIR-V byte size for: {}", glsl_file.c_str());
             std::abort();
         }
         spirv.resize(bytes.size() / sizeof(uint32_t));
@@ -401,7 +401,7 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
         int fd = mkstemp(tmp_spv);
         if (fd < 0)
         {
-            std::fprintf(stderr, "mkstemp failed\n");
+            LOG_ERROR("mkstemp failed\n");
             std::abort();
         }
 
@@ -413,7 +413,7 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
         if (!fp)
         {
             close(fd);
-            std::fprintf(stderr, "glslc failed for: %s\n", glsl_file.c_str());
+            LOG_ERROR("glslc failed for: %s\n", glsl_file.c_str());
             std::abort();
         }
 
@@ -424,7 +424,7 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
             {
                 close(fd);
                 pclose(fp);
-                std::fprintf(stderr, "failed to write temporary SPIR-V file\n");
+                LOG_ERROR("failed to write temporary SPIR-V file");
                 std::abort();
             }
         }
@@ -433,7 +433,7 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
         if (rc_p != 0)
         {
             close(fd);
-            std::fprintf(stderr, "glslc error for: %s\n", glsl_file.c_str());
+            LOG_ERROR("glslc error for: {}", glsl_file.c_str());
             std::abort();
         }
         close(fd);
@@ -441,7 +441,7 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
         std::ifstream ifs_spv(tmp_spv, std::ios::binary);
         if (!ifs_spv.is_open())
             {
-                std::fprintf(stderr, "Cannot read generated SPIR-V\n");
+                LOG_ERROR("Cannot read generated SPIR-V\n");
                 std::abort();
             }
         std::vector<char> bytes{
@@ -450,7 +450,7 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
         if (bytes.size() % sizeof(uint32_t) != 0)
         {
             close(fd);
-            std::fprintf(stderr, "Invalid generated SPIR-V byte size\n");
+            LOG_ERROR("Invalid generated SPIR-V byte size\n");
             std::abort();
         }
         spirv.resize(bytes.size() / sizeof(uint32_t));
@@ -461,7 +461,7 @@ void VulkanComputeKernel::create_pipeline(const std::string &glsl_file)
 
     if (spirv.empty())
         {
-            std::fprintf(stderr, "Empty SPIR-V from glslc for: %s\n", glsl_file.c_str());
+            LOG_ERROR("Empty SPIR-V from glslc for: {}", glsl_file.c_str());
             std::abort();
         }
 
@@ -511,7 +511,7 @@ void check_vk(VkResult rc, const char* label)
 {
     if (rc != VK_SUCCESS)
     {
-        std::fprintf(stderr, "%s: %s\n", label, vk_result_str(rc).c_str());
+        LOG_ERROR("{}", vk_result_str(rc));
         std::abort();
     }
 }
