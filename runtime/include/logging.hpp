@@ -30,4 +30,4 @@ extern std::ofstream s_nn_log;
 } }
 
 
-void set_nn_log_file(const std::string& filename);
+void set_nn_log_file(const std::string& filename, bool append = false);

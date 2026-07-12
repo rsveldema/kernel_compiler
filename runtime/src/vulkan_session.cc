@@ -2,6 +2,7 @@
  *  Test-only helper utilities — implementations for vk_result_str and
  *  check_vk used across the Vulkan test infrastructure.
  */
+#include <unistd.h>
 
 #include <string>
 #include <cstdlib>
@@ -10,9 +11,8 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
-#include <vulkan/vulkan_core.h>
-#include <unistd.h>
 
+#include <vulkan/vulkan.h>
 
 #include <logging.hpp>
 
@@ -32,11 +32,11 @@ void        check_vk(VkResult rc, const char* label);
 
 std::ofstream s_nn_log;
 
-void set_nn_log_file(const std::string& filename)
+void set_nn_log_file(const std::string& filename, bool append)
 {
     if (s_nn_log.is_open())
         s_nn_log.close();
-    s_nn_log.open(filename);
+    s_nn_log.open(filename, append ? std::ios::app : std::ios::trunc);
 }
 
 

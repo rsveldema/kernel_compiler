@@ -1,0 +1,20 @@
+// identity ("InputLayer.cc:42")
+// Keep GPU embedding-gradient accumulation as an explicit AST transform boundary.
+
+search
+    const int row = int(gl_GlobalInvocationID.x);
+    if (row >= rllm_bound_x) return;
+    const int d = int(gl_GlobalInvocationID.y);
+    if (d >= rllm_bound_y) return;
+    const int tok = tokens[row];
+    atomicAdd(gradients[tok, d], dh[row, d]);
+    atomicMax(touched[tok], 1);
+
+replace
+    const int row = int(gl_GlobalInvocationID.x);
+    if (row >= rllm_bound_x) return;
+    const int d = int(gl_GlobalInvocationID.y);
+    if (d >= rllm_bound_y) return;
+    const int tok = tokens[row];
+    atomicAdd(gradients[tok, d], dh[row, d]);
+    atomicMax(touched[tok], 1);

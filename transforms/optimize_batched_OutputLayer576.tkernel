@@ -1,0 +1,43 @@
+// optimizes ("OutputLayer.cc:576")
+// Reduce exponentials locally before adding to the per-example softmax sum.
+
+search
+    const int batch = int(gl_GlobalInvocationID.x);
+    if (batch >= rllm_bound_x) return;
+    const int token = int(gl_GlobalInvocationID.y);
+    if (token >= rllm_bound_y) return;
+    if (active_examples[batch] != 0)
+    {
+        const float value = exp((logits[batch, token] - temp[batch, wildcard(MAX_SLOT)]));
+        delta[batch, token] = value;
+        atomicAdd(temp[batch, wildcard(SUM_SLOT)], value);
+    }
+    else
+        delta[batch, token] = 0.f;
+
+replace
+    const int batch = int(gl_GlobalInvocationID.x);
+    const int token = int(gl_GlobalInvocationID.y);
+    const int lx = int(gl_LocalInvocationID.x);
+    const int ly = int(gl_LocalInvocationID.y);
+    const int slot = ((lx * 16) + ly);
+    const int valid = int(((batch < rllm_bound_x) && (token < rllm_bound_y)));
+    const int row_writer = int(((batch < rllm_bound_x) && (ly == 0)));
+    shared float rllm_sum_values[256];
+    float value = 0.f;
+    if ((valid != 0) && (active_examples[batch] != 0))
+    {
+        value = exp((logits[batch, token] - temp[batch, wildcard(MAX_SLOT)]));
+        delta[batch, token] = value;
+    }
+    else if (valid != 0)
+        delta[batch, token] = 0.f;
+    rllm_sum_values[slot] = value;
+    barrier();
+    if ((row_writer != 0) && (active_examples[batch] != 0))
+    {
+        value = 0.f;
+        for (int y = 0; y < 16; ++y)
+            value += rllm_sum_values[((lx * 16) + y)];
+        atomicAdd(temp[batch, wildcard(SUM_SLOT)], value);
+    }

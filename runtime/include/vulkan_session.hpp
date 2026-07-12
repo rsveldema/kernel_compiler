@@ -25,7 +25,7 @@
 #include <cstdlib>
 #include <cstdio>
 
-#include <vulkan/vulkan_core.h>
+#include <vulkan/vulkan.h>
 
 // Forward declarations for functions implemented in test_vulkan_helpers.cc
 std::string vk_result_str(VkResult rc);

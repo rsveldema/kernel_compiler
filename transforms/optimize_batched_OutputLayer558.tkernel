@@ -1,0 +1,32 @@
+// optimizes ("OutputLayer.cc:558")
+// Reduce one atomic max per local batch row instead of one per vocabulary token.
+
+search
+    const int batch = int(gl_GlobalInvocationID.x);
+    if (batch >= rllm_bound_x) return;
+    const int token = int(gl_GlobalInvocationID.y);
+    if (token >= rllm_bound_y) return;
+    if (active_examples[batch] != 0)
+        atomicMax(temp[batch, wildcard(MAX_SLOT)], logits[batch, token]);
+
+replace
+    const int batch = int(gl_GlobalInvocationID.x);
+    const int token = int(gl_GlobalInvocationID.y);
+    const int lx = int(gl_LocalInvocationID.x);
+    const int ly = int(gl_LocalInvocationID.y);
+    const int slot = ((lx * 16) + ly);
+    const int valid = int(((batch < rllm_bound_x) && (token < rllm_bound_y)));
+    const int row_writer = int(((batch < rllm_bound_x) && (ly == 0)));
+    shared float rllm_max_values[256];
+    float value = -3.402823e38f;
+    if ((valid != 0) && (active_examples[batch] != 0))
+        value = logits[batch, token];
+    rllm_max_values[slot] = value;
+    barrier();
+    if ((row_writer != 0) && (active_examples[batch] != 0))
+    {
+        value = rllm_max_values[(lx * 16)];
+        for (int y = 1; y < 16; ++y)
+            value = max(value, rllm_max_values[((lx * 16) + y)]);
+        atomicMax(temp[batch, wildcard(MAX_SLOT)], value);
+    }

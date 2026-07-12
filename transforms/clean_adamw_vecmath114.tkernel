@@ -1,0 +1,27 @@
+// identity ("vecmath.cc:114")
+// Canonical AdamW update retained as an explicit AST transform boundary.
+
+search
+    const int r = int(gl_GlobalInvocationID.x);
+    if (r >= rllm_bound_x) return;
+    const int c = int(gl_GlobalInvocationID.y);
+    if (c >= rllm_bound_y) return;
+    const float g = clamp(gradient[r, c], wildcard(LOW), wildcard(HIGH));
+    first[r, c] = ((wildcard(BETA1) * first[r, c]) + ((1.f - wildcard(BETA1)) * g));
+    second[r, c] = ((wildcard(BETA2) * second[r, c]) + ((1.f - wildcard(BETA2)) * (g * g)));
+    const float update = ((first[r, c] / bias_correction1) / (sqrt((second[r, c] / bias_correction2)) + wildcard(EPS)));
+    const float decayed = (weight[r, c] * (1.f - (learning_rate * wildcard(DECAY))));
+    weight[r, c] = clamp((decayed + (learning_rate * update)), wildcard(WLOW), wildcard(WHIGH));
+
+replace
+    const int r = int(gl_GlobalInvocationID.x);
+    if (r >= rllm_bound_x) return;
+    const int c = int(gl_GlobalInvocationID.y);
+    if (c >= rllm_bound_y) return;
+    const float g = clamp(gradient[r, c], wildcard(LOW), wildcard(HIGH));
+    first[r, c] = ((wildcard(BETA1) * first[r, c]) + ((1.f - wildcard(BETA1)) * g));
+    second[r, c] = ((wildcard(BETA2) * second[r, c]) + ((1.f - wildcard(BETA2)) * (g * g)));
+    const float update = ((first[r, c] / bias_correction1) / (sqrt((second[r, c] / bias_correction2)) + wildcard(EPS)));
+    const float decayed = (weight[r, c] * (1.f - (learning_rate * wildcard(DECAY))));
+    weight[r, c] = clamp((decayed + (learning_rate * update)), wildcard(WLOW), wildcard(WHIGH));
+

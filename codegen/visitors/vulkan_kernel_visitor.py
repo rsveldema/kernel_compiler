@@ -178,6 +178,7 @@ class VulkanKernelVisitor(Visitor):
         self._push_constant_fields: list[tuple] = []  # (name, type_str) pairs
         self._push_constant_map: dict[str, bool] = {}
         self._triangular_upper_bound_name: str | None = None
+        self._triangular_static_upper_bound: str | None = None
         self._uses_reduction_chunks: bool = False
         self._constexpr_defines: list[tuple[str, str]] = []
         self._constexpr_map: dict[str, str] = {}
@@ -641,7 +642,11 @@ class VulkanKernelVisitor(Visitor):
             end_val = self._to_str(getattr(node.init_expr, "end", None)) if getattr(node.init_expr, "end", None) else "?"
             lower_bound = start_val
             upper_bound = end_val if end_val != "?" else max_val
-            if self._triangular_upper_bound_name and upper_bound.lstrip("-").isdigit():
+            if (
+                self._triangular_upper_bound_name
+                and self._triangular_static_upper_bound == max_val
+                and upper_bound.lstrip("-").isdigit()
+            ):
                 upper_bound = f"rllm_push.{self._triangular_upper_bound_name}"
 
         lines.append(
@@ -867,6 +872,7 @@ class VulkanKernelVisitor(Visitor):
         self._push_constant_fields = []
         self._push_constant_map = {}
         self._triangular_upper_bound_name = None
+        self._triangular_static_upper_bound = None
         self._uses_reduction_chunks = node.reduction_chunks > 1
 
         self._emit("#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require")
@@ -892,6 +898,8 @@ class VulkanKernelVisitor(Visitor):
         is_triangular = bool(triangular_kind) or len(triangular_bounds_raw) >= 2
         if is_triangular and _is_push_identifier(triangular_bounds_raw[1]) and not triangular_bounds_raw[1].lstrip("-").isdigit():
             self._triangular_upper_bound_name = triangular_bounds_raw[1]
+            if isinstance(node.limit_expr, LimitExpr) and node.limit_expr.max_val is not None:
+                self._triangular_static_upper_bound = self._to_str(node.limit_expr.max_val)
 
         for param in node.params:
             if param is None or not isinstance(param, Declaration):
