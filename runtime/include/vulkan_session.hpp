@@ -371,6 +371,9 @@ public:
         , m_queue(other.m_queue)
         , m_cmd_pool(other.m_cmd_pool)
         , m_cmd_buf(other.m_cmd_buf)
+        , m_dispatch_desc_pool(other.m_dispatch_desc_pool)
+        , m_dispatch_desc_sets_used(other.m_dispatch_desc_sets_used)
+        , m_dispatch_descriptors_used(other.m_dispatch_descriptors_used)
         , m_pending_zero_fills(std::move(other.m_pending_zero_fills))
         , m_pending_cmd_bufs(std::move(other.m_pending_cmd_bufs))
         , m_pending_desc_pools(std::move(other.m_pending_desc_pools))
@@ -379,6 +382,9 @@ public:
         other.m_queue = VK_NULL_HANDLE;
         other.m_cmd_pool = VK_NULL_HANDLE;
         other.m_cmd_buf = VK_NULL_HANDLE;
+        other.m_dispatch_desc_pool = VK_NULL_HANDLE;
+        other.m_dispatch_desc_sets_used = 0;
+        other.m_dispatch_descriptors_used = 0;
         other.m_pending_zero_fills.clear();
     }
 
@@ -395,10 +401,15 @@ public:
                 vkFreeCommandBuffers(get_device(), m_cmd_pool, 1, &m_cmd_buf);
             if (m_cmd_pool != VK_NULL_HANDLE)
                 vkDestroyCommandPool(get_device(), m_cmd_pool, nullptr);
+            if (m_dispatch_desc_pool != VK_NULL_HANDLE)
+                vkDestroyDescriptorPool(get_device(), m_dispatch_desc_pool, nullptr);
 
             m_queue = other.m_queue;
             m_cmd_pool = other.m_cmd_pool;
             m_cmd_buf = other.m_cmd_buf;
+            m_dispatch_desc_pool = other.m_dispatch_desc_pool;
+            m_dispatch_desc_sets_used = other.m_dispatch_desc_sets_used;
+            m_dispatch_descriptors_used = other.m_dispatch_descriptors_used;
             m_pending_zero_fills = std::move(other.m_pending_zero_fills);
             m_pending_cmd_bufs = std::move(other.m_pending_cmd_bufs);
             m_pending_desc_pools = std::move(other.m_pending_desc_pools);
@@ -406,6 +417,9 @@ public:
             other.m_queue = VK_NULL_HANDLE;
             other.m_cmd_pool = VK_NULL_HANDLE;
             other.m_cmd_buf = VK_NULL_HANDLE;
+            other.m_dispatch_desc_pool = VK_NULL_HANDLE;
+            other.m_dispatch_desc_sets_used = 0;
+            other.m_dispatch_descriptors_used = 0;
             other.m_pending_zero_fills.clear();
         }
         return *this;
@@ -419,6 +433,11 @@ public:
         if (m_queue != VK_NULL_HANDLE)
             check_vk(vkQueueWaitIdle(get_queue()), "VkComputeSession queue destruction wait idle");
         release_pending_resources();
+        if (m_dispatch_desc_pool != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorPool(get_device(), m_dispatch_desc_pool, nullptr);
+            m_dispatch_desc_pool = VK_NULL_HANDLE;
+        }
         if (m_cmd_buf != VK_NULL_HANDLE)
         {
             vkFreeCommandBuffers(get_device(), m_cmd_pool, 1, &m_cmd_buf);
@@ -444,6 +463,7 @@ public:
         release_pending_resources();
         if (m_cmd_pool != VK_NULL_HANDLE)
             check_vk(vkResetCommandPool(get_device(), m_cmd_pool, 0), "VkComputeSession reset cmd pool");
+        reset_dispatch_descriptor_pool();
     }
 
     VkCommandBuffer get_cmd_buffer() const {
@@ -534,12 +554,45 @@ public:
             m_pending_desc_pools.push_back(desc_pool);
     }
 
+    VkDescriptorSet allocate_dispatch_descriptor_set(
+        VkDescriptorSetLayout layout,
+        uint32_t descriptor_count)
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex());
+        assert(layout != VK_NULL_HANDLE);
+        assert(descriptor_count > 0);
+        assert(descriptor_count <= MAX_DISPATCH_DESCRIPTORS);
+
+        ensure_dispatch_descriptor_pool();
+        if (m_dispatch_desc_sets_used == MAX_DISPATCH_DESCRIPTOR_SETS ||
+            m_dispatch_descriptors_used + descriptor_count > MAX_DISPATCH_DESCRIPTORS)
+        {
+            wait("VkComputeSession dispatch descriptor arena wait");
+        }
+
+        VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+        VkDescriptorSetAllocateInfo allocate_info{};
+        allocate_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocate_info.descriptorPool = m_dispatch_desc_pool;
+        allocate_info.descriptorSetCount = 1;
+        allocate_info.pSetLayouts = &layout;
+        check_vk(
+            vkAllocateDescriptorSets(get_device(), &allocate_info, &descriptor_set),
+            "VkComputeSession dispatch descriptor set");
+        ++m_dispatch_desc_sets_used;
+        m_dispatch_descriptors_used += descriptor_count;
+        return descriptor_set;
+    }
+
 private:
     VulkanSession &m_session;
 
     VkQueue m_queue = VK_NULL_HANDLE;
     VkCommandPool   m_cmd_pool = VK_NULL_HANDLE;
     VkCommandBuffer m_cmd_buf  = VK_NULL_HANDLE;
+    VkDescriptorPool m_dispatch_desc_pool = VK_NULL_HANDLE;
+    uint32_t m_dispatch_desc_sets_used = 0;
+    uint32_t m_dispatch_descriptors_used = 0;
     struct PendingZeroFill
     {
         VkBuffer buffer = VK_NULL_HANDLE;
@@ -554,6 +607,36 @@ private:
     void init_command_pool();
 
     static constexpr size_t MAX_ZERO_FILLS_PER_SUBMIT = 64;
+    static constexpr uint32_t MAX_DISPATCH_DESCRIPTOR_SETS = 8192;
+    static constexpr uint32_t MAX_DISPATCH_DESCRIPTORS = 65536;
+
+    void ensure_dispatch_descriptor_pool()
+    {
+        if (m_dispatch_desc_pool != VK_NULL_HANDLE)
+            return;
+
+        VkDescriptorPoolSize pool_size{};
+        pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        pool_size.descriptorCount = MAX_DISPATCH_DESCRIPTORS;
+        VkDescriptorPoolCreateInfo pool_info{};
+        pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pool_info.maxSets = MAX_DISPATCH_DESCRIPTOR_SETS;
+        pool_info.poolSizeCount = 1;
+        pool_info.pPoolSizes = &pool_size;
+        check_vk(
+            vkCreateDescriptorPool(get_device(), &pool_info, nullptr, &m_dispatch_desc_pool),
+            "VkComputeSession dispatch descriptor arena");
+    }
+
+    void reset_dispatch_descriptor_pool()
+    {
+        if (m_dispatch_desc_pool != VK_NULL_HANDLE)
+            check_vk(
+                vkResetDescriptorPool(get_device(), m_dispatch_desc_pool, 0),
+                "VkComputeSession reset dispatch descriptor arena");
+        m_dispatch_desc_sets_used = 0;
+        m_dispatch_descriptors_used = 0;
+    }
 
     static void record_zero_fill(VkCommandBuffer cmd_buf, VkBuffer buffer, VkDeviceSize size)
     {

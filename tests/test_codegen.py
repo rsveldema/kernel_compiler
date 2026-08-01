@@ -2,6 +2,7 @@
 
 from codegen.parser import parse
 from codegen.visitors.resolve_array_indices import resolve_array_indices
+from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
 from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
 from offloadize_common import _defined_macros_for_backend, _eval_preprocessor_expr
 
@@ -38,3 +39,30 @@ END_PROGRAM
 
     assert "for (int d = 0; d < 64; ++d)" in shader
     assert "for (int d = 0; d < rllm_push.seq_len; ++d)" not in shader
+
+
+def test_cpp_stub_reuses_queue_descriptor_arena():
+    program = parse(
+        """
+PROGRAM("descriptor.cc:2")
+
+OFFLOAD_PARFOR_1D_PARAM(queue, i, limit<16>(), (values))
+
+PARAMETERS
+        fixed_size_vector<float, 16>& values
+
+BEGIN
+        values[i] = 1.f;
+
+END_PROGRAM
+"""
+    )
+    program = resolve_array_indices(program)
+
+    stub = program.accept(VulkanCppStubVisitor())
+
+    allocation = "queue.allocate_dispatch_descriptor_set(desc_layout, 1)"
+    assert allocation in stub
+    assert "vkCreateDescriptorPool" not in stub
+    assert "queue.defer_descriptor_pool" not in stub
+    assert stub.index(allocation) < stub.index("queue.allocate_command_buffer()")

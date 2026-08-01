@@ -705,30 +705,17 @@ class VulkanCppStubVisitor(Visitor):
 
         self._emit("std::lock_guard<std::recursive_mutex> queue_lock(queue.mutex());")
         self._emit("ComputeKernelRegistry::ScopedActiveKernel active_kernel(*this);")
+        if buffer_params:
+            self._emit("VkDescriptorSetLayout desc_layout = kernel_.desc_set_layout();")
+            self._emit(
+                f"VkDescriptorSet desc_set = queue.allocate_dispatch_descriptor_set(desc_layout, {len(buffer_params)});"
+            )
         self._emit("VkCommandBuffer command_buffer = queue.allocate_command_buffer();")
         self._emit("VkCommandBufferBeginInfo begin_info{};")
         self._emit("begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;")
         self._emit('check_vk(vkBeginCommandBuffer(command_buffer, &begin_info), "VkComputeSession cmd buf begin");')
 
         if buffer_params:
-            self._emit("VkDescriptorPool desc_pool = VK_NULL_HANDLE;")
-            self._emit("VkDescriptorPoolSize pool_size{};")
-            self._emit("pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;")
-            self._emit(f"pool_size.descriptorCount = {len(buffer_params)};")
-            self._emit("VkDescriptorPoolCreateInfo pool_info{};")
-            self._emit("pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;")
-            self._emit("pool_info.maxSets = 1;")
-            self._emit("pool_info.poolSizeCount = 1;")
-            self._emit("pool_info.pPoolSizes = &pool_size;")
-            self._emit('check_vk(vkCreateDescriptorPool(queue.get_device(), &pool_info, nullptr, &desc_pool), "VkComputeSession dispatch descriptor pool");')
-            self._emit("VkDescriptorSet desc_set = VK_NULL_HANDLE;")
-            self._emit("VkDescriptorSetLayout desc_layout = kernel_.desc_set_layout();")
-            self._emit("VkDescriptorSetAllocateInfo desc_alloc{};")
-            self._emit("desc_alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;")
-            self._emit("desc_alloc.descriptorPool = desc_pool;")
-            self._emit("desc_alloc.descriptorSetCount = 1;")
-            self._emit("desc_alloc.pSetLayouts = &desc_layout;")
-            self._emit('check_vk(vkAllocateDescriptorSets(queue.get_device(), &desc_alloc, &desc_set), "VkComputeSession dispatch descriptor set");')
             self._emit(f"VkDescriptorBufferInfo buffer_infos[{len(buffer_params)}]{{}};")
             self._emit(f"VkWriteDescriptorSet writes[{len(buffer_params)}]{{}};")
             for i, (_param, _sname, arg_name) in enumerate(buffer_params):
@@ -782,8 +769,6 @@ class VulkanCppStubVisitor(Visitor):
         self._emit("submit_info.pCommandBuffers = &command_buffer;")
         self._emit('check_vk(vkQueueSubmit(queue.get_queue(), 1, &submit_info, VK_NULL_HANDLE), "VkComputeSession submit");')
         self._emit("queue.defer_command_buffer(command_buffer);")
-        if buffer_params:
-            self._emit("queue.defer_descriptor_pool(desc_pool);")
 
         self._emit("}")
         self._pop()

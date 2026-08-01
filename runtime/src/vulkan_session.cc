@@ -511,7 +511,7 @@ void check_vk(VkResult rc, const char* label)
 {
     if (rc != VK_SUCCESS)
     {
-        LOG_ERROR("{}", vk_result_str(rc));
+        LOG_ERROR("{}: {}", label ? label : "Vulkan operation", vk_result_str(rc));
         std::abort();
     }
 }
