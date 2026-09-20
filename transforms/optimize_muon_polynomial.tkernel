@@ -1,0 +1,40 @@
+// Tiles the Gram-squared product in the Newton-Schulz polynomial.
+
+search
+    const int row = int(gl_GlobalInvocationID.x);
+    if (row >= rllm_bound_x) return;
+    const int col = int(gl_GlobalInvocationID.y);
+    if (col >= rllm_bound_y) return;
+    float square = 0.f;
+    for (int inner = 0; inner < wildcard(N); ++inner)
+        square += (gram[row, inner] * gram[inner, col]);
+    result[row, col] = ((-4.775f * gram[row, col]) + (2.0315f * square));
+
+replace
+    const int row = int(gl_GlobalInvocationID.x);
+    const int col = int(gl_GlobalInvocationID.y);
+    const int rllm_lx = int(gl_LocalInvocationID.x);
+    const int rllm_ly = int(gl_LocalInvocationID.y);
+    float square = 0.f;
+    shared float rllm_tile_a[256];
+    shared float rllm_tile_b[256];
+    const int rllm_tile_count = ((wildcard(N) + 15) / 16);
+    for (int rllm_tile_index = 0; rllm_tile_index < rllm_tile_count; ++rllm_tile_index)
+    {
+        const int rllm_tile = (rllm_tile_index * 16);
+        const int rllm_a_k = (rllm_tile + rllm_ly);
+        const int rllm_b_k = (rllm_tile + rllm_lx);
+        const int rllm_slot = ((rllm_lx * 16) + rllm_ly);
+        rllm_tile_a[rllm_slot] = 0.f;
+        rllm_tile_b[rllm_slot] = 0.f;
+        if ((row < rllm_bound_x) && (rllm_a_k < wildcard(N)))
+            rllm_tile_a[rllm_slot] = gram[row, rllm_a_k];
+        if ((col < rllm_bound_y) && (rllm_b_k < wildcard(N)))
+            rllm_tile_b[rllm_slot] = gram[rllm_b_k, col];
+        barrier();
+        for (int rllm_k = 0; rllm_k < 16; ++rllm_k)
+            square += (rllm_tile_a[((rllm_lx * 16) + rllm_k)] * rllm_tile_b[((rllm_k * 16) + rllm_ly)]);
+        barrier();
+    }
+    if ((row < rllm_bound_x) && (col < rllm_bound_y))
+        result[row, col] = ((-4.775f * gram[row, col]) + (2.0315f * square));

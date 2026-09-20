@@ -1,0 +1,46 @@
+// optimizes ("dust/Dust.cc:103", "dust/Dust.cc:411", "dust/Dust.cc:446")
+// 16x16 tiled outer-product accumulation for the DUST gradient updates:
+//   C[i, j] += sum_k A[k, i] * B[k, j]
+// The reduction length (rows) is a runtime push constant, so the tile loop
+// and the tile loads are guarded by it instead of by the static limit.
+
+search
+    const int output_dimension = int(gl_GlobalInvocationID.x);
+    if (output_dimension >= rllm_bound_x) return;
+    const int input_dimension = int(gl_GlobalInvocationID.y);
+    if (input_dimension >= rllm_bound_y) return;
+
+    float value = gradient[output_dimension, input_dimension];
+    for (const int row : limit<8192>(rows))
+        value += (error[row, output_dimension] * layer_input[row, input_dimension]);
+    gradient[output_dimension, input_dimension] = value;
+
+replace
+    const int output_dimension = int(gl_GlobalInvocationID.x);
+    const int input_dimension = int(gl_GlobalInvocationID.y);
+    const int rllm_lx = int(gl_LocalInvocationID.x);
+    const int rllm_ly = int(gl_LocalInvocationID.y);
+    float value = 0.f;
+    shared float rllm_tile_error[256];
+    shared float rllm_tile_input[256];
+
+    const int rllm_tile_count = ((rows + 15) / 16);
+    for (int rllm_tile_index = 0; rllm_tile_index < rllm_tile_count; ++rllm_tile_index)
+    {
+        const int rllm_tile = (rllm_tile_index * 16);
+        const int rllm_a_k = (rllm_tile + rllm_ly);
+        const int rllm_b_k = (rllm_tile + rllm_lx);
+        const int rllm_slot = ((rllm_lx * 16) + rllm_ly);
+        rllm_tile_error[rllm_slot] = 0.f;
+        rllm_tile_input[rllm_slot] = 0.f;
+        if ((output_dimension < rllm_bound_x) && (rllm_a_k < rows))
+            rllm_tile_error[rllm_slot] = error[rllm_a_k, output_dimension];
+        if ((input_dimension < rllm_bound_y) && (rllm_b_k < rows))
+            rllm_tile_input[rllm_slot] = layer_input[rllm_b_k, input_dimension];
+        barrier();
+        for (int rllm_k = 0; rllm_k < 16; ++rllm_k)
+            value += (rllm_tile_error[((rllm_lx * 16) + rllm_k)] * rllm_tile_input[((rllm_k * 16) + rllm_ly)]);
+        barrier();
+    }
+    if ((output_dimension < rllm_bound_x) && (input_dimension < rllm_bound_y))
+        gradient[output_dimension, input_dimension] += value;

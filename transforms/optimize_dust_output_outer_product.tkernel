@@ -1,0 +1,46 @@
+// optimizes ("dust/Dust.cc:251")
+// 16x16 tiled outer-product accumulation for the DUST output-layer gradient:
+//   C[token, dimension] += sum_item error[item, token] * hidden[item, dimension]
+// The reduction length (count) is a runtime push constant, so the tile loop
+// and the tile loads are guarded by it instead of by the static limit.
+
+search
+    const int token = int(gl_GlobalInvocationID.x);
+    if (token >= rllm_bound_x) return;
+    const int dimension = int(gl_GlobalInvocationID.y);
+    if (dimension >= rllm_bound_y) return;
+
+    float value = gradient[token, dimension];
+    for (const int item : limit<64>(count))
+        value += (error[item, token] * hidden[item, dimension]);
+    gradient[token, dimension] = value;
+
+replace
+    const int token = int(gl_GlobalInvocationID.x);
+    const int dimension = int(gl_GlobalInvocationID.y);
+    const int rllm_lx = int(gl_LocalInvocationID.x);
+    const int rllm_ly = int(gl_LocalInvocationID.y);
+    float value = 0.f;
+    shared float rllm_tile_error[256];
+    shared float rllm_tile_hidden[256];
+
+    const int rllm_tile_count = ((count + 15) / 16);
+    for (int rllm_tile_index = 0; rllm_tile_index < rllm_tile_count; ++rllm_tile_index)
+    {
+        const int rllm_tile = (rllm_tile_index * 16);
+        const int rllm_a_k = (rllm_tile + rllm_ly);
+        const int rllm_b_k = (rllm_tile + rllm_lx);
+        const int rllm_slot = ((rllm_lx * 16) + rllm_ly);
+        rllm_tile_error[rllm_slot] = 0.f;
+        rllm_tile_hidden[rllm_slot] = 0.f;
+        if ((token < rllm_bound_x) && (rllm_a_k < count))
+            rllm_tile_error[rllm_slot] = error[rllm_a_k, token];
+        if ((dimension < rllm_bound_y) && (rllm_b_k < count))
+            rllm_tile_hidden[rllm_slot] = hidden[rllm_b_k, dimension];
+        barrier();
+        for (int rllm_k = 0; rllm_k < 16; ++rllm_k)
+            value += (rllm_tile_error[((rllm_lx * 16) + rllm_k)] * rllm_tile_hidden[((rllm_k * 16) + rllm_ly)]);
+        barrier();
+    }
+    if ((token < rllm_bound_x) && (dimension < rllm_bound_y))
+        gradient[token, dimension] += value;
