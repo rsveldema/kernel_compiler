@@ -3,9 +3,9 @@ PROGRAM("vecmath.cc:999")
 OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A, B, C))
 
 PARAMETERS
-        const flexible_rows_matrix<float16, 4, 8>& A,
-        const fixed_size_matrix<float16, 5, 8>& B,
-        flexible_rows_matrix<float, 4, 5>& C
+        const flexible_rows_matrix<float16, 512, 8192>& A,
+        const fixed_size_matrix<float16, 2048, 8192>& B,
+        flexible_rows_matrix<float, 512, 2048>& C
 
 BEGIN
 const int i = int(gl_GlobalInvocationID.x);
@@ -13,7 +13,7 @@ if (i >= rllm_bound_x) return;
 const int j = int(gl_GlobalInvocationID.y);
 if (j >= rllm_bound_y) return;
             float sum = 0.f;
-            for (int l_idx = 0; l_idx < 8; ++l_idx)
+            for (int l_idx = 0; l_idx < 8192; ++l_idx)
             {
                 const int k = int(l_idx);
                 const float term = (A[i, k] * B[j, k]);

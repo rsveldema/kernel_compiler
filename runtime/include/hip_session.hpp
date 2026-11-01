@@ -134,6 +134,26 @@ inline void gemm_abt_half(HipQueue& queue, uint32_t m, uint32_t n, uint32_t k,
         c.get(),HIP_R_32F,static_cast<int>(n),HIPBLAS_COMPUTE_32F,
         HIPBLAS_GEMM_DEFAULT),"hipblasGemmEx(C = A B^T)");
 }
+inline void gemm_abt_float(HipQueue& queue, uint32_t m, uint32_t n, uint32_t k,
+                           const VBaseDeviceBuffer& a, const VBaseDeviceBuffer& b,
+                           VBaseDeviceBuffer& c) {
+    const float alpha=1.0f,beta=0.0f;
+    check_hipblas(hipblasSgemm(queue.blas_handle(), HIPBLAS_OP_T, HIPBLAS_OP_N,
+        static_cast<int>(n),static_cast<int>(m),static_cast<int>(k),&alpha,
+        static_cast<const float*>(b.get()),static_cast<int>(k),
+        static_cast<const float*>(a.get()),static_cast<int>(k),&beta,
+        static_cast<float*>(c.get()),static_cast<int>(n)),"hipblasSgemm(C = A B^T)");
+}
+inline void gemm_at_b_float(HipQueue& queue, uint32_t m, uint32_t n, uint32_t k,
+                            const VBaseDeviceBuffer& a, const VBaseDeviceBuffer& b,
+                            VBaseDeviceBuffer& c) {
+    const float alpha=1.0f,beta=0.0f;
+    check_hipblas(hipblasSgemm(queue.blas_handle(), HIPBLAS_OP_N, HIPBLAS_OP_T,
+        static_cast<int>(n),static_cast<int>(m),static_cast<int>(k),&alpha,
+        static_cast<const float*>(b.get()),static_cast<int>(n),
+        static_cast<const float*>(a.get()),static_cast<int>(m),&beta,
+        static_cast<float*>(c.get()),static_cast<int>(n)),"hipblasSgemm(C = A^T B)");
+}
 inline void gemm_at_b_acc(HipQueue& queue, uint32_t m, uint32_t n, uint32_t k,
                           const VBaseDeviceBuffer& a, const VBaseDeviceBuffer& b,
                           VBaseDeviceBuffer& c) {

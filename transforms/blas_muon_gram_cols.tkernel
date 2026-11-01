@@ -1,0 +1,26 @@
+// Canonicalize Muon's column Gram product for conservative BLAS recognition.
+
+search
+    const int row = int(gl_GlobalInvocationID.x);
+    if (row >= rllm_bound_x) return;
+    const int col = int(gl_GlobalInvocationID.y);
+    if (col >= rllm_bound_y) return;
+    float value = 0.f;
+    for (int inner = 0; inner < wildcard(N); ++inner)
+        value += (update[inner, row] * update[inner, col]);
+    gram_matrix[row, col] = value;
+
+replace
+    const int row = int(gl_GlobalInvocationID.x);
+    if (row >= rllm_bound_x) return;
+    const int col = int(gl_GlobalInvocationID.y);
+    if (col >= rllm_bound_y) return;
+    float sum = 0.f;
+    for (int l_idx = 0; l_idx < wildcard(N); ++l_idx)
+    {
+        const int k = int(l_idx);
+        const float term = (update[k, row] * update[k, col]);
+        OVERFLOW_CHECK_ADD(sum, term);
+        sum += term;
+    }
+    gram_matrix[row, col] = sum;

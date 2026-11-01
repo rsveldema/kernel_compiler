@@ -769,6 +769,16 @@ class HipCppStubVisitor(Visitor):
                 f"rllm::hip_blas::gemm_abt_half(queue, dispatch_rows, dispatch_cols, "
                 f"static_cast<uint32_t>({spec.k}), {spec.a}, {spec.b}, {spec.c});"
             )
+        elif spec.input_type == "float32" and not spec.transpose_a and spec.transpose_b and not spec.accumulate:
+            self._emit(
+                f"rllm::hip_blas::gemm_abt_float(queue, dispatch_rows, dispatch_cols, "
+                f"static_cast<uint32_t>({spec.k}), {spec.a}, {spec.b}, {spec.c});"
+            )
+        elif spec.input_type == "float32" and spec.transpose_a and not spec.transpose_b and not spec.accumulate:
+            self._emit(
+                f"rllm::hip_blas::gemm_at_b_float(queue, dispatch_rows, dispatch_cols, "
+                f"static_cast<uint32_t>({spec.k}), {spec.a}, {spec.b}, {spec.c});"
+            )
         else:
             self._emit(
                 f"rllm::hip_blas::gemm_at_b_acc(queue, dispatch_rows, dispatch_cols, "

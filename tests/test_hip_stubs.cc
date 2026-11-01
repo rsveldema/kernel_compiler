@@ -25,6 +25,7 @@
 #include "vecmath.L304.h"
 #include "vecmath.L304.noopt.h"
 #include "vecmath.L999.h"
+#include "vecmath.L999.blas.h"
 #include "vecmath.L999.noopt.h"
 
 
@@ -146,81 +147,90 @@ TEST_F(HipTestBase, host_device_buffer_copy_bandwidth)
               << " (" << size_bytes << " bytes, best of " << iterations << ")\n";
 }
 
-TEST_F(HipTestBase, ffn_act_blas_then_clip_matches_sequential_loop)
+TEST_F(HipTestBase, ffn_act_optimized_and_blas_clip_match_sequential_loop)
 {
-    namespace blas_kernel = rllm_offload_parfor_vecmath_999;
+    namespace optimized_kernel = rllm_offload_parfor_vecmath_999;
+    namespace blas_kernel = rllm_offload_parfor_vecmath_999_blas;
     namespace sequential_kernel = rllm_offload_parfor_vecmath_999_noopt;
 
-    constexpr uint32_t rows = blas_kernel::A_X;
-    constexpr uint32_t cols = blas_kernel::B_X;
-    constexpr uint32_t inner = blas_kernel::A_Y;
+    constexpr uint32_t rows = 4;
+    constexpr uint32_t cols = optimized_kernel::B_X;
+    constexpr uint32_t inner = optimized_kernel::A_Y;
 
     ASSERT_STREQ(
-        blas_kernel::OffloadParforVecmath999VecmathKernel::generated_descriptor(),
+        blas_kernel::OffloadParforVecmath999BlasVecmathKernel::generated_descriptor(),
         "backend=hipblas;operation=gemm;transpose_a=no;transpose_b=yes;beta=0;input=float16");
+    ASSERT_EQ(
+        std::string(optimized_kernel::OffloadParforVecmath999VecmathKernel::generated_descriptor())
+            .find("backend=hipblas"),
+        std::string::npos);
 
-    VHostBuffer<blas_kernel::RllmBuffer_A> host_a(get_session());
-    VHostBuffer<blas_kernel::RllmBuffer_B> host_b(get_session());
+    VHostBuffer<optimized_kernel::RllmBuffer_A> host_a(get_session());
+    VHostBuffer<optimized_kernel::RllmBuffer_B> host_b(get_session());
+    VHostBuffer<optimized_kernel::RllmBuffer_C> host_optimized(get_session());
     VHostBuffer<blas_kernel::RllmBuffer_C> host_blas(get_session());
     VHostBuffer<sequential_kernel::RllmBuffer_C> host_sequential(get_session());
 
-    // Integral values are exactly representable in fp16. Rows 1 and 2 force
-    // the positive and negative clipping branches; the others remain in range.
-    const float a_values[rows][inner] = {
-        {1, 2, 3, 4, 5, 6, 7, 8},
-        {100, 100, 100, 100, 100, 100, 100, 100},
-        {-100, -100, -100, -100, -100, -100, -100, -100},
-        {8, -7, 6, -5, 4, -3, 2, -1},
-    };
-    const float b_values[cols][inner] = {
-        {1, 1, 1, 1, 1, 1, 1, 1},
-        {100, 100, 100, 100, 100, 100, 100, 100},
-        {-100, -100, -100, -100, -100, -100, -100, -100},
-        {1, -1, 1, -1, 1, -1, 1, -1},
-        {2, 0, -2, 0, 2, 0, -2, 0},
-    };
+    // Use the production FFN matrix dimensions. Integral values are exactly
+    // representable in fp16; rows 1 and 2 exercise both clipping branches.
+    std::memset(host_a.get(), 0, static_cast<size_t>(host_a.size()));
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t k = 0; k < inner; ++k) {
-            host_a.get()->data[i * inner + k] = static_cast<float16_t>(a_values[i][k]);
+            const float alternating = ((i + k) & 1u) ? -1.0f : 1.0f;
+            const float value = i == 1 ? 100.0f : (i == 2 ? -100.0f : alternating);
+            host_a.get()->data[i * inner + k] = static_cast<float16_t>(value);
         }
     }
     for (uint32_t j = 0; j < cols; ++j) {
         for (uint32_t k = 0; k < inner; ++k) {
-            host_b.get()->data[j * inner + k] = static_cast<float16_t>(b_values[j][k]);
+            const float alternating = ((j + k) & 1u) ? -1.0f : 1.0f;
+            const float value = j == 1 ? 100.0f : (j == 2 ? -100.0f : alternating);
+            host_b.get()->data[j * inner + k] = static_cast<float16_t>(value);
         }
     }
+    std::memset(host_optimized.get(), 0, static_cast<size_t>(host_optimized.size()));
     std::memset(host_blas.get(), 0, static_cast<size_t>(host_blas.size()));
     std::memset(host_sequential.get(), 0, static_cast<size_t>(host_sequential.size()));
 
-    VDeviceBuffer<blas_kernel::RllmBuffer_A> device_a(host_a);
-    VDeviceBuffer<blas_kernel::RllmBuffer_B> device_b(host_b);
+    VDeviceBuffer<optimized_kernel::RllmBuffer_A> device_a(host_a);
+    VDeviceBuffer<optimized_kernel::RllmBuffer_B> device_b(host_b);
+    VDeviceBuffer<optimized_kernel::RllmBuffer_C> device_optimized(host_optimized);
     VDeviceBuffer<blas_kernel::RllmBuffer_C> device_blas(host_blas);
     VDeviceBuffer<sequential_kernel::RllmBuffer_C> device_sequential(host_sequential);
     HipQueue& queue = get_session().get_queue(0);
     device_a.write(queue, host_a);
     device_b.write(queue, host_b);
+    device_optimized.write(queue, host_optimized);
     device_blas.write(queue, host_blas);
     device_sequential.write(queue, host_sequential);
 
-    blas_kernel::OffloadParforVecmath999VecmathKernel blas(
+    optimized_kernel::OffloadParforVecmath999VecmathKernel optimized(
         get_session(), std::string(TESTDATA_DIR) + "/vecmath.L999.hsaco");
+    blas_kernel::OffloadParforVecmath999BlasVecmathKernel blas(
+        get_session(), std::string(TESTDATA_DIR) + "/vecmath.L999.blas.hsaco");
     sequential_kernel::OffloadParforVecmath999NooptVecmathKernel sequential(
         get_session(), std::string(TESTDATA_DIR) + "/vecmath.L999.noopt.hsaco");
-    const blas_kernel::offload_parfor_vecmath_999_vecmath_PushConstants blas_pc{
+    const optimized_kernel::offload_parfor_vecmath_999_vecmath_PushConstants optimized_pc{
+        static_cast<int32_t>(rows), static_cast<int32_t>(cols)};
+    const blas_kernel::offload_parfor_vecmath_999_blas_vecmath_PushConstants blas_pc{
         static_cast<int32_t>(rows), static_cast<int32_t>(cols)};
     const sequential_kernel::offload_parfor_vecmath_999_noopt_vecmath_PushConstants sequential_pc{
         static_cast<int32_t>(rows), static_cast<int32_t>(cols)};
 
     sequential.dispatch(queue, rows, cols, device_a, device_b, device_sequential, sequential_pc);
+    optimized.dispatch(queue, rows, cols, device_a, device_b, device_optimized, optimized_pc);
     blas.dispatch(queue, rows, cols, device_a, device_b, device_blas, blas_pc);
     device_sequential.read(queue, host_sequential);
+    device_optimized.read(queue, host_optimized);
     device_blas.read(queue, host_blas);
 
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
             const uint32_t index = i * cols + j;
+            EXPECT_FLOAT_EQ(host_optimized.get()->data[index], host_sequential.get()->data[index])
+                << "optimized output[" << i << ", " << j << "]";
             EXPECT_FLOAT_EQ(host_blas.get()->data[index], host_sequential.get()->data[index])
-                << "output[" << i << ", " << j << "]";
+                << "BLAS output[" << i << ", " << j << "]";
         }
     }
     EXPECT_FLOAT_EQ(host_blas.get()->data[1 * cols + 1], 10000.0f);

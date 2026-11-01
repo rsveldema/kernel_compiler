@@ -24,13 +24,14 @@ if len(_stdlib_paths) < len(_sys_mod.path):
 import argparse
 import subprocess
 import logging
+from pathlib import Path
 
 from codegen.parser import parser
 from codegen.kast.program import Program
 from codegen.transforms import transform
 from codegen.visitors.pretty_printer import prettyprint
 from codegen.visitors.hip_kernel_visitor import HipKernelVisitor
-from codegen.visitors.tree_rewriter import TreeRewriter
+from codegen.visitors.tree_rewriter import Pattern, TreeRewriter
 from codegen.visitors.hip_cpp_stub_visitor import HipCppStubVisitor
 from codegen.visitors.rllm_hip_dispatch_stub_visitor import RllmHipDispatchStubVisitor
 from codegen.visitors.resolve_array_indices import resolve_array_indices
@@ -56,13 +57,21 @@ def optimize(
 def compile(
     filename: str,
     enable_optimizations: bool = True,
+    allow_clip_blas_epilogue: bool = False,
 ) -> Program:
     print(f"--------------- parsing: {filename} -----------------")
     text = read_file(filename)
     ret = parser.parse(text)
     program = transform(ret)
     program._source_filename = filename
-    program.blas = detect_safe_gemm(program) if enable_optimizations else None
+    if enable_optimizations:
+        transforms_path = Path(__file__).resolve().parents[1] / "transforms"
+        for pattern_name in ("blas_muon_gram_rows.tkernel", "blas_muon_gram_cols.tkernel"):
+            pattern = Pattern(str(transforms_path / pattern_name))
+            if pattern.matches(program):
+                pattern.apply(program)
+                break
+    program.blas = detect_safe_gemm(program, allow_clip_blas_epilogue) if enable_optimizations else None
     if program.blas is not None:
         program = lower_blas_epilogue(program)
     else:
@@ -78,8 +87,9 @@ def generate_hip(
     rllm_dispatch_stub: str | None = None,
     rllm_spv_path: str | None = None,
     use_bfloat16: bool = False,
+    allow_clip_blas_epilogue: bool = False,
 ) -> None:
-    program = compile(filename, enable_optimizations)
+    program = compile(filename, enable_optimizations, allow_clip_blas_epilogue)
     visitor = HipKernelVisitor(use_bfloat16=use_bfloat16)
     shader = program.accept(visitor)
     with open(output, "w") as f:
@@ -156,6 +166,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Disable AST optimization passes such as the .tkernel tree rewriter",
     )
+    _parser.add_argument(
+        "--test-enable-clip-blas-epilogue",
+        action="store_true",
+        help="Enable the disabled BLAS-plus-clip path for regression tests only",
+    )
     args = _parser.parse_args()
     enable_optimizations = not args.no_optimizations
     use_bfloat16 = getattr(args, "bfloat16", False)
@@ -164,7 +179,10 @@ if __name__ == "__main__":
         if not args.file:
             _parser.error("--hip and --compile require an input FILE argument")
         if args.hip:
-            generate_hip(args.file, args.hip, enable_optimizations, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16)
+            generate_hip(
+                args.file, args.hip, enable_optimizations, args.rllm_dispatch_stub,
+                args.rllm_spv_path, use_bfloat16=use_bfloat16,
+                allow_clip_blas_epilogue=args.test_enable_clip_blas_epilogue)
         elif args.compile:
             compile_hip(args.file, args.compile, enable_optimizations, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16)
     else:

@@ -60,6 +60,10 @@ set(VECMATH999_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_999.kernel")
 set(VECMATH999_HIP "${GENERATED_DIR}/vecmath.L999.hip")
 set(VECMATH999_HEADER "${GENERATED_DIR}/vecmath.L999.h")
 set(VECMATH999_HSACO "${GENERATED_DIR}/vecmath.L999.hsaco")
+set(VECMATH999_BLAS_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_999_blas.kernel")
+set(VECMATH999_BLAS_HIP "${GENERATED_DIR}/vecmath.L999.blas.hip")
+set(VECMATH999_BLAS_HEADER "${GENERATED_DIR}/vecmath.L999.blas.h")
+set(VECMATH999_BLAS_HSACO "${GENERATED_DIR}/vecmath.L999.blas.hsaco")
 set(VECMATH999_NOOPT_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_999_noopt.kernel")
 set(VECMATH999_NOOPT_HIP "${GENERATED_DIR}/vecmath.L999.noopt.hip")
 set(VECMATH999_NOOPT_HEADER "${GENERATED_DIR}/vecmath.L999.noopt.h")
@@ -135,6 +139,7 @@ add_custom_command(
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/parser.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/transforms.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/tree_rewriter.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/hip_kernel_visitor.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/hip_cpp_stub_visitor.py"
     WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
@@ -242,6 +247,7 @@ add_custom_command(
     DEPENDS
         "${VECMATH999_DUMP}"
         "${KERNEL_COMPILER_SOURCE_DIR}/transforms/blas_clip_abt.tkernel"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/tree_rewriter.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/blas.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/parser.py"
@@ -258,6 +264,35 @@ add_custom_command(
     COMMAND "${CMAKE_COMMAND}" -E copy "${VECMATH999_KERNEL}" "${VECMATH999_NOOPT_DUMP}"
     DEPENDS "${VECMATH999_KERNEL}"
     COMMENT "Copying sequential FFN regression fixture"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${VECMATH999_BLAS_DUMP}"
+    COMMAND "${CMAKE_COMMAND}" -E copy "${VECMATH999_KERNEL}" "${VECMATH999_BLAS_DUMP}"
+    DEPENDS "${VECMATH999_KERNEL}"
+    COMMENT "Copying forced BLAS-plus-clip regression fixture"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${VECMATH999_BLAS_HEADER}" "${VECMATH999_BLAS_HSACO}"
+    BYPRODUCTS "${VECMATH999_BLAS_HIP}"
+    COMMAND "${Python3_EXECUTABLE}" "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
+            "${VECMATH999_BLAS_DUMP}" --hip "${VECMATH999_BLAS_HIP}"
+            --test-enable-clip-blas-epilogue
+    COMMAND "${RLLM_TEST_HIPCC}" --genco -O3 "${VECMATH999_BLAS_HIP}" -o "${VECMATH999_BLAS_HSACO}"
+    DEPENDS
+        "${VECMATH999_BLAS_DUMP}"
+        "${KERNEL_COMPILER_SOURCE_DIR}/transforms/blas_clip_abt.tkernel"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/blas.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/parser.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/transforms.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/hip_kernel_visitor.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/hip_cpp_stub_visitor.py"
+    WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
+    COMMENT "Generating forced BLAS plus clip regression kernel"
     VERBATIM
 )
 
@@ -281,6 +316,8 @@ add_custom_command(
 list(APPEND GENERATED_KERNEL_SRCS
     "${VECMATH999_HEADER}"
     "${VECMATH999_HSACO}"
+    "${VECMATH999_BLAS_HEADER}"
+    "${VECMATH999_BLAS_HSACO}"
     "${VECMATH999_NOOPT_HEADER}"
     "${VECMATH999_NOOPT_HSACO}"
 )

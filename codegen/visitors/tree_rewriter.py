@@ -443,6 +443,11 @@ class PatternStore:
         logger.info("Found %d .tkernel file(s): %s", len(tkernel_files), [f.name for f in tkernel_files])
 
         for pattern_path in sorted(tkernel_files):
+            # This pattern is an epilogue split used only after BLAS detection
+            # has recorded the GEMM in Program.blas. Applying it as a generic
+            # rewrite would delete the matmul and leave only the clamp kernel.
+            if pattern_path.name == "blas_clip_abt.tkernel":
+                continue
             logger.info("--- Loading pattern: %s ---", pattern_path.name)
             try:
                 pattern = Pattern(str(pattern_path))

@@ -44,22 +44,23 @@ def _number_value(node):
     return None
 
 
-def detect_safe_gemm(program: ast.Program) -> BlasGemm | None:
+def detect_safe_gemm(program: ast.Program, allow_clip_epilogue: bool = False) -> BlasGemm | None:
     """Recognize only `C[i,j] += sum_k A[k,i] * B[k,j]`.
 
     The intentionally narrow matcher rejects epilogues, clamps, mixed types,
     additional side effects, static casts around the result, and non-canonical
     indexing. Broader GEMM forms can be added independently after validation.
     """
-    if program.space_dim != 2 or program.loop_vars != ["i", "j"]:
+    if program.space_dim != 2 or len(program.loop_vars) != 2:
         return None
+    i, j = program.loop_vars
     params = {p.name: p for p in program.params if isinstance(p, ast.Declaration)}
     body = program.body_stmts
     if len(body) != 7:
         return None
     sum_decl, loop, output = body[4], body[5], body[6]
-    # Exact half-precision forward projection:
-    # C[i,j] = float(sum_k A[i,k] * B[j,k]).
+    # Exact overwrite projection/Gram product:
+    # C[i,j] = sum_k A[i,k] * B[j,k].
     output_value = output.rvalue if isinstance(output, ast.Assignment) else None
     if isinstance(output_value, ast.CastExpr) and isinstance(output_value.cast_type, ast.Float):
         output_value = output_value.operand
@@ -76,14 +77,15 @@ def detect_safe_gemm(program: ast.Program) -> BlasGemm | None:
     # Keep clipped AB^T contractions in the regular kernel path for now. The
     # BLAS epilogue split is disabled until its ordering and synchronization
     # semantics have been validated on all supported backends.
-    if clip_call is not None:
+    if clip_call is not None and not allow_clip_epilogue:
         return None
-    half_abt = (
-        isinstance(loop.condition, ast.Condition)
-        and isinstance(loop.condition.rhs, ast.Number)
+    overwrite = (
+        isinstance(loop, ast.ForLoopWithConditionAndIncrement)
+        and isinstance(loop.condition, ast.Condition)
+        and isinstance(loop.condition.rhs, (ast.Number, ast.Identifier))
         and isinstance(output, ast.Assignment)
         and output.assign_op == "="
-        and _identifier(output_value, "sum")
+        and (_identifier(output_value, "sum") or clip_call is not None)
     )
 
     if not (
@@ -97,11 +99,11 @@ def detect_safe_gemm(program: ast.Program) -> BlasGemm | None:
         and isinstance(loop.condition, ast.Condition)
         and _identifier(loop.condition.lhs, "l_idx")
         and loop.condition.op == "<"
-        and (_identifier(loop.condition.rhs) or half_abt)
+        and (_identifier(loop.condition.rhs) or overwrite)
         and loop.increment_var == "l_idx"
         and loop.increment_op == "++"
         and isinstance(output, ast.Assignment)
-        and ((output.assign_op == "+=" and _identifier(output.rvalue, "sum")) or half_abt)
+        and ((output.assign_op == "+=" and _identifier(output.rvalue, "sum")) or overwrite)
     ):
         return None
     if len(loop.body_stmts) != 4:
@@ -132,37 +134,47 @@ def detect_safe_gemm(program: ast.Program) -> BlasGemm | None:
     a = left.base.name if isinstance(left.base, ast.Identifier) else ""
     b = right.base.name if isinstance(right.base, ast.Identifier) else ""
     c = output.lvalue.base.name if isinstance(output.lvalue, ast.ArrayAccess) and isinstance(output.lvalue.base, ast.Identifier) else ""
-    if half_abt:
-        indices_match = _array(left, a, ("i", "k")) and _array(right, b, ("j", "k"))
-        k = int(loop.condition.rhs.value)
-    else:
-        indices_match = _array(left, a, ("k", "i")) and _array(right, b, ("k", "j"))
-        k = loop.condition.rhs.name
-    if not (indices_match and _array(output.lvalue, c, ("i", "j"))):
+    abt_indices = _array(left, a, (i, "k")) and _array(right, b, (j, "k"))
+    atb_indices = _array(left, a, ("k", i)) and _array(right, b, ("k", j))
+    indices_match = abt_indices or atb_indices
+    k = (int(loop.condition.rhs.value) if isinstance(loop.condition.rhs, ast.Number)
+         else loop.condition.rhs.name)
+    if not overwrite and not atb_indices:
         return None
-    required_params = (a, b, c) if half_abt else (a, b, c, k)
+    if not (indices_match and _array(output.lvalue, c, (i, j))):
+        return None
+    required_params = (a, b, c) + ((k,) if isinstance(k, str) else ())
     if any(name not in params for name in required_params):
         return None
     matrix_types = (ast.FlexibleRowsMatrix, ast.FlexibleSizeMatrix, ast.FlexibleRowsColsMatrix, ast.FixedSizeMatrix)
     if not all(isinstance(params[name].var_type, matrix_types) for name in (a, b, c)):
         return None
-    if half_abt:
-        if not (
+    if overwrite:
+        input_is_half = (
             isinstance(params[a].var_type.elem_type, ast.Float16)
             and isinstance(params[b].var_type.elem_type, ast.Float16)
-            and isinstance(params[c].var_type.elem_type, ast.Float)
-        ):
+        )
+        input_is_float = (
+            isinstance(params[a].var_type.elem_type, ast.Float)
+            and isinstance(params[b].var_type.elem_type, ast.Float)
+        )
+        if not ((input_is_half or input_is_float)
+                and isinstance(params[c].var_type.elem_type, ast.Float)):
+            return None
+        if input_is_half and not abt_indices:
             return None
     elif not all(isinstance(params[name].var_type.elem_type, ast.Float) for name in (a, b, c)):
         return None
     if not params[a].is_const or not params[b].is_const or params[c].is_const:
         return None
-    if not half_abt and not isinstance(params[k].var_type, ast.Int):
+    if isinstance(k, str) and not isinstance(params[k].var_type, ast.Int):
         return None
-    if half_abt:
-        return BlasGemm(a, b, c, k, transpose_a=False, transpose_b=True,
-                        accumulate=False, input_type="float16",
-                        epilogue="none")
+    if overwrite:
+        return BlasGemm(a, b, c, k,
+                        transpose_a=atb_indices, transpose_b=abt_indices,
+                        accumulate=False,
+                        input_type="float16" if input_is_half else "float32",
+                        epilogue="clip" if clip_call is not None else "none")
     return BlasGemm(a, b, c, k, transpose_a=True, transpose_b=False, accumulate=True)
 
 

@@ -101,9 +101,17 @@ END_PROGRAM
     assert "rllm::hip_blas::gemm_at_b_acc" in stub
     assert "HipComputeKernel" not in stub
 
-    # Overwrite semantics are intentionally not accepted by the beta=1 path.
-    program.body_stmts[-1].assign_op = "="
-    assert detect_safe_gemm(program) is None
+    # The same contraction with overwrite semantics uses the beta=0 path.
+    overwrite_program = parse(source)
+    overwrite_program.body_stmts[-1].assign_op = "="
+    overwrite = detect_safe_gemm(overwrite_program)
+    assert overwrite is not None
+    assert not overwrite.accumulate
+    assert overwrite.transpose_a
+    overwrite_program.blas = overwrite
+    overwrite_stub = resolve_array_indices(overwrite_program).accept(HipCppStubVisitor())
+    assert "rllm::hip_blas::gemm_at_b_float" in overwrite_stub
+    assert "beta=0;input=float32" in overwrite_stub
 
 
 def test_detects_half_abt_projection_with_float_accumulation():
@@ -142,6 +150,42 @@ END_PROGRAM
     assert "beta=0;input=float16" in stub
 
 
+def test_detects_float_abt_overwrite_for_muon_gram():
+    program = parse(
+        """
+PROGRAM("backprop/Muon.cc:131")
+OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (update, gram_matrix))
+PARAMETERS
+    const fixed_size_matrix<float, 8, 16>& update,
+    fixed_size_matrix<float, 8, 8>& gram_matrix
+BEGIN
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int j = int(gl_GlobalInvocationID.y);
+    if (j >= rllm_bound_y) return;
+    float sum = 0.f;
+    for (int l_idx = 0; l_idx < 16; ++l_idx) {
+        const int k = int(l_idx);
+        const float term = (update[i, k] * update[j, k]);
+        OVERFLOW_CHECK_ADD(sum, term);
+        sum += term;
+    }
+    gram_matrix[i, j] = sum;
+END_PROGRAM
+"""
+    )
+    gemm = detect_safe_gemm(program)
+    assert gemm is not None
+    assert gemm.input_type == "float32"
+    assert not gemm.accumulate
+    assert gemm.transpose_b
+
+    program.blas = gemm
+    stub = resolve_array_indices(program).accept(HipCppStubVisitor())
+    assert "rllm::hip_blas::gemm_abt_float" in stub
+    assert "beta=0;input=float32" in stub
+
+
 def test_rejects_half_abt_clip_from_blas_lowering():
     program = parse(
         """
@@ -168,3 +212,6 @@ END_PROGRAM
 """
     )
     assert detect_safe_gemm(program) is None
+    forced = detect_safe_gemm(program, allow_clip_epilogue=True)
+    assert forced is not None
+    assert forced.epilogue == "clip"
