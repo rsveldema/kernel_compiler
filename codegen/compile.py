@@ -29,11 +29,12 @@ from codegen.parser import parser
 from codegen.kast.program import Program
 from codegen.transforms import transform
 from codegen.visitors.pretty_printer import prettyprint
-from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
+from codegen.visitors.hip_kernel_visitor import HipKernelVisitor
 from codegen.visitors.tree_rewriter import TreeRewriter
-from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
-from codegen.visitors.rllm_vulkan_dispatch_stub_visitor import RllmVulkanDispatchStubVisitor
+from codegen.visitors.hip_cpp_stub_visitor import HipCppStubVisitor
+from codegen.visitors.rllm_hip_dispatch_stub_visitor import RllmHipDispatchStubVisitor
 from codegen.visitors.resolve_array_indices import resolve_array_indices
+from codegen.blas import detect_safe_gemm, lower_blas_epilogue
 
 log = logging.getLogger(__name__)
 
@@ -61,12 +62,16 @@ def compile(
     ret = parser.parse(text)
     program = transform(ret)
     program._source_filename = filename
-    program = optimize(program, enable_optimizations)
+    program.blas = detect_safe_gemm(program) if enable_optimizations else None
+    if program.blas is not None:
+        program = lower_blas_epilogue(program)
+    else:
+        program = optimize(program, enable_optimizations)
     program = resolve_array_indices(program)
     return program
 
 
-def generate_vulkan(
+def generate_hip(
     filename: str,
     output: str,
     enable_optimizations: bool = True,
@@ -75,12 +80,12 @@ def generate_vulkan(
     use_bfloat16: bool = False,
 ) -> None:
     program = compile(filename, enable_optimizations)
-    visitor = VulkanKernelVisitor(use_bfloat16=use_bfloat16)
+    visitor = HipKernelVisitor(use_bfloat16=use_bfloat16)
     shader = program.accept(visitor)
     with open(output, "w") as f:
         f.write(shader)
-    print(f"Generated Vulkan shader -> {output}")
-    visitor = VulkanCppStubVisitor(use_bfloat16=use_bfloat16)
+    print(f"Generated Hip shader -> {output}")
+    visitor = HipCppStubVisitor(use_bfloat16=use_bfloat16)
     stub = program.accept(visitor)
     stub_output = output.rsplit(".", 1)[0] + ".h"
     with open(stub_output, "w") as f:
@@ -97,14 +102,14 @@ def generate_vulkan(
     print(f"Generated type aliases -> {alias_path}")
     
     if rllm_dispatch_stub:
-        visitor = RllmVulkanDispatchStubVisitor(rllm_spv_path or (output.rsplit(".", 1)[0] + ".spv"))
+        visitor = RllmHipDispatchStubVisitor(rllm_spv_path or (output.rsplit(".", 1)[0] + ".hsaco"))
         dispatch_stub = program.accept(visitor)
         with open(rllm_dispatch_stub, "w") as f:
             f.write(dispatch_stub)
         print(f"Generated RLLM dispatch stub -> {rllm_dispatch_stub}")
 
 
-def compile_vulkan(
+def compile_hip(
     input_file: str,
     output_spv: str,
     enable_optimizations: bool = True,
@@ -112,11 +117,10 @@ def compile_vulkan(
     rllm_spv_path: str | None = None,
     use_bfloat16: bool = False,
 ) -> None:
-    glsl_path = input_file.rsplit(".", 1)[0] + ".glsl"
-    generate_vulkan(input_file, glsl_path, enable_optimizations, rllm_dispatch_stub, rllm_spv_path, use_bfloat16=use_bfloat16)
+    glsl_path = input_file.rsplit(".", 1)[0] + ".hip"
+    generate_hip(input_file, glsl_path, enable_optimizations, rllm_dispatch_stub, rllm_spv_path, use_bfloat16=use_bfloat16)
     cmd = [
-        "glslc", "-fshader-stage=compute", "-o", output_spv,
-        "--target-env=vulkan1.2", glsl_path,
+        "hipcc", "--genco", "-O3", glsl_path, "-o", output_spv,
     ]
     print(f"running: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -124,28 +128,28 @@ def compile_vulkan(
         print("Compilation failed:")
         print(result.stderr, file=_sys_mod.stderr)
         _sys_mod.exit(1)
-    print(f"Compiled SPIR-V -> {output_spv}")
+    print(f"Compiled HIP code object -> {output_spv}")
 
 
 if __name__ == "__main__":
     _parser = argparse.ArgumentParser(description="Kernel compiler front-end")
     _parser.add_argument(
-        "file", nargs="?", help="Input .kernel file (required for --vulkan/--compile)"
+        "file", nargs="?", help="Input .kernel file (required for --hip/--compile)"
     )
     _parser.add_argument(
-        "--vulkan", metavar="OUTPUT", help="Generate Vulkan GLSL shader to OUTPUT"
+        "--hip", metavar="OUTPUT", help="Generate Hip GLSL shader to OUTPUT"
     )
     _parser.add_argument(
         "--compile",
         metavar="OUTPUT_SPV",
-        help="Generate and compile Vulkan shader to SPIR-V",
+        help="Generate and compile a HIP kernel to a code object",
     )
-    _parser.add_argument("--rllm-dispatch-stub", metavar="OUTPUT_H", help="Generate an RLLM Vulkan dispatch wrapper header")
-    _parser.add_argument("--rllm-spv-path", metavar="REL_SPV", help="SPIR-V path embedded in the RLLM dispatch wrapper")
+    _parser.add_argument("--rllm-dispatch-stub", metavar="OUTPUT_H", help="Generate an RLLM Hip dispatch wrapper header")
+    _parser.add_argument("--rllm-spv-path", metavar="REL_CODE_OBJECT", help="HIP code-object path embedded in the RLLM dispatch wrapper")
     _parser.add_argument(
         "--bfloat16",
         action="store_true",
-        help="Generate bfloat (16-bit) instead of float16 in Vulkan/C++ output",
+        help="Generate bfloat (16-bit) instead of float16 in Hip/C++ output",
     )
     _parser.add_argument(
         "--no-optimizations",
@@ -156,13 +160,13 @@ if __name__ == "__main__":
     enable_optimizations = not args.no_optimizations
     use_bfloat16 = getattr(args, "bfloat16", False)
 
-    if args.vulkan or args.compile:
+    if args.hip or args.compile:
         if not args.file:
-            _parser.error("--vulkan and --compile require an input FILE argument")
-        if args.vulkan:
-            generate_vulkan(args.file, args.vulkan, enable_optimizations, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16)
+            _parser.error("--hip and --compile require an input FILE argument")
+        if args.hip:
+            generate_hip(args.file, args.hip, enable_optimizations, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16)
         elif args.compile:
-            compile_vulkan(args.file, args.compile, enable_optimizations, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16)
+            compile_hip(args.file, args.compile, enable_optimizations, args.rllm_dispatch_stub, args.rllm_spv_path, use_bfloat16=use_bfloat16)
     else:
         # Default: prettyprint all files
         for path in _sys_mod.argv[1:]:

@@ -314,9 +314,9 @@ def _evaluate_workgroup_size_value(expr):
 
 
 def _validate_workgroup_size(x_val, y_val, z_val, filename=None):
-    """Validate workgroup dimensions against Vulkan per-dimension limits.
+    """Validate workgroup dimensions against Hip per-dimension limits.
 
-    Total local invocation count is validated when generating the Vulkan stub,
+    Total local invocation count is validated when generating the Hip stub,
     after transform metadata such as reduction_chunks has been applied.
 
     Raises ValueError with a descriptive message if limits are exceeded.
@@ -333,7 +333,7 @@ def _validate_workgroup_size(x_val, y_val, z_val, filename=None):
         dim_info = ", ".join(parts)
         file_info = f" in {filename}" if filename else ""
         raise ValueError(
-            f"Workgroup size exceeds Vulkan limits{file_info}: {dim_info}"
+            f"Workgroup size exceeds Hip limits{file_info}: {dim_info}"
         )
 
 def _transform_workgroup_properties(wg_tree):
@@ -1737,7 +1737,7 @@ def transform(t: Tree) -> Program:
     for wg_tree in wg_trees:
         wg = _transform_workgroup_properties(wg_tree)
         p.workgroups.append(wg)
-        # Validate workgroup size against Vulkan limits
+        # Validate workgroup size against Hip limits
         if isinstance(wg, WorkgroupProperties):
             x_val = _evaluate_workgroup_size_value(wg.x_expr)
             y_val = _evaluate_workgroup_size_value(wg.y_expr)

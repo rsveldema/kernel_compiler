@@ -37,7 +37,8 @@ class Program(AstNode):
         _source_filename="",
         _constexpr_defines=None,
         _param_constexpr_defines=None,
-        tree_transformed = False
+        tree_transformed = False,
+        blas=None,
     ):
         self.reduction_chunks = reduction_chunks
         self.tile_size = tile_size
@@ -77,6 +78,7 @@ class Program(AstNode):
         self.workgroup_size = workgroup_size
         self.tile_block_size = tile_block_size
         self.tree_transformed = tree_transformed
+        self.blas = blas
 
     @property
     def loop_var(self):

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <fstream>
 #include <print>
+#include <string>
 
 #define LOG_INFO_EVERY_N(...) \
     do \

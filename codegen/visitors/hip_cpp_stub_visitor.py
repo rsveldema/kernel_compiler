@@ -1,4 +1,4 @@
-"""C++ stub generator for Vulkan compute kernels.
+"""C++ stub generator for Hip compute kernels.
 
 Generates compilable C++ header with:
 - Struct wrappers matching the SSBO layout (RllmBuffer_<name>)
@@ -69,8 +69,8 @@ class CastExprTypeConverter(Visitor):
         raise NotImplementedError
 
 
-class VulkanCppStubVisitor(Visitor):
-    """Transforms the parsed AST into a C++ stub for calling the Vulkan kernel."""
+class HipCppStubVisitor(Visitor):
+    """Transforms the parsed AST into a C++ stub for calling the Hip kernel."""
 
     def __init__(self, use_bfloat16: bool = False):
         self._use_bfloat16 = use_bfloat16
@@ -435,7 +435,7 @@ class VulkanCppStubVisitor(Visitor):
 
         return buffer_params, scalar_params, has_matrix_params
 
-    # Vulkan spec minimum required limits (Vulkan 1.4 Table A.29)
+    # Hip spec minimum required limits (Hip 1.4 Table A.29)
     _MAX_WORKGROUP_SIZE = 1024        # maxWorkGroupSize — per dimension
     _MAX_WORKGROUP_INVOCATIONS = 1024 # maxWorkGroupInvocations — total
 
@@ -467,7 +467,7 @@ class VulkanCppStubVisitor(Visitor):
                 wg_y = "8"
         if node.num_z_threads > 1:
             wg_z = str(node.num_z_threads)
-        # Validate against Vulkan spec minimum required limits
+        # Validate against Hip spec minimum required limits
         try:
             x_int, y_int, z_int = int(wg_x), int(wg_y), int(wg_z)
         except ValueError:
@@ -475,24 +475,24 @@ class VulkanCppStubVisitor(Visitor):
             return wg_x, wg_y, wg_z
         if x_int > self._MAX_WORKGROUP_SIZE:
             raise ValueError(
-                f"workgroup x size {x_int} exceeds Vulkan maxWorkGroupSize "
+                f"workgroup x size {x_int} exceeds Hip maxWorkGroupSize "
                 f"({self._MAX_WORKGROUP_SIZE})"
             )
         if y_int > self._MAX_WORKGROUP_SIZE:
             raise ValueError(
-                f"workgroup y size {y_int} exceeds Vulkan maxWorkGroupSize "
+                f"workgroup y size {y_int} exceeds Hip maxWorkGroupSize "
                 f"({self._MAX_WORKGROUP_SIZE})"
             )
         if z_int > self._MAX_WORKGROUP_SIZE:
             raise ValueError(
-                f"workgroup z size {z_int} exceeds Vulkan maxWorkGroupSize "
+                f"workgroup z size {z_int} exceeds Hip maxWorkGroupSize "
                 f"({self._MAX_WORKGROUP_SIZE})"
             )
         total = x_int * y_int * z_int
         if total > self._MAX_WORKGROUP_INVOCATIONS:
             raise ValueError(
                 f"workgroup total size {x_int}x{y_int}x{z_int}={total} "
-                f"exceeds Vulkan maxWorkGroupInvocations "
+                f"exceeds Hip maxWorkGroupInvocations "
                 f"({self._MAX_WORKGROUP_INVOCATIONS})"
             )
         return wg_x, wg_y, wg_z
@@ -540,7 +540,7 @@ class VulkanCppStubVisitor(Visitor):
         buffer_params: List[Tuple[ast.Declaration, str, str]],
         all_pc_fields: List[Any],
     ) -> List[str]:
-        method_params: List[str] = ["        VulkanQueue& queue"]
+        method_params: List[str] = ["        HipQueue& queue"]
 
         if has_3d:
             method_params.append("        uint32_t dispatch_rows")
@@ -567,8 +567,8 @@ class VulkanCppStubVisitor(Visitor):
         self._emit(f"// ── Kernel dispatch stub: {hdr_text} ─────────────")
         self._emit("#include <cstdint>")
         self._emit("#include <string>")
-        self._emit("#include <vulkan/vulkan_core.h>")
-        self._emit('#include "vulkan_session.hpp"')
+        self._emit("#include <hip/hip_runtime_api.h>")
+        self._emit('#include "hip_session.hpp"')
         self._emit('#include "_type_aliases.hpp"')
         self._emit("")
         self._emit(f"namespace {self._namespace_name} {{")
@@ -681,12 +681,12 @@ class VulkanCppStubVisitor(Visitor):
         self._emit(f"class {class_name} : public AbstractKernel {{")
         self._emit("public:")
         self._push()
-        self._emit(f"{class_name}(VulkanSession& session, const std::string& glsl_file)")
+        self._emit(f"{class_name}(HipSession& session, const std::string& code_object)")
         kernel_name_str = '"' + self._namespace_name + '::' + class_name + '|' + self._display_name + '", '
         kernel_type_str = 'KernelDimension::' + self._cpp_dimension() + ', KernelType::' + self._cpp_type()
         descriptor_str = '"' + descriptor + '"'
         self._emit('    : AbstractKernel(' + kernel_name_str + kernel_type_str + ', ' + descriptor_str + ')')
-        self._emit(f"    , kernel_(session, glsl_file, {push_size}, {len(buffer_params)})")
+        self._emit('    , kernel_(session, code_object, "rllm_kernel")')
         self._emit("{")
         self._emit("}")
         self._emit("")
@@ -705,30 +705,6 @@ class VulkanCppStubVisitor(Visitor):
 
         self._emit("std::lock_guard<std::recursive_mutex> queue_lock(queue.mutex());")
         self._emit("ComputeKernelRegistry::ScopedActiveKernel active_kernel(*this);")
-        if buffer_params:
-            self._emit("VkDescriptorSetLayout desc_layout = kernel_.desc_set_layout();")
-            self._emit(
-                f"VkDescriptorSet desc_set = queue.allocate_dispatch_descriptor_set(desc_layout, {len(buffer_params)});"
-            )
-        self._emit("VkCommandBuffer command_buffer = queue.allocate_command_buffer();")
-        self._emit("VkCommandBufferBeginInfo begin_info{};")
-        self._emit("begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;")
-        self._emit('check_vk(vkBeginCommandBuffer(command_buffer, &begin_info), "VkComputeSession cmd buf begin");')
-
-        if buffer_params:
-            self._emit(f"VkDescriptorBufferInfo buffer_infos[{len(buffer_params)}]{{}};")
-            self._emit(f"VkWriteDescriptorSet writes[{len(buffer_params)}]{{}};")
-            for i, (_param, _sname, arg_name) in enumerate(buffer_params):
-                self._emit(f"buffer_infos[{i}].buffer = {arg_name}.get();")
-                self._emit(f"buffer_infos[{i}].offset = 0;")
-                self._emit(f"buffer_infos[{i}].range = VK_WHOLE_SIZE;")
-                self._emit(f"writes[{i}].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;")
-                self._emit(f"writes[{i}].dstSet = desc_set;")
-                self._emit(f"writes[{i}].dstBinding = {i};")
-                self._emit(f"writes[{i}].descriptorCount = 1;")
-                self._emit(f"writes[{i}].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;")
-                self._emit(f"writes[{i}].pBufferInfo = &buffer_infos[{i}];")
-            self._emit(f"vkUpdateDescriptorSets(queue.get_device(), {len(buffer_params)}, writes, 0, nullptr);")
         if all_pc_fields:
             self._emit(f"{self._kernel_name}_PushConstants push_constants_value{{}};")
             for field in all_pc_fields:
@@ -740,42 +716,90 @@ class VulkanCppStubVisitor(Visitor):
                     self._emit("push_constants_value.rllm_bound_z = static_cast<int32_t>(dispatch_levels);")
                 else:
                     self._emit(f"push_constants_value.{field.name} = push_constants.{field.name};")
+        for i, (_param, _sname, arg_name) in enumerate(buffer_params):
+            self._emit(f"void* buffer_{i} = {arg_name}.get();")
+        argument_names = [f"&buffer_{i}" for i, _ in enumerate(buffer_params)]
         if all_pc_fields:
-            self._emit(
-                "vkCmdPushConstants(command_buffer, kernel_.pipeline_layout(), "
-                "VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants_value), &push_constants_value);"
-            )
-        if buffer_params:
-            self._emit(
-                "vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, "
-                "kernel_.pipeline_layout(), 0, 1, &desc_set, 0, nullptr);"
-            )
-        self._emit("vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, kernel_.pipeline());")
-        self._emit(f"vkCmdDispatch(command_buffer, {x_dim}, {y_dim}, {z_dim});")
-        self._emit("VkMemoryBarrier dispatch_barrier{};")
-        self._emit("dispatch_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;")
-        self._emit("dispatch_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;")
-        self._emit("dispatch_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;")
-        self._emit(
-            "vkCmdPipelineBarrier(command_buffer, "
-            "VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, "
-            "VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, "
-            "0, 1, &dispatch_barrier, 0, nullptr, 0, nullptr);"
-        )
-        self._emit('check_vk(vkEndCommandBuffer(command_buffer), "VkComputeSession cmd buf end");')
-        self._emit("VkSubmitInfo submit_info{};")
-        self._emit("submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;")
-        self._emit("submit_info.commandBufferCount = 1;")
-        self._emit("submit_info.pCommandBuffers = &command_buffer;")
-        self._emit('check_vk(vkQueueSubmit(queue.get_queue(), 1, &submit_info, VK_NULL_HANDLE), "VkComputeSession submit");')
-        self._emit("queue.defer_command_buffer(command_buffer);")
+            argument_names.extend(f"&push_constants_value.{field.name}" for field in all_pc_fields)
+        if argument_names:
+            self._emit("void* arguments[] = {" + ", ".join(argument_names) + "};")
+        else:
+            self._emit("void** arguments = nullptr;")
+        self._emit(f"kernel_.launch(queue, HipDimension{{{x_dim}, {y_dim}, {z_dim}}},")
+        self._emit(f"               HipDimension{{{wg_x}, {wg_y}, {wg_z}}}, arguments);")
 
         self._emit("}")
         self._pop()
         self._emit("")
         self._emit("private:")
         self._push()
-        self._emit("VulkanComputeKernel kernel_;")
+        self._emit("HipComputeKernel kernel_;")
+        self._pop()
+        self._emit("};")
+
+    def _emit_blas_gemm_class(self, node, class_name, method_params, all_pc_fields,
+                              buffer_params, has_2d, has_3d, wg_x, wg_y, wg_z) -> None:
+        spec = node.blas
+        descriptor = (
+            f"backend=hipblas;operation=gemm;transpose_a={'yes' if spec.transpose_a else 'no'};"
+            f"transpose_b={'yes' if spec.transpose_b else 'no'};"
+            f"beta={1 if spec.accumulate else 0};input={spec.input_type}"
+        )
+        push_name = f"{self._kernel_name}_PushConstants"
+        self._emit(f"class {class_name} : public AbstractKernel {{")
+        self._emit("public:")
+        self._push()
+        if spec.epilogue == "none":
+            self._emit(f"{class_name}(HipSession&, const std::string&)")
+            self._emit(f'    : AbstractKernel("{self._namespace_name}::{class_name}|{self._display_name}", KernelDimension::TwoD, KernelType::Matrix, "{descriptor}") {{}}')
+        else:
+            self._emit(f"{class_name}(HipSession& session, const std::string& code_object)")
+            self._emit(f'    : AbstractKernel("{self._namespace_name}::{class_name}|{self._display_name}", KernelDimension::TwoD, KernelType::Matrix, "{descriptor}")')
+            self._emit('    , epilogue_kernel_(session, code_object, "rllm_kernel") {}')
+        self._emit(f'static constexpr const char* generated_descriptor() {{ return "{descriptor}"; }}')
+        self._emit("void dispatch(")
+        for index, parameter in enumerate(method_params):
+            self._emit(parameter + ("," if index + 1 < len(method_params) else ""))
+        self._emit(") {")
+        self._push()
+        self._emit("std::lock_guard<std::recursive_mutex> queue_lock(queue.mutex());")
+        self._emit("ComputeKernelRegistry::ScopedActiveKernel active_kernel(*this);")
+        if spec.input_type == "float16" and not spec.transpose_a and spec.transpose_b and not spec.accumulate:
+            self._emit(
+                f"rllm::hip_blas::gemm_abt_half(queue, dispatch_rows, dispatch_cols, "
+                f"static_cast<uint32_t>({spec.k}), {spec.a}, {spec.b}, {spec.c});"
+            )
+        else:
+            self._emit(
+                f"rllm::hip_blas::gemm_at_b_acc(queue, dispatch_rows, dispatch_cols, "
+                f"static_cast<uint32_t>(push_constants.{spec.k}), {spec.a}, {spec.b}, {spec.c});"
+            )
+        if spec.epilogue != "none":
+            x_dim, y_dim, z_dim = self._compute_dispatch_dims(node, has_2d, has_3d, wg_x, wg_y, wg_z)
+            self._emit(f"{self._kernel_name}_PushConstants push_constants_value{{}};")
+            for field in all_pc_fields:
+                if field.name == "rllm_bound_x":
+                    self._emit("push_constants_value.rllm_bound_x = static_cast<int32_t>(dispatch_rows);")
+                elif field.name == "rllm_bound_y":
+                    self._emit("push_constants_value.rllm_bound_y = static_cast<int32_t>(dispatch_cols);")
+                elif field.name == "rllm_bound_z":
+                    self._emit("push_constants_value.rllm_bound_z = static_cast<int32_t>(dispatch_levels);")
+                else:
+                    self._emit(f"push_constants_value.{field.name} = push_constants.{field.name};")
+            for i, (_param, _sname, arg_name) in enumerate(buffer_params):
+                self._emit(f"void* buffer_{i} = {arg_name}.get();")
+            argument_names = [f"&buffer_{i}" for i, _ in enumerate(buffer_params)]
+            argument_names.extend(f"&push_constants_value.{field.name}" for field in all_pc_fields)
+            self._emit("void* arguments[] = {" + ", ".join(argument_names) + "};")
+            self._emit(f"epilogue_kernel_.launch(queue, HipDimension{{{x_dim}, {y_dim}, {z_dim}}},")
+            self._emit(f"                        HipDimension{{{wg_x}, {wg_y}, {wg_z}}}, arguments);")
+        self._pop()
+        self._emit("}")
+        if spec.epilogue != "none":
+            self._emit("private:")
+            self._push()
+            self._emit("HipComputeKernel epilogue_kernel_;")
+            self._pop()
         self._pop()
         self._emit("};")
 
@@ -817,7 +841,11 @@ class VulkanCppStubVisitor(Visitor):
         self._emit_push_constant_struct(all_pc_fields)
 
         class_name = self._class_name(self._kernel_name)
-        self._emit_kernel_class(
+        if getattr(node, "blas", None) is not None:
+            self._emit_blas_gemm_class(node, class_name, method_params, all_pc_fields,
+                                       buffer_params, has_2d, has_3d, wg_x, wg_y, wg_z)
+        else:
+            self._emit_kernel_class(
             node=node,
             class_name=class_name,
             method_params=method_params,
@@ -828,7 +856,7 @@ class VulkanCppStubVisitor(Visitor):
             wg_x=wg_x,
             wg_y=wg_y,
             wg_z=wg_z,
-        )
+            )
 
         self._emit("}")
         return self.result()

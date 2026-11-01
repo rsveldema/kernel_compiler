@@ -11,7 +11,8 @@ FetchContent_MakeAvailable(googletest)
 
 include(GoogleTest)
 
-find_package(Vulkan REQUIRED)
+find_package(hip REQUIRED CONFIG)
+find_program(RLLM_TEST_HIPCC NAMES hipcc REQUIRED)
 
 enable_testing()
 
@@ -30,30 +31,39 @@ foreach(parse_test IN LISTS OFFLOAD_PARFOR_PARSE_TESTS)
 endforeach()
 
 
-# Vulkan kernels: generate headers and GLSL via compile.py
+# Hip kernels: generate headers and GLSL via compile.py
 set(GENERATED_KERNEL_SRCS)
-set(GENERATED_DIR ${CMAKE_BINARY_DIR}/generated/vulkanized/kernel_compiler_tests)
+set(GENERATED_DIR ${CMAKE_BINARY_DIR}/generated/hipized/kernel_compiler_tests)
 file(MAKE_DIRECTORY ${GENERATED_DIR})
 
 set(VECMATH231_KERNEL "${KERNEL_COMPILER_SOURCE_DIR}/testdata/offload_parfor_vecmath_231.kernel")
 set(VECMATH231_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_231.kernel")
-set(VECMATH231_GLSL "${GENERATED_DIR}/vecmath.L231.glsl")
+set(VECMATH231_GLSL "${GENERATED_DIR}/vecmath.L231.hip")
 set(VECMATH231_HEADER "${GENERATED_DIR}/vecmath.L231.h")
-set(VECMATH231_SPV "${GENERATED_DIR}/vecmath.L231.spv")
+set(VECMATH231_SPV "${GENERATED_DIR}/vecmath.L231.hsaco")
 set(VECMATH231_NOOPT_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_231_noopt.kernel")
-set(VECMATH231_NOOPT_GLSL "${GENERATED_DIR}/vecmath.L231.noopt.glsl")
+set(VECMATH231_NOOPT_GLSL "${GENERATED_DIR}/vecmath.L231.noopt.hip")
 set(VECMATH231_NOOPT_HEADER "${GENERATED_DIR}/vecmath.L231.noopt.h")
-set(VECMATH231_NOOPT_SPV "${GENERATED_DIR}/vecmath.L231.noopt.spv")
+set(VECMATH231_NOOPT_SPV "${GENERATED_DIR}/vecmath.L231.noopt.hsaco")
 set(VECMATH231_TYPE_ALIASES "${GENERATED_DIR}/_type_aliases.hpp")
 set(VECMATH304_KERNEL "${KERNEL_COMPILER_SOURCE_DIR}/testdata/offload_parfor_vecmath_304.kernel")
 set(VECMATH304_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_304.kernel")
-set(VECMATH304_GLSL "${GENERATED_DIR}/vecmath.L304.glsl")
+set(VECMATH304_GLSL "${GENERATED_DIR}/vecmath.L304.hip")
 set(VECMATH304_HEADER "${GENERATED_DIR}/vecmath.L304.h")
-set(VECMATH304_SPV "${GENERATED_DIR}/vecmath.L304.spv")
+set(VECMATH304_SPV "${GENERATED_DIR}/vecmath.L304.hsaco")
 set(VECMATH304_NOOPT_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_304_noopt.kernel")
-set(VECMATH304_NOOPT_GLSL "${GENERATED_DIR}/vecmath.L304.noopt.glsl")
+set(VECMATH304_NOOPT_GLSL "${GENERATED_DIR}/vecmath.L304.noopt.hip")
 set(VECMATH304_NOOPT_HEADER "${GENERATED_DIR}/vecmath.L304.noopt.h")
-set(VECMATH304_NOOPT_SPV "${GENERATED_DIR}/vecmath.L304.noopt.spv")
+set(VECMATH304_NOOPT_SPV "${GENERATED_DIR}/vecmath.L304.noopt.hsaco")
+set(VECMATH999_KERNEL "${KERNEL_COMPILER_SOURCE_DIR}/testdata/offload_parfor_vecmath_999.kernel")
+set(VECMATH999_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_999.kernel")
+set(VECMATH999_HIP "${GENERATED_DIR}/vecmath.L999.hip")
+set(VECMATH999_HEADER "${GENERATED_DIR}/vecmath.L999.h")
+set(VECMATH999_HSACO "${GENERATED_DIR}/vecmath.L999.hsaco")
+set(VECMATH999_NOOPT_DUMP "${GENERATED_DIR}/offload_parfor_vecmath_999_noopt.kernel")
+set(VECMATH999_NOOPT_HIP "${GENERATED_DIR}/vecmath.L999.noopt.hip")
+set(VECMATH999_NOOPT_HEADER "${GENERATED_DIR}/vecmath.L999.noopt.h")
+set(VECMATH999_NOOPT_HSACO "${GENERATED_DIR}/vecmath.L999.noopt.hsaco")
 
 add_custom_command(
     OUTPUT "${VECMATH231_DUMP}"
@@ -74,8 +84,8 @@ add_custom_command(
         "${VECMATH231_GLSL}"
     COMMAND "${Python3_EXECUTABLE}" "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
             "${VECMATH231_DUMP}"
-            --vulkan "${VECMATH231_GLSL}"
-    COMMAND Vulkan::glslc -fshader-stage=compute --target-env=vulkan1.1
+            --hip "${VECMATH231_GLSL}"
+    COMMAND "${RLLM_TEST_HIPCC}" --genco -O3
             "${VECMATH231_GLSL}" -o "${VECMATH231_SPV}"
     DEPENDS
         "${VECMATH231_DUMP}"
@@ -86,10 +96,10 @@ add_custom_command(
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/parser.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/transforms.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/tree_rewriter.py"
-        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
-        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_cpp_stub_visitor.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/hip_kernel_visitor.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/hip_cpp_stub_visitor.py"
     WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
-    COMMENT "Generating vecmath:231 Vulkan test stub"
+    COMMENT "Generating vecmath:231 Hip test stub"
     VERBATIM
 )
 list(APPEND GENERATED_KERNEL_SRCS
@@ -114,9 +124,9 @@ add_custom_command(
         "${VECMATH231_NOOPT_GLSL}"
     COMMAND "${Python3_EXECUTABLE}" "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
             "${VECMATH231_NOOPT_DUMP}"
-            --vulkan "${VECMATH231_NOOPT_GLSL}"
+            --hip "${VECMATH231_NOOPT_GLSL}"
             --no-optimizations
-    COMMAND Vulkan::glslc -fshader-stage=compute --target-env=vulkan1.1
+    COMMAND "${RLLM_TEST_HIPCC}" --genco -O3
             "${VECMATH231_NOOPT_GLSL}" -o "${VECMATH231_NOOPT_SPV}"
     DEPENDS
         "${VECMATH231_NOOPT_DUMP}"
@@ -125,10 +135,10 @@ add_custom_command(
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/parser.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/transforms.py"
-        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
-        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_cpp_stub_visitor.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/hip_kernel_visitor.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/hip_cpp_stub_visitor.py"
     WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
-    COMMENT "Generating vecmath:231 no-optimization Vulkan test stub"
+    COMMENT "Generating vecmath:231 no-optimization Hip test stub"
     VERBATIM
 )
 list(APPEND GENERATED_KERNEL_SRCS
@@ -154,8 +164,8 @@ add_custom_command(
         "${VECMATH304_GLSL}"
     COMMAND "${Python3_EXECUTABLE}" "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
             "${VECMATH304_DUMP}"
-            --vulkan "${VECMATH304_GLSL}"
-    COMMAND Vulkan::glslc -fshader-stage=compute --target-env=vulkan1.1
+            --hip "${VECMATH304_GLSL}"
+    COMMAND "${RLLM_TEST_HIPCC}" --genco -O3
             "${VECMATH304_GLSL}" -o "${VECMATH304_SPV}"
     DEPENDS
         "${VECMATH304_DUMP}"
@@ -166,10 +176,10 @@ add_custom_command(
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/parser.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/transforms.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/tree_rewriter.py"
-        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
-        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_cpp_stub_visitor.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/hip_kernel_visitor.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/hip_cpp_stub_visitor.py"
     WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
-    COMMENT "Generating vecmath:304 Vulkan test stub"
+    COMMENT "Generating vecmath:304 Hip test stub"
     VERBATIM
 )
 list(APPEND GENERATED_KERNEL_SRCS
@@ -193,9 +203,9 @@ add_custom_command(
         "${VECMATH304_NOOPT_GLSL}"
     COMMAND "${Python3_EXECUTABLE}" "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
             "${VECMATH304_NOOPT_DUMP}"
-            --vulkan "${VECMATH304_NOOPT_GLSL}"
+            --hip "${VECMATH304_NOOPT_GLSL}"
             --no-optimizations
-    COMMAND Vulkan::glslc -fshader-stage=compute --target-env=vulkan1.1
+    COMMAND "${RLLM_TEST_HIPCC}" --genco -O3
             "${VECMATH304_NOOPT_GLSL}" -o "${VECMATH304_NOOPT_SPV}"
     DEPENDS
         "${VECMATH304_NOOPT_DUMP}"
@@ -204,10 +214,10 @@ add_custom_command(
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/parser.py"
         "${KERNEL_COMPILER_SOURCE_DIR}/codegen/transforms.py"
-        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_kernel_visitor.py"
-        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/vulkan_cpp_stub_visitor.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/hip_kernel_visitor.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/hip_cpp_stub_visitor.py"
     WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
-    COMMENT "Generating vecmath:304 no-optimization Vulkan test stub"
+    COMMENT "Generating vecmath:304 no-optimization Hip test stub"
     VERBATIM
 )
 list(APPEND GENERATED_KERNEL_SRCS
@@ -215,21 +225,81 @@ list(APPEND GENERATED_KERNEL_SRCS
     "${VECMATH304_NOOPT_SPV}"
 )
 
+add_custom_command(
+    OUTPUT "${VECMATH999_DUMP}"
+    COMMAND "${CMAKE_COMMAND}" -E copy "${VECMATH999_KERNEL}" "${VECMATH999_DUMP}"
+    DEPENDS "${VECMATH999_KERNEL}"
+    COMMENT "Copying FFN activation matmul-and-clip regression fixture"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${VECMATH999_HEADER}" "${VECMATH999_HSACO}"
+    BYPRODUCTS "${VECMATH999_HIP}"
+    COMMAND "${Python3_EXECUTABLE}" "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
+            "${VECMATH999_DUMP}" --hip "${VECMATH999_HIP}"
+    COMMAND "${RLLM_TEST_HIPCC}" --genco -O3 "${VECMATH999_HIP}" -o "${VECMATH999_HSACO}"
+    DEPENDS
+        "${VECMATH999_DUMP}"
+        "${KERNEL_COMPILER_SOURCE_DIR}/transforms/blas_clip_abt.tkernel"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/blas.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/parser.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/transforms.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/hip_kernel_visitor.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/hip_cpp_stub_visitor.py"
+    WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
+    COMMENT "Generating BLAS plus clip FFN regression kernel"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${VECMATH999_NOOPT_DUMP}"
+    COMMAND "${CMAKE_COMMAND}" -E copy "${VECMATH999_KERNEL}" "${VECMATH999_NOOPT_DUMP}"
+    DEPENDS "${VECMATH999_KERNEL}"
+    COMMENT "Copying sequential FFN regression fixture"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${VECMATH999_NOOPT_HEADER}" "${VECMATH999_NOOPT_HSACO}"
+    BYPRODUCTS "${VECMATH999_NOOPT_HIP}"
+    COMMAND "${Python3_EXECUTABLE}" "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
+            "${VECMATH999_NOOPT_DUMP}" --hip "${VECMATH999_NOOPT_HIP}" --no-optimizations
+    COMMAND "${RLLM_TEST_HIPCC}" --genco -O3 "${VECMATH999_NOOPT_HIP}" -o "${VECMATH999_NOOPT_HSACO}"
+    DEPENDS
+        "${VECMATH999_NOOPT_DUMP}"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/compile.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/parser.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/transforms.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/hip_kernel_visitor.py"
+        "${KERNEL_COMPILER_SOURCE_DIR}/codegen/visitors/hip_cpp_stub_visitor.py"
+    WORKING_DIRECTORY "${KERNEL_COMPILER_SOURCE_DIR}"
+    COMMENT "Generating sequential FFN regression kernel"
+    VERBATIM
+)
+list(APPEND GENERATED_KERNEL_SRCS
+    "${VECMATH999_HEADER}"
+    "${VECMATH999_HSACO}"
+    "${VECMATH999_NOOPT_HEADER}"
+    "${VECMATH999_NOOPT_HSACO}"
+)
+
 add_custom_target(all_generated_stubs ALL DEPENDS ${GENERATED_KERNEL_SRCS})
 
 
-# test_vulkan_stubs executable (uses real <vulkan/vulkan_core.h>)
-add_executable(test_vulkan_stubs
-    test_vulkan_stubs.cc
+# test_hip_stubs executable (uses real <hip/hip_runtime_api.h>)
+add_executable(test_hip_stubs
+    test_hip_stubs.cc
 )
-add_dependencies(test_vulkan_stubs all_generated_stubs)
-target_link_libraries(test_vulkan_stubs PRIVATE GTest::gtest_main Vulkan::Vulkan libvulkanruntime)
-target_compile_options(test_vulkan_stubs PRIVATE )
-target_compile_definitions(test_vulkan_stubs PRIVATE TESTDATA_DIR="${GENERATED_DIR}")
-target_include_directories(test_vulkan_stubs PRIVATE
+add_dependencies(test_hip_stubs all_generated_stubs)
+target_link_libraries(test_hip_stubs PRIVATE GTest::gtest_main hip::host libhipruntime)
+target_compile_options(test_hip_stubs PRIVATE )
+target_compile_definitions(test_hip_stubs PRIVATE TESTDATA_DIR="${GENERATED_DIR}")
+target_include_directories(test_hip_stubs PRIVATE
     ${KERNEL_COMPILER_SOURCE_DIR}/include
     ${KERNEL_COMPILER_SOURCE_DIR}/tests
-    ${CMAKE_VULKAN_INCLUDE_DIRS}
+    ${CMAKE_HIP_INCLUDE_DIRS}
     ${GENERATED_DIR}
 )
-gtest_discover_tests(test_vulkan_stubs WORKING_DIRECTORY ${KERNEL_COMPILER_SOURCE_DIR})
+gtest_discover_tests(test_hip_stubs WORKING_DIRECTORY ${KERNEL_COMPILER_SOURCE_DIR})

@@ -3,7 +3,7 @@ from unittest_offload_parfor_helper import parse_kernel
 from codegen.kast.statement import Declaration
 from codegen.visitors.resolve_array_indices import resolve_array_indices
 from codegen.visitors.tree_rewriter import TreeRewriter
-from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
+from codegen.visitors.hip_kernel_visitor import HipKernelVisitor
 
 
 def assert_parse_kernel(kernel_filename):
@@ -27,7 +27,7 @@ def transformed_shader(kernel_filename):
 
     program = program.accept(TreeRewriter({}))
     program = resolve_array_indices(program)
-    return program.accept(VulkanKernelVisitor())
+    return program.accept(HipKernelVisitor())
 
 
 def assert_single_reduction_shader(shader, reduction_chunks, orig_loop_bound=None):

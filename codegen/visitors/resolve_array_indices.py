@@ -141,7 +141,7 @@ class ResolveArrayIndicesVisitor(Expression):
 
         Some generated kernels carry compact runtime dimensions as scalar params
         even though their matrix types describe the production maximum shape.  Use
-        those runtime dimensions for Vulkan test shaders so buffers can be sized
+        those runtime dimensions for Hip test shaders so buffers can be sized
         to the actual dispatch domain.
         """
         if not base_name or not isinstance(
@@ -595,6 +595,7 @@ class ResolveArrayIndicesVisitor(Expression):
             workgroup_size=node.workgroup_size,
             tile_block_size=node.tile_block_size,
             tree_transformed=node.tree_transformed,
+            blas=getattr(node, "blas", None),
         )
 
 

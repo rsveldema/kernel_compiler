@@ -1,0 +1,23 @@
+// Converts a recognized GEMM-with-clamp into its elementwise post-GEMM stage.
+
+search
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int j = int(gl_GlobalInvocationID.y);
+    if (j >= rllm_bound_y) return;
+    float sum = 0.f;
+    for (int l_idx = 0; l_idx < wildcard(N); ++l_idx)
+    {
+        const int k = int(l_idx);
+        const float term = (A[i, k] * B[j, k]);
+        OVERFLOW_CHECK_ADD(sum, term);
+        sum += term;
+    }
+    C[i, j] = clamp(sum, -10000.0f, 10000.0f);
+
+replace
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int j = int(gl_GlobalInvocationID.y);
+    if (j >= rllm_bound_y) return;
+    C[i, j] = clamp(C[i, j], -10000.0f, 10000.0f);

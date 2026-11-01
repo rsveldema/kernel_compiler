@@ -1,8 +1,8 @@
 #pragma once
 
-// Minimal Vulkan type definitions for testing generated C++ stubs.
+// Minimal Hip type definitions for testing generated C++ stubs.
 // These provide just enough structure to verify compilation without
-// requiring an actual Vulkan runtime or ICD.
+// requiring an actual Hip runtime or ICD.
 
 #include <cstdint>
 #include <string_view>

@@ -4,7 +4,7 @@ Kernel Compiler
 
 The goal is the reduce the work needed to create optimized LLM implementations.
 
-This repo contains a optimizing compiler that takes in .kernel files (the body of a 'for' loop) and produces Vulkan glsl files
+This repo contains a optimizing compiler that takes in .kernel files (the body of a 'for' loop) and produces Hip glsl files
 that can be converted to spirv files to be executed on your nVidia/AMD/Intel/etc. GPU/CPU/accelerator.
 Its main use is to have a simple way to generate optimized code from matrix-multiply/linear algebra fragments.
 The generates code can then be called by your LLM implementation.

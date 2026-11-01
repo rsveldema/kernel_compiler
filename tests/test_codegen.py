@@ -2,13 +2,14 @@
 
 from codegen.parser import parse
 from codegen.visitors.resolve_array_indices import resolve_array_indices
-from codegen.visitors.vulkan_cpp_stub_visitor import VulkanCppStubVisitor
-from codegen.visitors.vulkan_kernel_visitor import VulkanKernelVisitor
+from codegen.visitors.hip_cpp_stub_visitor import HipCppStubVisitor
+from codegen.visitors.hip_kernel_visitor import HipKernelVisitor
+from codegen.blas import detect_safe_gemm, lower_blas_epilogue
 from offloadize_common import _defined_macros_for_backend, _eval_preprocessor_expr
 
 
 def test_translator_enables_guarded_attention_diagnostics():
-    macros = _defined_macros_for_backend("vulkan")
+    macros = _defined_macros_for_backend("hip")
 
     assert _eval_preprocessor_expr("DEBUG_ATTENTION_DIAGNOSTICS", macros)
 
@@ -35,13 +36,13 @@ END_PROGRAM
     )
     program = resolve_array_indices(program)
 
-    shader = program.accept(VulkanKernelVisitor())
+    shader = program.accept(HipKernelVisitor())
 
     assert "for (int d = 0; d < 64; ++d)" in shader
     assert "for (int d = 0; d < rllm_push.seq_len; ++d)" not in shader
 
 
-def test_cpp_stub_reuses_queue_descriptor_arena():
+def test_cpp_stub_launches_hip_module_with_buffer_arguments():
     program = parse(
         """
 PROGRAM("descriptor.cc:2")
@@ -59,10 +60,119 @@ END_PROGRAM
     )
     program = resolve_array_indices(program)
 
-    stub = program.accept(VulkanCppStubVisitor())
+    stub = program.accept(HipCppStubVisitor())
 
-    allocation = "queue.allocate_dispatch_descriptor_set(desc_layout, 1)"
-    assert allocation in stub
-    assert "vkCreateDescriptorPool" not in stub
-    assert "queue.defer_descriptor_pool" not in stub
-    assert stub.index(allocation) < stub.index("queue.allocate_command_buffer()")
+    assert "void* buffer_0 = values.get();" in stub
+    assert "kernel_.launch(queue" in stub
+    assert "VkDescriptorSet" not in stub
+
+
+def test_detects_only_exact_unclamped_at_b_accumulation():
+    source = """
+PROGRAM("vecmath.cc:1")
+OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A, B, C, k_count))
+PARAMETERS
+    const flexible_rows_matrix<float, 16, 8>& A,
+    const flexible_rows_matrix<float, 16, 32>& B,
+    fixed_size_matrix<float, 8, 32>& C,
+    int k_count
+BEGIN
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int j = int(gl_GlobalInvocationID.y);
+    if (j >= rllm_bound_y) return;
+    float sum = 0.f;
+    for (int l_idx = 0; l_idx < k_count; ++l_idx) {
+        const int k = int(l_idx);
+        const float term = (A[k, i] * B[k, j]);
+        OVERFLOW_CHECK_ADD(sum, term);
+        sum += term;
+    }
+    C[i, j] += sum;
+END_PROGRAM
+"""
+    program = parse(source)
+    gemm = detect_safe_gemm(program)
+    assert gemm is not None
+    assert (gemm.a, gemm.b, gemm.c, gemm.k) == ("A", "B", "C", "k_count")
+
+    program.blas = gemm
+    stub = resolve_array_indices(program).accept(HipCppStubVisitor())
+    assert "rllm::hip_blas::gemm_at_b_acc" in stub
+    assert "HipComputeKernel" not in stub
+
+    # Overwrite semantics are intentionally not accepted by the beta=1 path.
+    program.body_stmts[-1].assign_op = "="
+    assert detect_safe_gemm(program) is None
+
+
+def test_detects_half_abt_projection_with_float_accumulation():
+    program = parse(
+        """
+PROGRAM("vecmath.cc:2")
+OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A, B, C))
+PARAMETERS
+    const flexible_rows_matrix<float16, 16, 8>& A,
+    const fixed_size_matrix<float16, 32, 8>& B,
+    flexible_rows_matrix<float, 16, 32>& C
+BEGIN
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int j = int(gl_GlobalInvocationID.y);
+    if (j >= rllm_bound_y) return;
+    float sum = 0.f;
+    for (int l_idx = 0; l_idx < 8; ++l_idx) {
+        const int k = int(l_idx);
+        const float term = (A[i, k] * B[j, k]);
+        OVERFLOW_CHECK_ADD(sum, term);
+        sum += term;
+    }
+    C[i, j] = sum;
+END_PROGRAM
+"""
+    )
+    gemm = detect_safe_gemm(program)
+    assert gemm is not None
+    assert gemm.input_type == "float16"
+    assert gemm.k == 8
+
+    program.blas = gemm
+    stub = resolve_array_indices(program).accept(HipCppStubVisitor())
+    assert "rllm::hip_blas::gemm_abt_half" in stub
+    assert "beta=0;input=float16" in stub
+
+
+def test_lowers_half_abt_clip_to_blas_then_elementwise_kernel():
+    program = parse(
+        """
+PROGRAM("vecmath.cc:3")
+OFFLOAD_PARFOR_2D_PARAM(queue, i, j, grid, (A, B, C))
+PARAMETERS
+    const flexible_rows_matrix<float16, 16, 8>& A,
+    const fixed_size_matrix<float16, 32, 8>& B,
+    flexible_rows_matrix<float, 16, 32>& C
+BEGIN
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= rllm_bound_x) return;
+    const int j = int(gl_GlobalInvocationID.y);
+    if (j >= rllm_bound_y) return;
+    float sum = 0.f;
+    for (int l_idx = 0; l_idx < 8; ++l_idx) {
+        const int k = int(l_idx);
+        const float term = (A[i, k] * B[j, k]);
+        OVERFLOW_CHECK_ADD(sum, term);
+        sum += term;
+    }
+    C[i, j] = clamp(sum, -10000.0f, 10000.0f);
+END_PROGRAM
+"""
+    )
+    program.blas = detect_safe_gemm(program)
+    assert program.blas is not None
+    assert program.blas.epilogue == "clip"
+
+    program = lower_blas_epilogue(program)
+    assert len(program.body_stmts) == 5
+    stub = resolve_array_indices(program).accept(HipCppStubVisitor())
+    assert "rllm::hip_blas::gemm_abt_half" in stub
+    assert "epilogue_kernel_.launch" in stub

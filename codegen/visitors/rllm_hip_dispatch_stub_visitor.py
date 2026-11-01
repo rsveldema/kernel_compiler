@@ -1,4 +1,4 @@
-"""RLLM dispatch stub generator for compiled Vulkan kernels."""
+"""RLLM dispatch stub generator for compiled Hip kernels."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _is_push_identifier(value: str | None) -> bool:
     return bool(value and _IDENT_RE.match(value) and value not in _CPP_RESERVED)
 
 
-class RllmVulkanDispatchStubVisitor(Visitor):
+class RllmHipDispatchStubVisitor(Visitor):
     def __init__(self, spv_path: str):
         self._spv_path = spv_path
 
@@ -100,7 +100,7 @@ class RllmVulkanDispatchStubVisitor(Visitor):
         rel_path, _, line = header.partition(":")
         stem = _sanitize_component(Path(rel_path).stem or "kernel")
         line_part = _sanitize_component(line or "0")
-        symbol = f"__rllm_vulkan_kernel_{stem}_L{line_part}"
+        symbol = f"__rllm_hip_kernel_{stem}_L{line_part}"
 
         src_stem = (
             Path(node._source_filename).name.rsplit(".", 1)[0].replace("-", "_")
@@ -160,11 +160,11 @@ class RllmVulkanDispatchStubVisitor(Visitor):
                 continue
             if isinstance(param.var_type, ast.FixedSizeObjVectorMatrix):
                 for level in range(self._level_count(param.var_type)):
-                    dispatch_args.append(f"rllm::vulkan_runtime::device_buffer({param.name}, {level})")
+                    dispatch_args.append(f"rllm::hip_runtime::device_buffer({param.name}, {level})")
                     if not getattr(param, "is_const", False):
                         mutable_buffers.append((param.name, level))
             else:
-                dispatch_args.append(f"rllm::vulkan_runtime::device_buffer({param.name})")
+                dispatch_args.append(f"rllm::hip_runtime::device_buffer({param.name})")
                 if not getattr(param, "is_const", False):
                     mutable_buffers.append((param.name, None))
 
@@ -185,18 +185,18 @@ class RllmVulkanDispatchStubVisitor(Visitor):
         mark_lines = []
         for name, level in mutable_buffers:
             if level is None:
-                mark_lines.append(f"    rllm::vulkan_runtime::mark_device_latest({name});")
+                mark_lines.append(f"    rllm::hip_runtime::mark_device_latest({name});")
             else:
-                mark_lines.append(f"    rllm::vulkan_runtime::mark_device_latest({name}, {level});")
+                mark_lines.append(f"    rllm::hip_runtime::mark_device_latest({name}, {level});")
 
         push_body = chr(10).join(push_lines)
         mark_body = chr(10).join(mark_lines) + (chr(10) if mark_lines else "")
 
         body_parts = []
         body_parts.append("    static_cast<void>(sizeof...(ignored_args));")
-        body_parts.append("    std::lock_guard<std::recursive_mutex> vulkan_lock(rllm::vulkan_runtime::mutex());")
+        body_parts.append("    std::lock_guard<std::recursive_mutex> hip_lock(rllm::hip_runtime::mutex());")
         spv_esc = self._spv_path.replace(chr(92), chr(92)+chr(92))
-        body_parts.append('    static ' + namespace_name + "::" + class_name + ' kernel(rllm::vulkan_runtime::session(), std::string(RLLM_VULKAN_KERNEL_ROOT) + "/' + spv_esc + '");')
+        body_parts.append('    static ' + namespace_name + "::" + class_name + ' kernel(rllm::hip_runtime::session(), std::string(RLLM_HIP_KERNEL_ROOT) + "/' + spv_esc + '");')
         body_parts.append("    ComputeKernelRegistry::ScopedActiveKernel active_kernel(kernel);")
         body_parts.append("    const " + namespace_name + "::" + push_name + " push_constants{")
         body_parts.append(push_body)
@@ -211,13 +211,13 @@ class RllmVulkanDispatchStubVisitor(Visitor):
         result += "#include <cstdint>" + chr(10)
         result += "#include <string>" + chr(10)
         result += "#include <utility>" + chr(10)
-        result += "#include <rllm_vulkan_runtime.hpp>" + chr(10)
+        result += "#include <rllm_hip_runtime.hpp>" + chr(10)
         result += '#include "' + stub_header + '"' + chr(10)
         result += chr(10)
 
         # Emit workgroup size constants inside namespace so they don't conflict
         wg_x, wg_y, wg_z = self._resolve_workgroup_sizes(node)
-        result += "namespace rllm::vulkan::generated {" + chr(10)
+        result += "namespace rllm::hip::generated {" + chr(10)
         result += 'inline constexpr uint32_t ' + stem + '_L' + line_part + '_kernel_wg_x = ' + wg_x + ';' + chr(10)
         result += 'inline constexpr uint32_t ' + stem + '_L' + line_part + '_kernel_wg_y = ' + wg_y + ';' + chr(10)
         result += 'inline constexpr uint32_t ' + stem + '_L' + line_part + '_kernel_wg_z = ' + wg_z + ';' + chr(10)
@@ -228,7 +228,7 @@ class RllmVulkanDispatchStubVisitor(Visitor):
         result += loop_body
         result += "}" + chr(10)
         result += chr(10)
-        result += "} // namespace rllm::vulkan::generated" + chr(10)
+        result += "} // namespace rllm::hip::generated" + chr(10)
         return result
 
     def visit_raw_statement(self, node: ast.RawStatement) -> str:

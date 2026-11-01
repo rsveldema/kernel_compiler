@@ -6,7 +6,7 @@ build_release
 build_profile
 perf_fwd.data
 build_profile_cpu
-build_profile_vulkan
+build_profile_hip
 build
 build_debug
 build_profile_cpu_seq
@@ -20,6 +20,6 @@ staged/*.json
 *.bin
 cmake_test_discovery*
 perf*.data
-build_profile_vulkan_stats
+build_profile_hip_stats
 cmake_test_discovery*
 *.spv

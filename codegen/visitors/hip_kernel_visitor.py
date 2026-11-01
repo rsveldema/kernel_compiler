@@ -1,4 +1,4 @@
-"""Vulkan-compatible code generator (GLSL compute shader output).
+"""Hip-compatible code generator (GLSL compute shader output).
 
 Produces RLLM-style GLSL with:
 - std430 SSBOs using compile-time sized arrays for matrix types with known dimensions
@@ -166,8 +166,8 @@ def _compute_matrix_size(ty: Type, constants: dict[str, str] | None = None) -> i
     return -1
 
 
-class VulkanKernelVisitor(Visitor):
-    """Transforms the parsed AST into a Vulkan GLSL compute shader string."""
+class HipKernelVisitor(Visitor):
+    """Transforms the parsed AST into a Hip GLSL compute shader string."""
 
     def __init__(self, use_bfloat16: bool = False):
         self._use_bfloat16 = use_bfloat16
@@ -182,6 +182,73 @@ class VulkanKernelVisitor(Visitor):
         self._uses_reduction_chunks: bool = False
         self._constexpr_defines: list[tuple[str, str]] = []
         self._constexpr_map: dict[str, str] = {}
+
+    @staticmethod
+    def _native_hip_source(glsl: str) -> str:
+        """Translate the neutral C-like lowering into a native HIP kernel.
+
+        This is a backend representation change only. Optimization decisions
+        have already been applied to the AST by the .tkernel tree rewriter.
+        """
+        buffers = re.findall(
+            r"layout\(std430, set = 0, binding = \d+\) buffer \w+ \{\s*"
+            r"([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\[[^\]]*\];\s*\};",
+            glsl,
+            flags=re.S,
+        )
+        push_match = re.search(
+            r"layout\(push_constant\) uniform \w+ \{(.*?)\}\s*rllm_push;",
+            glsl,
+            flags=re.S,
+        )
+        push_fields = []
+        if push_match:
+            push_fields = re.findall(r"\b(float|int)\s+([A-Za-z_]\w*)\s*;", push_match.group(1))
+
+        main_match = re.search(r"void main\(\)\s*\{(.*)\}\s*$", glsl, flags=re.S)
+        if main_match is None:
+            raise ValueError("HIP lowering could not find generated kernel body")
+        body = main_match.group(1)
+        body = re.sub(r"\brllm_push\.([A-Za-z_]\w*)", r"\1", body)
+        for _type, name in push_fields:
+            body = re.sub(
+                rf"^\s*(?:int|float)\s+{re.escape(name)}\s*=\s*{re.escape(name)}\s*;\s*$",
+                "",
+                body,
+                flags=re.M,
+            )
+        body = body.replace("barrier()", "__syncthreads()")
+        body = body.replace("gl_GlobalInvocationID", "rllm_global_id")
+        body = body.replace("gl_LocalInvocationID", "threadIdx")
+        body = body.replace("gl_WorkGroupID", "blockIdx")
+        body = re.sub(
+            r"\batomic(Add|Max|Min)\(\s*(?!&)([^,]+),",
+            r"atomic\1(&\2,",
+            body,
+        )
+
+        shared = re.findall(r"^shared\s+([^;]+);", glsl, flags=re.M)
+        shared_text = "\n".join(f"    __shared__ {decl};" for decl in shared)
+        defines = "\n".join(re.findall(r"^#define\s+.+$", glsl, flags=re.M))
+        if defines:
+            defines += "\n"
+        params = [f"{ty}* {name}" for ty, name in buffers]
+        params.extend(f"{ty} {name}" for ty, name in push_fields)
+        signature = ",\n    ".join(params)
+        return (
+            "#include <hip/hip_runtime.h>\n"
+            "#include <hip/hip_fp16.h>\n"
+            "using float16_t = _Float16;\n"
+            "using bfloat_t = unsigned short;\n"
+            "__device__ inline float clamp(float v, float lo, float hi) { return fminf(fmaxf(v, lo), hi); }\n"
+            + defines
+            + "extern \"C\" __global__ void rllm_kernel(\n    " + signature + ")\n{\n"
+            "    const uint3 rllm_global_id = make_uint3(\n"
+            "        blockIdx.x * blockDim.x + threadIdx.x,\n"
+            "        blockIdx.y * blockDim.y + threadIdx.y,\n"
+            "        blockIdx.z * blockDim.z + threadIdx.z);\n"
+            + shared_text + body + "\n}\n"
+        )
 
     def _type_uses_float16(self, ty: Type | None) -> bool:
         if ty is None:
@@ -764,7 +831,7 @@ class VulkanKernelVisitor(Visitor):
             and node.assign_op == "+="
             and isinstance(node.lvalue, ArrayAccess)
         ):
-            return f"atomicAdd({lvalue}, {rvalue});"
+            return f"atomicAdd(&{lvalue}, {rvalue});"
         if self._lvalue_uses_float16_storage(node.lvalue):
             if node.assign_op == "=":
                 return f"{lvalue} = float16_t({rvalue});"
@@ -829,7 +896,7 @@ class VulkanKernelVisitor(Visitor):
         lhs = self._to_str(node.lhs)
         rhs = self._to_str(node.rhs)
         ind = "    " * self._indent_level
-        return f"{ind}{node.op}({lhs}, {rhs});"
+        return f"{ind}{node.op}(&{lhs}, {rhs});"
 
     def _workgroup_size(self, node: Program) -> tuple[str, str, str]:
         # Default workgroup sizes: 16x16x1 for 2D/3D, 16x1x1 for 1D
@@ -1072,7 +1139,7 @@ class VulkanKernelVisitor(Visitor):
         self._emit("void main() {")
         self._push()
 
-        # 1. vulkanizer generates loop vars in kernel file       
+        # 1. hipizer generates loop vars in kernel file       
         # 2. Initialize params from push constants
         for name, vtype in self._push_constant_fields:
             self._emit(f"{vtype} {name} = rllm_push.{name};")
@@ -1098,4 +1165,4 @@ class VulkanKernelVisitor(Visitor):
             self._prepend_emit(f"#define {name} {expr}")
         self._prepend_emit("#version 450")
 
-        return self.result()
+        return self._native_hip_source(self.result())
