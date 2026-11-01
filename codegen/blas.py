@@ -73,12 +73,17 @@ def detect_safe_gemm(program: ast.Program) -> BlasGemm | None:
     )
     if clip_call is not None and tuple(_number_value(arg) for arg in clip_call.args[1:]) != (-10000.0, 10000.0):
         clip_call = None
+    # Keep clipped AB^T contractions in the regular kernel path for now. The
+    # BLAS epilogue split is disabled until its ordering and synchronization
+    # semantics have been validated on all supported backends.
+    if clip_call is not None:
+        return None
     half_abt = (
         isinstance(loop.condition, ast.Condition)
         and isinstance(loop.condition.rhs, ast.Number)
         and isinstance(output, ast.Assignment)
         and output.assign_op == "="
-        and (_identifier(output_value, "sum") or clip_call is not None)
+        and _identifier(output_value, "sum")
     )
 
     if not (
@@ -157,7 +162,7 @@ def detect_safe_gemm(program: ast.Program) -> BlasGemm | None:
     if half_abt:
         return BlasGemm(a, b, c, k, transpose_a=False, transpose_b=True,
                         accumulate=False, input_type="float16",
-                        epilogue="clip" if clip_call is not None else "none")
+                        epilogue="none")
     return BlasGemm(a, b, c, k, transpose_a=True, transpose_b=False, accumulate=True)
 
 

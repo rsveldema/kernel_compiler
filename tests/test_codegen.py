@@ -4,7 +4,7 @@ from codegen.parser import parse
 from codegen.visitors.resolve_array_indices import resolve_array_indices
 from codegen.visitors.hip_cpp_stub_visitor import HipCppStubVisitor
 from codegen.visitors.hip_kernel_visitor import HipKernelVisitor
-from codegen.blas import detect_safe_gemm, lower_blas_epilogue
+from codegen.blas import detect_safe_gemm
 from offloadize_common import _defined_macros_for_backend, _eval_preprocessor_expr
 
 
@@ -142,7 +142,7 @@ END_PROGRAM
     assert "beta=0;input=float16" in stub
 
 
-def test_lowers_half_abt_clip_to_blas_then_elementwise_kernel():
+def test_rejects_half_abt_clip_from_blas_lowering():
     program = parse(
         """
 PROGRAM("vecmath.cc:3")
@@ -167,12 +167,4 @@ BEGIN
 END_PROGRAM
 """
     )
-    program.blas = detect_safe_gemm(program)
-    assert program.blas is not None
-    assert program.blas.epilogue == "clip"
-
-    program = lower_blas_epilogue(program)
-    assert len(program.body_stmts) == 5
-    stub = resolve_array_indices(program).accept(HipCppStubVisitor())
-    assert "rllm::hip_blas::gemm_abt_half" in stub
-    assert "epilogue_kernel_.launch" in stub
+    assert detect_safe_gemm(program) is None
